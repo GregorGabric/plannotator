@@ -1,7 +1,8 @@
-import type { CodeAnnotation, ConventionalLabel, ConventionalDecoration, CommentAnnotation, Annotation } from '@plannotator/ui/types';
+import type { CodeAnnotation, ConventionalLabel, ConventionalDecoration, CommentAnnotation, Annotation, ArtifactAnnotationMeta } from '@plannotator/ui/types';
 import type { PRMetadata } from '@plannotator/shared/pr-types';
 import { getMRLabel, getMRNumberLabel, getDisplayRepo } from '@plannotator/shared/pr-types';
 import { exportAnnotations, parseMarkdownToBlocks } from '@plannotator/ui/utils/parser';
+import { artifactAnchorLabel } from './artifactAnnotations';
 
 /**
  * Format a conventional comment prefix per the Conventional Comments spec:
@@ -325,17 +326,29 @@ export function buildProseFeedback(
   descriptionBody: string | undefined,
 ): string {
   const parts: string[] = [];
-  if (descriptionAnnotations.length > 0 && descriptionBody) {
+  const regularDescription = descriptionAnnotations.filter((annotation) => !annotation.artifact);
+  const regularComments = commentAnnotations.filter((annotation) => !annotation.artifact);
+  const artifactDescription = descriptionAnnotations.filter(
+    (annotation): annotation is Annotation & { artifact: ArtifactAnnotationMeta } => !!annotation.artifact,
+  );
+  const artifactComments = commentAnnotations.filter(
+    (annotation): annotation is CommentAnnotation & { artifact: ArtifactAnnotationMeta } => !!annotation.artifact,
+  );
+
+  if (regularDescription.length > 0 && descriptionBody) {
     parts.push(exportAnnotations(
       parseMarkdownToBlocks(descriptionBody),
-      descriptionAnnotations,
+      regularDescription,
       [],
       'PR Description Feedback',
       'PR description',
     ));
   }
-  if (commentAnnotations.length > 0) {
-    parts.push(exportCommentAnnotations(commentAnnotations));
+  if (regularComments.length > 0) {
+    parts.push(exportCommentAnnotations(regularComments));
+  }
+  if (artifactDescription.length > 0 || artifactComments.length > 0) {
+    parts.push(exportArtifactAnnotations(artifactDescription, artifactComments));
   }
   return parts.join('\n\n');
 }
@@ -355,6 +368,54 @@ export function exportCommentAnnotations(annotations: CommentAnnotation[]): stri
       output += `${quoted}\n\n`;
     }
     output += `${ann.text}\n\n`;
+  }
+  return output.trimEnd() + '\n';
+}
+
+function quoteMarkdown(markdown: string): string {
+  return markdown.trim().split('\n').map((line) => `> ${line}`).join('\n');
+}
+
+function safeHeading(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ').trim() || 'Artifact';
+}
+
+function artifactFeedbackEntry(
+  meta: ArtifactAnnotationMeta,
+  note: string,
+  source: { kind: 'description' } | { kind: 'comment'; author: string; body: string },
+): string {
+  let output = `## ${safeHeading(meta.artifactName)} — ${artifactAnchorLabel(meta.anchor)}\n\n`;
+  output += `[Open artifact](<${meta.artifactUrl}>) · [View source](<${meta.sourceUrl}>)\n\n`;
+  if (source.kind === 'comment') {
+    output += `In reply to the artifact source comment by @${source.author}:\n\n`;
+    if (source.body.trim()) output += `${quoteMarkdown(source.body)}\n\n`;
+  } else {
+    output += 'Regarding an artifact in the PR description.\n\n';
+  }
+  if (meta.anchor.kind === 'document' && meta.anchor.originalText) {
+    output += `${quoteMarkdown(meta.anchor.originalText)}\n\n`;
+  }
+  output += `${note.trim()}\n`;
+  return output;
+}
+
+/** Artifact notes share this block for local-agent delivery and GitHub reviews. */
+export function exportArtifactAnnotations(
+  descriptionAnnotations: Array<Annotation & { artifact: ArtifactAnnotationMeta }>,
+  commentAnnotations: Array<CommentAnnotation & { artifact: ArtifactAnnotationMeta }>,
+): string {
+  if (descriptionAnnotations.length === 0 && commentAnnotations.length === 0) return '';
+  let output = '# PR Artifact Feedback\n\n';
+  for (const annotation of descriptionAnnotations) {
+    output += `${artifactFeedbackEntry(annotation.artifact, annotation.text ?? '', { kind: 'description' })}\n`;
+  }
+  for (const annotation of commentAnnotations) {
+    output += `${artifactFeedbackEntry(annotation.artifact, annotation.text, {
+      kind: 'comment',
+      author: annotation.commentAuthor,
+      body: annotation.commentBody,
+    })}\n`;
   }
   return output.trimEnd() + '\n';
 }

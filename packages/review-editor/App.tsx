@@ -24,7 +24,7 @@ import {
   markLookAndFeelAnnouncementSeen,
   needsLookAndFeelAnnouncement,
 } from '@plannotator/ui/utils/lookAndFeelAnnouncement';
-import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration, Annotation, CommentAnnotation, AgentJobInfo } from '@plannotator/ui/types';
+import { CodeAnnotation, CodeAnnotationType, SelectedLineRange, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration, Annotation, CommentAnnotation, AgentJobInfo, type ArtifactAnnotationMeta } from '@plannotator/ui/types';
 import type { CommentAskAIHandler } from '@plannotator/ui/components/CommentPopover';
 import { useResizablePanel } from '@plannotator/ui/hooks/useResizablePanel';
 import { useCodeAnnotationDraft } from '@plannotator/ui/hooks/useCodeAnnotationDraft';
@@ -80,6 +80,7 @@ import {
   getReviewDiffPanelFilePath,
   isReviewDiffPanelId,
   REVIEW_PR_OVERVIEW_PANEL_ID,
+  REVIEW_PR_ARTIFACTS_PANEL_ID,
   REVIEW_SEMANTIC_DIFF_PANEL_ID,
   REVIEW_ALL_FILES_PANEL_ID,
   REVIEW_CODE_NAV_PANEL_ID,
@@ -104,6 +105,7 @@ import { TourDialog } from './components/tour/TourDialog';
 import { DEMO_TOUR_ID } from './demoTour';
 import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
+import { buildPRArtifacts } from './utils/prArtifacts';
 
 declare const __APP_VERSION__: string;
 
@@ -198,6 +200,7 @@ const ReviewApp: React.FC = () => {
   isAllFilesActiveRef.current = isAllFilesActive;
   const [isSemanticDiffActive, setIsSemanticDiffActive] = useState(false);
   const [isPROverviewActive, setIsPROverviewActive] = useState(false);
+  const [isPRArtifactsActive, setIsPRArtifactsActive] = useState(false);
   const [semanticDiffAvailable, setSemanticDiffAvailable] = useState(false);
   const [isDiffPanelActive, setIsDiffPanelActive] = useState(false);
   const [allFilesVisibleFile, setAllFilesVisibleFile] = useState<string | null>(null);
@@ -432,6 +435,10 @@ const ReviewApp: React.FC = () => {
 
   // PR context (lifted from sidebar so center dock PR panels can access it)
   const { prContext, isLoading: isPRContextLoading, error: prContextError, fetchContext: fetchPRContext } = usePRContext(prMetadata ?? null);
+  const prArtifacts = useMemo(
+    () => buildPRArtifacts(prMetadata ?? null, prContext),
+    [prMetadata, prContext],
+  );
 
   // Sync activeFileIndex from dockview's active panel (wired in handleDockReady)
 
@@ -831,12 +838,14 @@ const ReviewApp: React.FC = () => {
         setIsAllFilesActive(false);
         setIsSemanticDiffActive(false);
         setIsPROverviewActive(false);
+        setIsPRArtifactsActive(false);
         setIsDiffPanelActive(false);
         return;
       }
       setIsAllFilesActive(panel.id === REVIEW_ALL_FILES_PANEL_ID);
       setIsSemanticDiffActive(panel.id === REVIEW_SEMANTIC_DIFF_PANEL_ID);
       setIsPROverviewActive(panel.id === REVIEW_PR_OVERVIEW_PANEL_ID);
+      setIsPRArtifactsActive(panel.id === REVIEW_PR_ARTIFACTS_PANEL_ID);
       setIsDiffPanelActive(isReviewDiffPanelId(panel.id));
       if (!isReviewDiffPanelId(panel.id)) return;
       const filePath = getReviewDiffPanelFilePath(panel.params);
@@ -1051,6 +1060,28 @@ const ReviewApp: React.FC = () => {
       title: 'PR Overview',
     });
   }, [dockApi]);
+
+  // Open the hosted PR/MR attachment gallery as a center dock panel.
+  const openPRArtifactsPanel = useCallback(() => {
+    const api = dockApi;
+    if (!api || !prMetadata) return;
+    const existing = api.getPanel(REVIEW_PR_ARTIFACTS_PANEL_ID);
+    if (existing) {
+      existing.api.setActive();
+      return;
+    }
+    api.addPanel({
+      id: REVIEW_PR_ARTIFACTS_PANEL_ID,
+      component: REVIEW_PANEL_TYPES.PR_ARTIFACTS,
+      title: prMetadata.platform === 'gitlab' ? 'MR Artifacts' : 'PR Artifacts',
+    });
+  }, [dockApi, prMetadata]);
+
+  // A switch to local review must not leave a hosted-review panel behind.
+  useEffect(() => {
+    if (prMetadata !== null) return;
+    dockApi?.getPanel(REVIEW_PR_ARTIFACTS_PANEL_ID)?.api.close();
+  }, [dockApi, prMetadata]);
 
   const openAllFilesPanel = useCallback(() => {
     if (!dockApi) return;
@@ -2064,11 +2095,18 @@ const ReviewApp: React.FC = () => {
     // Stamp the active PR so the note stays bound to it across an in-place switch.
     setDescriptionAnnotations(prev => [...prev, { ...ann, prUrl: prMetadata?.url }]);
     setSelectedDescriptionAnnotationId(ann.id);
+    if (ann.artifact) setSelectedCommentAnnotationId(null);
   }, [prMetadata?.url]);
 
   const handleSelectDescriptionAnnotation = useCallback((id: string | null) => {
     setSelectedDescriptionAnnotationId(prev => (!id || prev === id ? null : id));
-  }, []);
+    if (!id) return;
+    const ann = descriptionAnnotations.find(a => a.id === id);
+    if (ann?.artifact) {
+      setSelectedCommentAnnotationId(null);
+      openPRArtifactsPanel();
+    }
+  }, [descriptionAnnotations, openPRArtifactsPanel]);
 
   const handleDeleteDescriptionAnnotation = useCallback((id: string) => {
     setDescriptionAnnotations(prev => prev.filter(a => a.id !== id));
@@ -2085,18 +2123,20 @@ const ReviewApp: React.FC = () => {
   }, [askAI]);
 
   // --- PR comment annotations (button-driven notes attached to a whole comment) ---
-  const handleAddCommentAnnotation = useCallback((commentId: string, commentAuthor: string, commentBody: string, text: string) => {
+  const handleAddCommentAnnotation = useCallback((commentId: string, commentAuthor: string, commentBody: string, text: string, options?: { id?: string; artifact?: ArtifactAnnotationMeta }) => {
     const ann: CommentAnnotation = {
-      id: crypto.randomUUID(),
+      id: options?.id ?? crypto.randomUUID(),
       commentId,
       commentAuthor,
       commentBody,
       text,
       createdAt: Date.now(),
       prUrl: prMetadata?.url, // bind to the active PR (survives an in-place switch)
+      artifact: options?.artifact,
     };
     setCommentAnnotations(prev => [...prev, ann]);
     setSelectedCommentAnnotationId(ann.id);
+    if (ann.artifact) setSelectedDescriptionAnnotationId(null);
   }, [prMetadata?.url]);
 
   const handleSelectCommentAnnotation = useCallback((id: string | null) => {
@@ -2105,11 +2145,14 @@ const ReviewApp: React.FC = () => {
     // Reveal the source comment: open the PR Overview panel and signal
     // PRCommentsTab to select + scroll to it.
     const ann = commentAnnotations.find(a => a.id === id);
-    if (ann) {
+    if (ann?.artifact) {
+      setSelectedDescriptionAnnotationId(null);
+      openPRArtifactsPanel();
+    } else if (ann) {
       openPROverviewPanel();
       setCommentScrollTarget(prev => ({ commentId: ann.commentId, token: (prev?.token ?? 0) + 1 }));
     }
-  }, [commentAnnotations, openPROverviewPanel]);
+  }, [commentAnnotations, openPROverviewPanel, openPRArtifactsPanel]);
 
   const handleDeleteCommentAnnotation = useCallback((id: string) => {
     setCommentAnnotations(prev => prev.filter(a => a.id !== id));
@@ -2295,6 +2338,7 @@ const ReviewApp: React.FC = () => {
     agentJobs: agentJobs.jobs,
     prMetadata,
     prContext,
+    prArtifacts,
     isPRContextLoading,
     prContextError,
     fetchPRContext,
@@ -2336,7 +2380,7 @@ const ReviewApp: React.FC = () => {
     activeFileSearchMatches, activeSearchMatchId, activeSearchMatch, searchMatches,
     aiAvailable, aiMessages, aiIsCreatingSession, aiIsStreaming,
     handleAskAI, handleAskAIForFile, handleViewAIResponse, handleClickAIMarker,
-    aiHistoryForSelection, getAIHistoryForFile, agentJobs.jobs, prMetadata, prContext,
+    aiHistoryForSelection, getAIHistoryForFile, agentJobs.jobs, prMetadata, prContext, prArtifacts,
     isPRContextLoading, prContextError, fetchPRContext, platformUser, openDiffFile,
     handleOpenTour, handleOpenGuide, isAllFilesActive, allFilesOrder, allFilesAllCollapsed, onToggleAllFilesCollapsed, registerAllFilesCollapseToggle, commitInfo, isSemanticDiffActive, semanticDiffAvailable,
     handleSemanticDiffUnavailable, handleSemanticDiffLoadError, handleSemanticDiffLoadSuccess, handleAddAnnotationForFile,
@@ -3234,6 +3278,9 @@ const ReviewApp: React.FC = () => {
                 isPROverviewActive={isPROverviewActive}
                 prOverviewNumber={prMetadata ? mrNumberLabel : undefined}
                 prOverviewTitle={prMetadata?.title}
+                onSelectPRArtifacts={prMetadata ? openPRArtifactsPanel : undefined}
+                isPRArtifactsActive={isPRArtifactsActive}
+                prArtifactCount={prMetadata ? prArtifacts.length : undefined}
                 onSelectSemanticDiff={() => openSemanticDiffPanel()}
                 isSemanticDiffActive={isSemanticDiffActive}
                 semanticDiffAvailable={semanticDiffAvailable}

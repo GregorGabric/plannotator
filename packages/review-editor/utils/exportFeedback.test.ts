@@ -1,6 +1,6 @@
 import { describe, it, expect } from "bun:test";
-import { exportReviewFeedback } from "./exportFeedback";
-import type { CodeAnnotation } from "@plannotator/ui/types";
+import { buildProseFeedback, exportReviewFeedback } from "./exportFeedback";
+import { AnnotationType, type Annotation, type CodeAnnotation, type CommentAnnotation } from "@plannotator/ui/types";
 import type { PRMetadata } from "@plannotator/shared/pr-types";
 
 const ann = (overrides: Partial<CodeAnnotation> = {}): CodeAnnotation => ({
@@ -382,5 +382,60 @@ describe("exportReviewFeedback", () => {
       { mode: "gitbutler:workspace", base: "abc123", snapshotId: "snapshot-b" },
     );
     expect(result).toContain("anchored to that GitButler diff");
+  });
+});
+
+describe("buildProseFeedback — artifact annotations", () => {
+  const artifact = {
+    artifactId: "pr-artifact-video",
+    artifactName: "Demo recording",
+    artifactUrl: "https://example.com/demo.webm",
+    artifactKind: "video" as const,
+    sourceUrl: "https://github.com/acme/widgets/pull/42#issuecomment-9",
+    anchor: { kind: "video" as const, timestamp: 83.4 },
+  };
+
+  it("exports a timestamped comment artifact as reply context for agent and GitHub delivery", () => {
+    const annotation: CommentAnnotation = {
+      id: "artifact-note",
+      commentId: "issuecomment-9",
+      commentAuthor: "alice",
+      commentBody: "Here is the UI recording.",
+      text: "The panel jumps at this moment.",
+      createdAt: 1,
+      artifact,
+    };
+
+    const output = buildProseFeedback([], [annotation], undefined);
+    expect(output).toContain("# PR Artifact Feedback");
+    expect(output).toContain("Demo recording — Video at 1:23");
+    expect(output).toContain("In reply to the artifact source comment by @alice");
+    expect(output).toContain("> Here is the UI recording.");
+    expect(output).toContain("https://github.com/acme/widgets/pull/42#issuecomment-9");
+  });
+
+  it("keeps description artifact feedback separate from PR-description text anchors", () => {
+    const annotation: Annotation = {
+      id: "image-note",
+      blockId: "",
+      startOffset: 0,
+      endOffset: 0,
+      type: AnnotationType.GLOBAL_COMMENT,
+      text: "Crop this more tightly.",
+      originalText: "",
+      createdA: 1,
+      artifact: {
+        ...artifact,
+        artifactId: "pr-artifact-image",
+        artifactName: "Hero image",
+        artifactKind: "image",
+        anchor: { kind: "image", x: 0.25, y: 0.4 },
+      },
+    };
+
+    const output = buildProseFeedback([annotation], [], "![Hero image](https://example.com/hero.png)");
+    expect(output).toContain("Hero image — Pin at 25%, 40%");
+    expect(output).toContain("Regarding an artifact in the PR description.");
+    expect(output).toContain("Crop this more tightly.");
   });
 });
