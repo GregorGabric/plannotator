@@ -58,6 +58,7 @@ describe('PRArtifactGallery', () => {
       root.render(
         <PRArtifactGallery
           artifacts={artifacts}
+          provider={{ platform: 'github', host: 'github.com' }}
           onSelectArtifact={(artifactId) => selected.push(artifactId)}
         />,
       );

@@ -20,7 +20,12 @@ import {
 } from '../../utils/artifactAnnotations';
 import type { PRArtifact } from '../../utils/prArtifacts';
 import { useReviewState } from '../ReviewStateContext';
-import { injectArtifactBaseUrl, useRemoteArtifactDocument } from './artifactDocument';
+import {
+  type ArtifactProviderLocation,
+  injectArtifactBaseUrl,
+  rewriteArtifactMarkdownReferences,
+  useRemoteArtifactDocument,
+} from './artifactDocument';
 import { PRArtifactGallery } from './PRArtifactGallery';
 import { PRArtifactIcon } from './PRArtifactIcon';
 
@@ -293,6 +298,8 @@ function VideoArtifactStage({
 
 function AnnotatableMarkdownStage({
   markdown,
+  artifactUrl,
+  provider,
   annotations,
   selectedAnnotationId,
   onAddAnnotation,
@@ -300,6 +307,8 @@ function AnnotatableMarkdownStage({
   onAskAI,
 }: {
   markdown: string;
+  artifactUrl: string;
+  provider: ArtifactProviderLocation;
   annotations: Annotation[];
   selectedAnnotationId: string | null;
   onAddAnnotation: (annotation: Annotation) => void;
@@ -317,13 +326,16 @@ function AnnotatableMarkdownStage({
   });
   const previousIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
+    if (containerRef.current !== null) {
+      rewriteArtifactMarkdownReferences(containerRef.current, artifactUrl, provider);
+    }
     const ids = new Set(annotations.map((annotation) => annotation.id));
     for (const id of previousIdsRef.current) {
       if (!ids.has(id)) hook.removeHighlight(id);
     }
     hook.applyAnnotations(annotations);
     previousIdsRef.current = ids;
-  }, [annotations, markdown]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [annotations, artifactUrl, markdown, provider]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <OverlayScrollArea className="h-full px-8 py-6">
@@ -354,6 +366,7 @@ function AnnotatableMarkdownStage({
 
 function MarkdownArtifactStage({
   artifact,
+  provider,
   annotations,
   selectedAnnotationId,
   onAddAnnotation,
@@ -361,6 +374,7 @@ function MarkdownArtifactStage({
   onAskAI,
 }: {
   artifact: PRArtifact;
+  provider: ArtifactProviderLocation;
   annotations: Annotation[];
   selectedAnnotationId: string | null;
   onAddAnnotation: (annotation: Annotation) => void;
@@ -375,13 +389,15 @@ function MarkdownArtifactStage({
     return (
       <ExternalArtifactState
         artifact={artifact}
-        message="This Markdown document could not be loaded inline because the remote host refused browser access."
+        message="This Markdown document could not be loaded inline. It may have moved or require different access."
       />
     );
   }
   return (
     <AnnotatableMarkdownStage
       markdown={state.content}
+      artifactUrl={artifact.url}
+      provider={provider}
       annotations={annotations}
       selectedAnnotationId={selectedAnnotationId}
       onAddAnnotation={onAddAnnotation}
@@ -393,6 +409,7 @@ function MarkdownArtifactStage({
 
 function HtmlArtifactStage({
   artifact,
+  provider,
   annotations,
   selectedAnnotationId,
   onAddAnnotation,
@@ -400,6 +417,7 @@ function HtmlArtifactStage({
   onAskAI,
 }: {
   artifact: PRArtifact;
+  provider: ArtifactProviderLocation;
   annotations: Annotation[];
   selectedAnnotationId: string | null;
   onAddAnnotation: (annotation: Annotation) => void;
@@ -414,13 +432,13 @@ function HtmlArtifactStage({
     return (
       <ExternalArtifactState
         artifact={artifact}
-        message="This HTML document could not be loaded inline because the remote host refused browser access."
+        message="This HTML document could not be loaded inline. It may have moved or require different access."
       />
     );
   }
   return (
     <HtmlViewer
-      rawHtml={injectArtifactBaseUrl(state.content, artifact.url)}
+      rawHtml={injectArtifactBaseUrl(state.content, artifact.url, provider)}
       annotations={annotations}
       onAddAnnotation={onAddAnnotation}
       onSelectAnnotation={onSelectAnnotation}
@@ -437,6 +455,7 @@ function HtmlArtifactStage({
 
 function ArtifactStage({
   artifact,
+  provider,
   notes,
   documentAnnotations,
   selectedAnnotationId,
@@ -447,6 +466,7 @@ function ArtifactStage({
   onAskAI,
 }: {
   artifact: PRArtifact;
+  provider: ArtifactProviderLocation;
   notes: readonly ArtifactNote[];
   documentAnnotations: Annotation[];
   selectedAnnotationId: string | null;
@@ -481,6 +501,7 @@ function ArtifactStage({
       return (
         <MarkdownArtifactStage
           artifact={artifact}
+          provider={provider}
           annotations={documentAnnotations}
           selectedAnnotationId={selectedAnnotationId}
           onAddAnnotation={onAddDocumentAnnotation}
@@ -492,6 +513,7 @@ function ArtifactStage({
       return (
         <HtmlArtifactStage
           artifact={artifact}
+          provider={provider}
           annotations={documentAnnotations}
           selectedAnnotationId={selectedAnnotationId}
           onAddAnnotation={onAddDocumentAnnotation}
@@ -854,7 +876,11 @@ export const ReviewPRArtifactsPanel: React.FC<IDockviewPanelProps> = () => {
               <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">Gallery</span>
             </header>
             <div className="min-h-0 flex-1 bg-muted/10">
-              <PRArtifactGallery artifacts={visibleArtifacts} onSelectArtifact={setSelectedId} />
+              <PRArtifactGallery
+                artifacts={visibleArtifacts}
+                provider={prMetadata}
+                onSelectArtifact={setSelectedId}
+              />
             </div>
             <footer className="shrink-0 border-t border-border/50 px-3 py-2 text-[10px] text-muted-foreground">
               {visibleArtifacts.length} {visibleArtifacts.length === 1 ? 'artifact' : 'artifacts'} · select one to review
@@ -883,6 +909,7 @@ export const ReviewPRArtifactsPanel: React.FC<IDockviewPanelProps> = () => {
               <ArtifactStage
                 key={selected.url}
                 artifact={selected}
+                provider={prMetadata}
                 notes={artifactNotes}
                 documentAnnotations={documentAnnotations}
                 selectedAnnotationId={selectedAnnotationId}

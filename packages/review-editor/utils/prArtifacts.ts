@@ -105,12 +105,24 @@ function collectRefs(markdown: string): RawArtifactRef[] {
 
 function isKnownGitHubAssetUrl(url: URL, githubHost: string): boolean {
   const host = url.hostname.toLowerCase();
-  if (host === 'githubusercontent.com' || host.endsWith('.githubusercontent.com')) return true;
+  if (host === 'user-images.githubusercontent.com' || host === 'private-user-images.githubusercontent.com') {
+    return true;
+  }
   const normalizedGithubHost = githubHost.toLowerCase();
   return (
     (host === 'github.com' || host === normalizedGithubHost) &&
-    url.pathname.startsWith('/user-attachments/assets/')
+    /^\/user-attachments\/(?:assets|files)\//.test(url.pathname)
   );
+}
+
+function isKnownGitLabAssetUrl(
+  url: URL,
+  metadata: Extract<PRMetadata, { platform: 'gitlab' }>,
+): boolean {
+  if (url.hostname.toLowerCase() !== metadata.host.toLowerCase()) return false;
+  const projectPath = `/${metadata.projectPath.replace(/^\/+|\/+$/g, '')}`;
+  return url.pathname.startsWith('/uploads/')
+    || url.pathname.startsWith(`${projectPath}/uploads/`);
 }
 
 function resolveArtifactUrl(raw: string, baseUrl: string): URL | null {
@@ -124,10 +136,17 @@ function resolveArtifactUrl(raw: string, baseUrl: string): URL | null {
 
 function classifyArtifactUrl(
   url: URL,
+  label: string,
   authoredAs: AuthoredAs,
   metadata: PRMetadata,
 ): PRArtifactKind | null {
-  const extension = /\.([a-z0-9]+)$/.exec(url.pathname.toLowerCase())?.[1];
+  const urlExtension = /\.([a-z0-9]+)$/.exec(url.pathname.toLowerCase())?.[1];
+  const labelExtension = /\.([a-z0-9]+)$/.exec(label.trim().toLowerCase())?.[1];
+  const extension = urlExtension ?? (
+    metadata.platform === 'github' && isKnownGitHubAssetUrl(url, metadata.host)
+      ? labelExtension
+      : undefined
+  );
   if (extension !== undefined) {
     if (extension === 'gif') return 'gif';
     if (IMAGE_EXTENSIONS.has(extension)) return 'image';
@@ -171,8 +190,22 @@ function artifactName(ref: RawArtifactRef, url: URL): string {
   return sanitizeArtifactName(url.hostname);
 }
 
-function artifactDedupeKey(url: URL): string {
-  return `${url.origin.toLowerCase()}${url.pathname}`;
+const SIGNING_QUERY_PARAM_RE = /^(?:x-amz-|x-goog-|awsaccesskeyid$|signature$|expires$)/i;
+
+function artifactDedupeKey(url: URL, metadata: PRMetadata): string {
+  const pathKey = `${url.origin.toLowerCase()}${url.pathname}`;
+  const isPlatformUpload = metadata.platform === 'github'
+    ? isKnownGitHubAssetUrl(url, metadata.host)
+    : isKnownGitLabAssetUrl(url, metadata);
+  if (isPlatformUpload) return pathKey;
+
+  const semanticQuery = new URLSearchParams();
+  for (const [name, value] of url.searchParams) {
+    if (!SIGNING_QUERY_PARAM_RE.test(name)) semanticQuery.append(name, value);
+  }
+  semanticQuery.sort();
+  const query = semanticQuery.toString();
+  return query === '' ? pathKey : `${pathKey}?${query}`;
 }
 
 function fnv1aHex(input: string): string {
@@ -265,9 +298,9 @@ export function buildPRArtifacts(
     for (const ref of collectRefs(source.markdown)) {
       const url = resolveArtifactUrl(ref.url, metadata.url);
       if (url === null) continue;
-      const kind = classifyArtifactUrl(url, ref.authoredAs, metadata);
+      const kind = classifyArtifactUrl(url, ref.label, ref.authoredAs, metadata);
       if (kind === null) continue;
-      const key = artifactDedupeKey(url);
+      const key = artifactDedupeKey(url, metadata);
       if (seen.has(key)) continue;
       seen.add(key);
       artifacts.push({

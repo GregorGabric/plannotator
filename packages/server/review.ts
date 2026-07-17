@@ -100,6 +100,10 @@ import {
   createPRContextLiveCache,
   serializePRContextSSEEvent,
 } from "@plannotator/shared/pr-context-live";
+import {
+  fetchPRArtifactDocument,
+  PRArtifactDocumentError,
+} from "@plannotator/shared/pr-artifact-document";
 import { AI_QUERY_ENDPOINT, createAIRuntime } from "./ai-runtime";
 import type { AIEndpoints } from "@plannotator/ai";
 import { isWSL } from "./browser";
@@ -2137,6 +2141,39 @@ export async function startReviewServer(
               const message =
                 err instanceof Error ? err.message : "Failed to fetch PR context";
               return Response.json({ error: message }, { status: 500 });
+            }
+          }
+
+          // API: Fetch a context-referenced HTML/Markdown artifact through the
+          // authenticated provider session. The shared helper owns URL and
+          // redirect validation so this never becomes an open proxy.
+          if (url.pathname === "/api/pr-artifact-document" && req.method === "GET") {
+            if (!isPRMode || !prRef || !prMetadata) {
+              return Response.json({ error: "Not in PR mode" }, { status: 400 });
+            }
+            const artifactUrl = url.searchParams.get("url");
+            if (!artifactUrl) {
+              return Response.json({ error: "Missing artifact URL" }, { status: 400 });
+            }
+            try {
+              const context = await prContextLive.getContext(prMetadata.url, prRef);
+              const document = await fetchPRArtifactDocument(
+                prCommandRuntime,
+                prMetadata,
+                context,
+                artifactUrl,
+              );
+              return new Response(document.content, {
+                headers: {
+                  "Content-Type": `${document.contentType}; charset=utf-8`,
+                  "Cache-Control": "private, max-age=300",
+                  "X-Content-Type-Options": "nosniff",
+                },
+              });
+            } catch (error) {
+              const status = error instanceof PRArtifactDocumentError ? error.status : 500;
+              const message = error instanceof Error ? error.message : "Failed to fetch artifact document";
+              return Response.json({ error: message }, { status });
             }
           }
 

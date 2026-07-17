@@ -102,6 +102,22 @@ describe('buildPRArtifacts', () => {
     expect(artifacts[0]?.sourceMarkdown).toBe(context.body);
   });
 
+  it('keeps semantically distinct query variants while ignoring signing parameters', () => {
+    const context: PRContext = {
+      ...emptyContext,
+      body: [
+        '![before](https://example.com/render.png?variant=before&X-Amz-Signature=old)',
+        '![after](https://example.com/render.png?variant=after&X-Amz-Signature=new)',
+        '![before duplicate](https://example.com/render.png?X-Amz-Signature=renewed&variant=before)',
+      ].join('\n\n'),
+    };
+
+    expect(buildPRArtifacts(githubMetadata, context).map((artifact) => artifact.name)).toEqual([
+      'before',
+      'after',
+    ]);
+  });
+
   it('recognizes an extensionless GitHub upload authored as a bare video URL', () => {
     const videoUrl = 'https://github.com/user-attachments/assets/1234-video';
     const context: PRContext = {
@@ -115,6 +131,31 @@ describe('buildPRArtifacts', () => {
         url: videoUrl,
       },
     ]);
+  });
+
+  it('uses an authored filename to recognize an extensionless GitHub GIF upload', () => {
+    const gifUrl = 'https://github.com/user-attachments/assets/1234-gif';
+    const context: PRContext = {
+      ...emptyContext,
+      body: `![demo.gif](${gifUrl})`,
+    };
+
+    expect(buildPRArtifacts(githubMetadata, context)).toMatchObject([
+      {
+        kind: 'gif',
+        name: 'demo.gif',
+        url: gifUrl,
+      },
+    ]);
+  });
+
+  it('does not treat arbitrary githubusercontent files as extensionless video uploads', () => {
+    const context: PRContext = {
+      ...emptyContext,
+      body: 'https://raw.githubusercontent.com/acme/widgets/main/LICENSE',
+    };
+
+    expect(buildPRArtifacts(githubMetadata, context)).toEqual([]);
   });
 
   it('sorts conversation sources newest-first and carries review-thread resolution state', () => {

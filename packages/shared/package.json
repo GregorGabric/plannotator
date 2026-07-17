@@ -20,6 +20,7 @@
     "./types": "./types.ts",
     "./pr-types": "./pr-types.ts",
     "./pr-context-live": "./pr-context-live.ts",
+    "./pr-artifact-document": "./pr-artifact-document.ts",
     "./pr-provider": "./pr-provider.ts",
     "./pr-stack": "./pr-stack.ts",
     "./project": "./project.ts",
