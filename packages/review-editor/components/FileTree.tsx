@@ -176,7 +176,7 @@ export const FileTree: React.FC<FileTreeProps> = ({
 
   // Keyboard navigation: j/k or arrow keys
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (!enableKeyboardNav) return;
+    if (!enableKeyboardNav || e.defaultPrevented) return;
 
     // Don't interfere with input fields
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {

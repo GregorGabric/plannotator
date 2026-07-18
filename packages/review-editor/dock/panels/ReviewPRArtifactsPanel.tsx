@@ -22,6 +22,7 @@ import type { PRArtifact } from '../../utils/prArtifacts';
 import { useReviewState } from '../ReviewStateContext';
 import {
   type ArtifactProviderLocation,
+  artifactContentProxyUrl,
   injectArtifactBaseUrl,
   rewriteArtifactMarkdownReferences,
   useRemoteArtifactDocument,
@@ -176,7 +177,7 @@ function ImageArtifactStage({
         }}
       >
         <img
-          src={artifact.url}
+          src={artifactContentProxyUrl(artifact.url)}
           alt={artifact.name}
           className="block max-h-full max-w-full rounded-md object-contain shadow-sm"
           draggable={false}
@@ -248,7 +249,7 @@ function VideoArtifactStage({
     <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3 overflow-auto p-5">
       <video
         ref={videoRef}
-        src={artifact.url}
+        src={artifactContentProxyUrl(artifact.url)}
         aria-label={artifact.name}
         controls
         preload="metadata"
@@ -750,12 +751,22 @@ export const ReviewPRArtifactsPanel: React.FC<IDockviewPanelProps> = () => {
       className="flex h-full min-w-0 bg-background"
       onKeyDown={(event) => {
         const target = event.target;
-        if (target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'VIDEO')) return;
+        const isArrowKey = event.key === 'ArrowDown'
+          || event.key === 'ArrowRight'
+          || event.key === 'ArrowUp'
+          || event.key === 'ArrowLeft';
+        if (target instanceof HTMLElement && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+        if (target instanceof HTMLElement && target.tagName === 'VIDEO') {
+          if (isArrowKey) event.stopPropagation();
+          return;
+        }
         if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
           event.preventDefault();
+          event.stopPropagation();
           stepSelection(1);
         } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
           event.preventDefault();
+          event.stopPropagation();
           stepSelection(-1);
         }
       }}

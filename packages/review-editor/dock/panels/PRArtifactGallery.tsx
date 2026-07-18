@@ -4,6 +4,7 @@ import { RenderedMarkdown } from '@plannotator/ui/components/RenderedMarkdown';
 import type { PRArtifact } from '../../utils/prArtifacts';
 import {
   type ArtifactProviderLocation,
+  artifactContentProxyUrl,
   injectArtifactBaseUrl,
   rewriteArtifactMarkdownReferences,
   useRemoteArtifactDocument,
@@ -100,7 +101,7 @@ function ArtifactPreview({
     case 'gif':
       return (
         <img
-          src={artifact.url}
+          src={artifactContentProxyUrl(artifact.url)}
           alt=""
           aria-hidden="true"
           draggable={false}
@@ -113,7 +114,7 @@ function ArtifactPreview({
     case 'video':
       return (
         <video
-          src={artifact.url}
+          src={artifactContentProxyUrl(artifact.url)}
           muted
           playsInline
           preload="metadata"

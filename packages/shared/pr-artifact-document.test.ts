@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { GithubPRMetadata, GitlabMRMetadata, PRContext, PRRuntime } from './pr-types';
 import {
+  fetchPRArtifactContent,
   fetchPRArtifactDocument,
   isPRArtifactDocumentUrlAllowed,
 } from './pr-artifact-document';
@@ -10,6 +11,7 @@ const context: PRContext = {
     '[explainer](https://github.com/user-attachments/files/123/explainer.html)',
     '[source](https://raw.githubusercontent.com/acme/widgets/main/review.md)',
     '[committed](https://github.com/acme/widgets/blob/main/docs/review.html)',
+    '![media](https://github.com/acme/widgets/blob/main/assets/demo.png)',
   ].join('\n'),
   state: 'OPEN',
   isDraft: false,
@@ -171,5 +173,92 @@ describe('fetchPRArtifactDocument', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe('fetchPRArtifactContent', () => {
+  test('normalizes provider blob media, preserves bytes, and forwards a valid range', async () => {
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: 'test-token\n', stderr: '', exitCode: 0 };
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let requestedUrl = '';
+    let receivedRange = '';
+    globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      receivedRange = new Headers(init?.headers).get('range') ?? '';
+      return new Response(Uint8Array.from([0, 1, 2, 255]), {
+        status: 206,
+        headers: {
+          'content-type': 'image/png',
+          'content-range': 'bytes 0-3/4',
+          'accept-ranges': 'bytes',
+        },
+      });
+    };
+    try {
+      const result = await fetchPRArtifactContent(
+        runtime,
+        github,
+        context,
+        'https://github.com/acme/widgets/blob/main/assets/demo.png',
+        { range: 'bytes=0-3' },
+      );
+      expect(requestedUrl).toBe('https://raw.githubusercontent.com/acme/widgets/main/assets/demo.png');
+      expect(receivedRange).toBe('bytes=0-3');
+      expect([...result.content]).toEqual([0, 1, 2, 255]);
+      expect(result).toMatchObject({
+        status: 206,
+        contentType: 'image/png',
+        contentRange: 'bytes 0-3/4',
+        acceptRanges: 'bytes',
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('allows a provider resource derived from a referenced document and rewrites CSS assets', async () => {
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: 'test-token\n', stderr: '', exitCode: 0 };
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () => new Response(
+      '.hero { background: url(../images/hero.png); }',
+      { headers: { 'content-type': 'text/css' } },
+    );
+    try {
+      const result = await fetchPRArtifactContent(
+        runtime,
+        github,
+        context,
+        'https://raw.githubusercontent.com/acme/widgets/main/styles/review.css',
+        { sourceUrl: 'https://github.com/acme/widgets/blob/main/docs/review.html' },
+      );
+      const css = new TextDecoder().decode(result.content);
+      expect(css).toContain('/api/pr-artifact-content?');
+      expect(css).toContain('hero.png');
+      expect(css).toContain('source=');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('rejects an unreferenced provider resource without a referenced source document', async () => {
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: '', stderr: '', exitCode: 1 };
+      },
+    };
+    await expect(fetchPRArtifactContent(
+      runtime,
+      github,
+      context,
+      'https://raw.githubusercontent.com/acme/widgets/main/private/secret.png',
+    )).rejects.toMatchObject({ status: 403 });
   });
 });

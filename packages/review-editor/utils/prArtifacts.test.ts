@@ -118,6 +118,21 @@ describe('buildPRArtifacts', () => {
     ]);
   });
 
+  it('decodes HTML entities in attachment attributes before resolving URLs', () => {
+    const context: PRContext = {
+      ...emptyContext,
+      body: '<img alt="quality &amp; diff" src="https://example.com/render.png?left=1&amp;right=2">',
+    };
+
+    expect(buildPRArtifacts(githubMetadata, context)).toMatchObject([
+      {
+        kind: 'image',
+        name: 'quality & diff',
+        url: 'https://example.com/render.png?left=1&right=2',
+      },
+    ]);
+  });
+
   it('recognizes an extensionless GitHub upload authored as a bare video URL', () => {
     const videoUrl = 'https://github.com/user-attachments/assets/1234-video';
     const context: PRContext = {

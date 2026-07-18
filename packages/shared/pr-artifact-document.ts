@@ -1,6 +1,7 @@
 import type { PRContext, PRMetadata, PRRuntime } from './pr-types';
 
 const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 64 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -28,6 +29,22 @@ export class PRArtifactDocumentError extends Error {
 export interface PRArtifactDocument {
   readonly content: string;
   readonly contentType: string;
+}
+
+/** Bounded provider content suitable for a same-origin media response. */
+export interface PRArtifactContent {
+  readonly content: Uint8Array;
+  readonly contentType: string;
+  readonly status: number;
+  readonly contentRange?: string;
+  readonly acceptRanges?: string;
+}
+
+export interface PRArtifactContentOptions {
+  /** Context-referenced document from which a relative resource was derived. */
+  readonly sourceUrl?: string;
+  /** Valid single-range header forwarded for video seeking. */
+  readonly range?: string;
 }
 
 function contextMarkdown(context: PRContext): readonly string[] {
@@ -79,6 +96,17 @@ function isGitLabArtifactHost(url: URL, metadata: Extract<PRMetadata, { platform
     || url.pathname.startsWith(`${projectPath}/-/blob/`);
 }
 
+function isProviderArtifactUrl(url: URL, metadata: PRMetadata): boolean {
+  const providerProtocol = new URL(metadata.url).protocol;
+  if (
+    (url.protocol !== 'https:' && url.protocol !== 'http:')
+    || url.protocol !== providerProtocol
+  ) return false;
+  return metadata.platform === 'github'
+    ? isGitHubArtifactHost(url, metadata)
+    : isGitLabArtifactHost(url, metadata);
+}
+
 function providerContentUrl(url: URL, metadata: PRMetadata): URL {
   if (metadata.platform === 'github') {
     const providerHost = metadata.host.toLowerCase();
@@ -124,16 +152,28 @@ export function isPRArtifactDocumentUrlAllowed(
   } catch {
     return false;
   }
-  const providerProtocol = new URL(metadata.url).protocol;
-  if (
-    (url.protocol !== 'https:' && url.protocol !== 'http:')
-    || url.protocol !== providerProtocol
-  ) return false;
   url.hash = '';
-  const allowedHost = metadata.platform === 'github'
-    ? isGitHubArtifactHost(url, metadata)
-    : isGitLabArtifactHost(url, metadata);
-  return allowedHost && isReferencedByContext(url, metadata, context);
+  return isProviderArtifactUrl(url, metadata)
+    && isReferencedByContext(url, metadata, context);
+}
+
+function isPRArtifactContentUrlAllowed(
+  rawUrl: string,
+  sourceUrl: string | undefined,
+  metadata: PRMetadata,
+  context: PRContext,
+): boolean {
+  if (sourceUrl === undefined) {
+    return isPRArtifactDocumentUrlAllowed(rawUrl, metadata, context);
+  }
+  if (!isPRArtifactDocumentUrlAllowed(sourceUrl, metadata, context)) return false;
+  try {
+    const url = new URL(rawUrl);
+    url.hash = '';
+    return isProviderArtifactUrl(url, metadata);
+  } catch {
+    return false;
+  }
 }
 
 function isPrivateNetworkUrl(url: URL): boolean {
@@ -190,45 +230,89 @@ function shouldSendProviderAuth(url: URL, metadata: PRMetadata): boolean {
     || host === 'private-user-images.githubusercontent.com';
 }
 
-async function readTextWithLimit(response: Response): Promise<string> {
+async function readBytesWithLimit(response: Response, maxBytes: number): Promise<Uint8Array> {
   const contentLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_DOCUMENT_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
     await response.body?.cancel();
-    throw new PRArtifactDocumentError('Artifact document is too large to preview', 413);
+    throw new PRArtifactDocumentError('Artifact content is too large to preview', 413);
   }
   const reader = response.body?.getReader();
   if (reader === undefined) {
-    const content = await response.text();
-    if (new TextEncoder().encode(content).byteLength > MAX_DOCUMENT_BYTES) {
-      throw new PRArtifactDocumentError('Artifact document is too large to preview', 413);
+    const content = new Uint8Array(await response.arrayBuffer());
+    if (content.byteLength > maxBytes) {
+      throw new PRArtifactDocumentError('Artifact content is too large to preview', 413);
     }
     return content;
   }
 
-  const decoder = new TextDecoder();
-  let content = '';
+  const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   while (true) {
     const chunk = await reader.read();
     if (chunk.done) break;
     totalBytes += chunk.value.byteLength;
-    if (totalBytes > MAX_DOCUMENT_BYTES) {
+    if (totalBytes > maxBytes) {
       await reader.cancel();
-      throw new PRArtifactDocumentError('Artifact document is too large to preview', 413);
+      throw new PRArtifactDocumentError('Artifact content is too large to preview', 413);
     }
-    content += decoder.decode(chunk.value, { stream: true });
+    chunks.push(chunk.value);
   }
-  return content + decoder.decode();
+  const content = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    content.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return content;
 }
 
-/** Fetch one active PR/MR document without exposing provider credentials to the browser. */
-export async function fetchPRArtifactDocument(
+function isValidRangeHeader(range: string | undefined): range is string {
+  return range !== undefined && /^bytes=\d*-\d*$/.test(range);
+}
+
+function proxyUrl(rawUrl: string, sourceUrl: string): string {
+  return `/api/pr-artifact-content?${new URLSearchParams({ url: rawUrl, source: sourceUrl })}`;
+}
+
+function rewriteCssReferences(css: string, cssUrl: URL, sourceUrl: string): string {
+  const rewriteReference = (rawReference: string): string | null => {
+    const reference = rawReference.trim();
+    if (reference === '' || reference.startsWith('#') || /^(?:data|blob):/i.test(reference)) {
+      return null;
+    }
+    try {
+      const resolved = new URL(reference, cssUrl);
+      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
+      return proxyUrl(resolved.href, sourceUrl);
+    } catch {
+      return null;
+    }
+  };
+  const urlsRewritten = css.replace(
+    /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
+    (match, quote: string, rawReference: string) => {
+      const rewritten = rewriteReference(rawReference);
+      return rewritten === null ? match : `url(${quote}${rewritten}${quote})`;
+    },
+  );
+  return urlsRewritten.replace(
+    /(@import\s+)(["'])([^"']+)\2/gi,
+    (match, prefix: string, quote: string, rawReference: string) => {
+      const rewritten = rewriteReference(rawReference);
+      return rewritten === null ? match : `${prefix}${quote}${rewritten}${quote}`;
+    },
+  );
+}
+
+async function fetchArtifactContent(
   runtime: PRRuntime,
   metadata: PRMetadata,
   context: PRContext,
   rawUrl: string,
-): Promise<PRArtifactDocument> {
-  if (!isPRArtifactDocumentUrlAllowed(rawUrl, metadata, context)) {
+  maxBytes: number,
+  options: PRArtifactContentOptions,
+): Promise<PRArtifactContent> {
+  if (!isPRArtifactContentUrlAllowed(rawUrl, options.sourceUrl, metadata, context)) {
     throw new PRArtifactDocumentError('Artifact URL is not available in this review', 403);
   }
 
@@ -243,8 +327,9 @@ export async function fetchPRArtifactDocument(
         redirect: 'manual',
         signal: controller.signal,
         headers: {
-          Accept: 'text/html, text/markdown, text/plain;q=0.9, */*;q=0.1',
+          Accept: '*/*',
           'User-Agent': 'Plannotator artifact review',
+          ...(isValidRangeHeader(options.range) ? { Range: options.range } : {}),
           ...(shouldSendProviderAuth(currentUrl, metadata) ? providerHeaders : {}),
         },
       });
@@ -267,7 +352,20 @@ export async function fetchPRArtifactDocument(
       }
       const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim()
         || 'text/plain';
-      return { content: await readTextWithLimit(response), contentType };
+      let content = await readBytesWithLimit(response, maxBytes);
+      if (contentType === 'text/css' && options.sourceUrl !== undefined) {
+        const css = new TextDecoder().decode(content);
+        content = new TextEncoder().encode(rewriteCssReferences(css, currentUrl, options.sourceUrl));
+      }
+      const contentRange = response.headers.get('content-range');
+      const acceptRanges = response.headers.get('accept-ranges');
+      return {
+        content,
+        contentType,
+        status: response.status,
+        ...(contentRange === null ? {} : { contentRange }),
+        ...(acceptRanges === null ? {} : { acceptRanges }),
+      };
     }
     throw new PRArtifactDocumentError('Artifact document redirected too many times', 502);
   } catch (error) {
@@ -279,4 +377,36 @@ export async function fetchPRArtifactDocument(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** Fetch bounded media or a derived document resource with provider authentication. */
+export function fetchPRArtifactContent(
+  runtime: PRRuntime,
+  metadata: PRMetadata,
+  context: PRContext,
+  rawUrl: string,
+  options: PRArtifactContentOptions = {},
+): Promise<PRArtifactContent> {
+  return fetchArtifactContent(runtime, metadata, context, rawUrl, MAX_MEDIA_BYTES, options);
+}
+
+/** Fetch one active PR/MR text document without exposing provider credentials to the browser. */
+export async function fetchPRArtifactDocument(
+  runtime: PRRuntime,
+  metadata: PRMetadata,
+  context: PRContext,
+  rawUrl: string,
+): Promise<PRArtifactDocument> {
+  const result = await fetchArtifactContent(
+    runtime,
+    metadata,
+    context,
+    rawUrl,
+    MAX_DOCUMENT_BYTES,
+    {},
+  );
+  return {
+    content: new TextDecoder().decode(result.content),
+    contentType: result.contentType,
+  };
 }

@@ -271,8 +271,8 @@ export async function fetchGlMRContext(
   // Fetch all context in parallel
   const [mrResult, notesResult, discussionsResult, approvalsResult, pipelinesResult, issuesResult] = await Promise.all([
     runtime.runCommand("glab", apiArgs(ref.host, mrEndpoint)),
-    runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/notes?sort=asc&per_page=100`)),
-    runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/discussions?per_page=100`)),
+    runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/notes?sort=asc&per_page=100`, ["--paginate"])),
+    runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/discussions?per_page=100`, ["--paginate"])),
     runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/approvals`)),
     runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/pipelines?per_page=5`)),
     runtime.runCommand("glab", apiArgs(ref.host, `${mrEndpoint}/closes_issues`)),
@@ -353,7 +353,7 @@ export async function fetchGlMRContext(
   const discussionNoteIds = new Set<string>();
   if (discussionsResult.exitCode === 0) {
     try {
-      const parsed: unknown = JSON.parse(discussionsResult.stdout);
+      const parsed: unknown = parsePaginatedArray<unknown>(discussionsResult.stdout);
       if (Array.isArray(parsed)) {
         for (const rawDiscussion of parsed) {
           if (!isRecord(rawDiscussion) || rawDiscussion.individual_note === true) continue;
@@ -413,18 +413,21 @@ export async function fetchGlMRContext(
   const notes: PRContext["comments"] = [];
   if (notesResult.exitCode === 0) {
     try {
-      const rawNotes = JSON.parse(notesResult.stdout) as any[];
-      for (const n of rawNotes) {
-        if (n.system || discussionNoteIds.has(String(n.id ?? ""))) continue;
-        const avatarUrl = resolveAvatar(n.author?.avatar_url);
+      const rawNotes = parsePaginatedArray<unknown>(notesResult.stdout);
+      for (const rawNote of rawNotes) {
+        if (!isRecord(rawNote)) continue;
+        const id = stringValue(rawNote.id);
+        if (rawNote.system === true || discussionNoteIds.has(id)) continue;
+        const author = isRecord(rawNote.author) ? rawNote.author : null;
+        const avatarUrl = resolveAvatar(author?.avatar_url);
         notes.push({
-          id: String(n.id ?? ""),
-          author: str(n.author?.username),
+          id,
+          author: str(author?.username),
           ...(avatarUrl ? { avatarUrl } : {}),
-          ...(isGitlabBot(n.author) ? { isBot: true } : {}),
-          body: str(n.body),
-          createdAt: str(n.created_at),
-          url: str(n.web_url) || "",
+          ...(isGitlabBot(author) ? { isBot: true } : {}),
+          body: str(rawNote.body),
+          createdAt: str(rawNote.created_at),
+          url: str(rawNote.web_url) || "",
         });
       }
     } catch { /* non-JSON response */ }

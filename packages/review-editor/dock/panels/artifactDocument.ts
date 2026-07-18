@@ -49,13 +49,6 @@ function loadRemoteArtifactDocument(url: string): Promise<string> {
   const promise = fetch(endpoint)
     .then(async (response) => {
       if (response.ok) return response.text();
-      // Non-provider documents are intentionally outside the server proxy's
-      // allowlist. Preserve the prior browser-fetch behavior for public hosts
-      // that opt into CORS while keeping provider credentials server-side.
-      if (response.status === 403) {
-        const directResponse = await fetch(url);
-        if (directResponse.ok) return directResponse.text();
-      }
       throw new Error(`HTTP ${response.status}`);
     })
     .then((content) => {
@@ -170,6 +163,23 @@ export function artifactContentBaseUrl(
   return artifactUrl;
 }
 
+/** Build the same-origin URL used for authenticated provider media/resources. */
+export function artifactContentProxyUrl(url: string, sourceUrl?: string): string {
+  return `/api/pr-artifact-content?${new URLSearchParams({
+    url,
+    ...(sourceUrl === undefined ? {} : { source: sourceUrl }),
+  })}`;
+}
+
+function proxiedArtifactReferenceUrl(
+  rawUrl: string,
+  artifactUrl: string,
+  provider: ArtifactProviderLocation,
+): string | null {
+  const resolved = resolveArtifactReferenceUrl(rawUrl, artifactUrl, provider);
+  return resolved === null ? null : artifactContentProxyUrl(resolved, artifactUrl);
+}
+
 /**
  * Repair relative references after RenderedMarkdown has produced DOM. Its
  * normal image resolver targets local files through /api/image; remote
@@ -183,13 +193,13 @@ export function rewriteArtifactMarkdownReferences(
   for (const element of root.querySelectorAll<HTMLElement>('img[src], source[src], video[src]')) {
     const rawSrc = element.getAttribute('src');
     if (rawSrc === null) continue;
-    const resolved = resolveArtifactReferenceUrl(rawSrc, artifactUrl, provider);
+    const resolved = proxiedArtifactReferenceUrl(rawSrc, artifactUrl, provider);
     if (resolved !== null) element.setAttribute('src', resolved);
   }
   for (const element of root.querySelectorAll<HTMLElement>('[poster]')) {
     const rawPoster = element.getAttribute('poster');
     if (rawPoster === null) continue;
-    const resolved = resolveArtifactReferenceUrl(rawPoster, artifactUrl, provider);
+    const resolved = proxiedArtifactReferenceUrl(rawPoster, artifactUrl, provider);
     if (resolved !== null) element.setAttribute('poster', resolved);
   }
   for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
@@ -203,19 +213,119 @@ export function rewriteArtifactMarkdownReferences(
   }
 }
 
+function decodeHtmlAttributeValue(value: string): string {
+  return value.replace(
+    /&(?:amp|quot|apos|lt|gt|#\d+|#x[\da-f]+);/gi,
+    (entity) => {
+      const normalized = entity.toLowerCase();
+      if (normalized === '&amp;') return '&';
+      if (normalized === '&quot;') return '"';
+      if (normalized === '&apos;') return "'";
+      if (normalized === '&lt;') return '<';
+      if (normalized === '&gt;') return '>';
+      const numeric = normalized.startsWith('&#x')
+        ? Number.parseInt(normalized.slice(3, -1), 16)
+        : Number.parseInt(normalized.slice(2, -1), 10);
+      return Number.isInteger(numeric) && numeric >= 0 && numeric <= 0x10ffff
+        ? String.fromCodePoint(numeric)
+        : entity;
+    },
+  );
+}
+
+function rewriteResourceAttributes(
+  html: string,
+  artifactUrl: string,
+  provider: ArtifactProviderLocation,
+): string {
+  const rewriteAttribute = (tag: string, attribute: 'src' | 'poster' | 'href'): string => tag.replace(
+    new RegExp(`(\\b${attribute}\\s*=\\s*)(["'])(.*?)\\2`, 'gi'),
+    (match, prefix: string, quote: string, rawValue: string) => {
+      const proxied = proxiedArtifactReferenceUrl(
+        decodeHtmlAttributeValue(rawValue),
+        artifactUrl,
+        provider,
+      );
+      const escaped = proxied?.replace(/&/g, '&amp;');
+      return escaped === undefined ? match : `${prefix}${quote}${escaped}${quote}`;
+    },
+  );
+  const rewriteSrcSet = (tag: string): string => tag.replace(
+    /(\bsrcset\s*=\s*)(["'])(.*?)\2/gi,
+    (match, prefix: string, quote: string, rawValue: string) => {
+      if (/\bdata:/i.test(rawValue)) return match;
+      const candidates = rawValue.split(',').map((candidate) => {
+        const [rawUrl, ...descriptor] = candidate.trim().split(/\s+/);
+        if (!rawUrl) return candidate;
+        const proxied = proxiedArtifactReferenceUrl(
+          decodeHtmlAttributeValue(rawUrl),
+          artifactUrl,
+          provider,
+        );
+        return proxied === null
+          ? candidate
+          : [proxied.replace(/&/g, '&amp;'), ...descriptor].join(' ');
+      });
+      return `${prefix}${quote}${candidates.join(', ')}${quote}`;
+    },
+  );
+
+  let rewritten = html.replace(
+    /<(?:img|video|audio|source|script|iframe)\b[^>]*>/gi,
+    (tag) => rewriteSrcSet(rewriteAttribute(rewriteAttribute(tag, 'src'), 'poster')),
+  );
+  rewritten = rewritten.replace(
+    /<link\b[^>]*>/gi,
+    (tag) => rewriteAttribute(tag, 'href'),
+  );
+  const rewriteCssReference = (rawValue: string): string | null => proxiedArtifactReferenceUrl(
+    decodeHtmlAttributeValue(rawValue),
+    artifactUrl,
+    provider,
+  );
+  const rewriteCss = (css: string): string => {
+    const urlsRewritten = css.replace(
+      /url\(\s*(["']?)([^"')]+)\1\s*\)/gi,
+      (match, quote: string, rawValue: string) => {
+        const proxied = rewriteCssReference(rawValue);
+        return proxied === null ? match : `url(${quote}${proxied}${quote})`;
+      },
+    );
+    return urlsRewritten.replace(
+      /(@import\s+)(["'])([^"']+)\2/gi,
+      (match, prefix: string, quote: string, rawValue: string) => {
+        const proxied = rewriteCssReference(rawValue);
+        return proxied === null ? match : `${prefix}${quote}${proxied}${quote}`;
+      },
+    );
+  };
+  rewritten = rewritten.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (_match, open: string, css: string, close: string) => `${open}${rewriteCss(css)}${close}`,
+  );
+  return rewritten.replace(
+    /(\bstyle\s*=\s*)(["'])(.*?)\2/gi,
+    (_match, prefix: string, quote: string, css: string) => {
+      const escapedCss = rewriteCss(css).replace(/&/g, '&amp;');
+      return `${prefix}${quote}${escapedCss}${quote}`;
+    },
+  );
+}
+
 /** Inject a safe base element so relative assets resolve against the artifact URL. */
 export function injectArtifactBaseUrl(
   rawHtml: string,
   artifactUrl: string,
   provider: ArtifactProviderLocation,
 ): string {
+  const rewrittenHtml = rewriteResourceAttributes(rawHtml, artifactUrl, provider);
   const href = artifactContentBaseUrl(artifactUrl, provider)
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;');
   const base = `<base href="${href}">`;
-  if (/<head\b[^>]*>/i.test(rawHtml)) {
-    return rawHtml.replace(/<head\b[^>]*>/i, (head) => `${head}${base}`);
+  if (/<head\b[^>]*>/i.test(rewrittenHtml)) {
+    return rewrittenHtml.replace(/<head\b[^>]*>/i, (head) => `${head}${base}`);
   }
-  return `${base}${rawHtml}`;
+  return `${base}${rewrittenHtml}`;
 }

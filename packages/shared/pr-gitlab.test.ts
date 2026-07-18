@@ -359,8 +359,10 @@ describe("fetchGlMRContext", () => {
   });
 
   test("normalizes resolved discussions as review threads without duplicating their notes", async () => {
+    const calls: string[] = [];
     const runtime: PRRuntime = {
-      async runCommand(_command, args) {
+      async runCommand(command, args) {
+        calls.push([command, ...args].join(" "));
         const endpoint = args[1] ?? "";
         if (endpoint === "projects/g%2Fp/merge_requests/1") {
           return {
@@ -428,6 +430,12 @@ describe("fetchGlMRContext", () => {
 
     const result = await fetchGlMRContext(runtime, REF);
 
+    expect(calls).toContain(
+      "glab api projects/g%2Fp/merge_requests/1/discussions?per_page=100 --paginate",
+    );
+    expect(calls).toContain(
+      "glab api projects/g%2Fp/merge_requests/1/notes?sort=asc&per_page=100 --paginate",
+    );
     expect(result.comments.map((comment) => comment.id)).toEqual(["102"]);
     expect(result.reviewThreads).toEqual([
       {

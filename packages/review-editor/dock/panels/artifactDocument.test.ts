@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   artifactContentBaseUrl,
+  artifactContentProxyUrl,
   injectArtifactBaseUrl,
   resolveArtifactReferenceUrl,
 } from './artifactDocument';
@@ -24,6 +25,34 @@ describe('injectArtifactBaseUrl', () => {
   it('prepends the base when the document has no head', () => {
     expect(injectArtifactBaseUrl('<main>Review</main>', 'https://example.com/review.html', github))
       .toBe('<base href="https://example.com/review.html"><main>Review</main>');
+  });
+
+  it('routes private HTML resources through the authenticated content endpoint', () => {
+    const artifactUrl = 'https://github.com/acme/widgets/blob/main/docs/review.html';
+    const html = injectArtifactBaseUrl(
+      '<head><link rel="stylesheet" href="./review.css"></head><body><img src="../images/diff.png"><style>.hero{background:url(../images/hero.png)}</style></body>',
+      artifactUrl,
+      github,
+    );
+    expect(html).toContain('/api/pr-artifact-content?');
+    expect(html).toContain('review.css');
+    expect(html).toContain('diff.png');
+    expect(html).toContain('hero.png');
+    expect(html).toContain('source=');
+    expect(html).not.toContain('<img src="../images/diff.png">');
+  });
+});
+
+describe('artifactContentProxyUrl', () => {
+  it('keeps the target and provenance source in a same-origin URL', () => {
+    const proxy = artifactContentProxyUrl(
+      'https://raw.githubusercontent.com/acme/widgets/main/image.png',
+      'https://github.com/acme/widgets/blob/main/review.html',
+    );
+    expect(proxy.startsWith('/api/pr-artifact-content?')).toBe(true);
+    const params = new URL(proxy, 'http://localhost').searchParams;
+    expect(params.get('url')).toBe('https://raw.githubusercontent.com/acme/widgets/main/image.png');
+    expect(params.get('source')).toBe('https://github.com/acme/widgets/blob/main/review.html');
   });
 });
 

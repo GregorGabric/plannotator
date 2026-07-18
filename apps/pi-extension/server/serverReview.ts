@@ -31,6 +31,7 @@ import {
 	serializePRContextSSEEvent,
 } from "../generated/pr-context-live.js";
 import {
+	fetchPRArtifactContent,
 	fetchPRArtifactDocument,
 	PRArtifactDocumentError,
 } from "../generated/pr-artifact-document.js";
@@ -2058,13 +2059,49 @@ export async function startReviewServer(options: {
 					artifactUrl,
 				);
 				send(res, document.content, 200, {
-					"Content-Type": `${document.contentType}; charset=utf-8`,
+					"Content-Type": "text/plain; charset=utf-8",
 					"Cache-Control": "private, max-age=300",
+					"Content-Security-Policy": "sandbox; default-src 'none'",
 					"X-Content-Type-Options": "nosniff",
 				});
 			} catch (error) {
 				const status = error instanceof PRArtifactDocumentError ? error.status : 500;
 				const message = error instanceof Error ? error.message : "Failed to fetch artifact document";
+				json(res, { error: message }, status);
+			}
+		} else if (url.pathname === "/api/pr-artifact-content" && req.method === "GET") {
+			if (!isPRMode || !prRef || !prMeta) {
+				json(res, { error: "Not in PR mode" }, 400);
+				return;
+			}
+			const artifactUrl = url.searchParams.get("url");
+			if (!artifactUrl) {
+				json(res, { error: "Missing artifact URL" }, 400);
+				return;
+			}
+			try {
+				const context = await prContextLive.getContext(prMeta.url, prRef);
+				const content = await fetchPRArtifactContent(
+					prCommandRuntime,
+					prMeta,
+					context,
+					artifactUrl,
+					{
+						sourceUrl: url.searchParams.get("source") ?? undefined,
+						range: typeof req.headers.range === "string" ? req.headers.range : undefined,
+					},
+				);
+				send(res, Buffer.from(content.content), content.status, {
+					"Content-Type": content.contentType,
+					"Cache-Control": "private, max-age=300",
+					"Content-Security-Policy": "sandbox",
+					"X-Content-Type-Options": "nosniff",
+					...(content.contentRange ? { "Content-Range": content.contentRange } : {}),
+					...(content.acceptRanges ? { "Accept-Ranges": content.acceptRanges } : {}),
+				});
+			} catch (error) {
+				const status = error instanceof PRArtifactDocumentError ? error.status : 500;
+				const message = error instanceof Error ? error.message : "Failed to fetch artifact content";
 				json(res, { error: message }, status);
 			}
 		} else if (url.pathname === "/api/pr-action" && req.method === "POST") {

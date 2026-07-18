@@ -63,22 +63,50 @@ const ALT_ATTR_RE = /\balt\s*=\s*["']([^"']*)["']/i;
 const VIDEO_SRC_RE = /<(?:video|source)\b[^>]*?\bsrc\s*=\s*["']([^"']+)["']/gi;
 const A_HREF_RE = /<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']/gi;
 
+function decodeHtmlAttributeValue(value: string): string {
+  return value.replace(
+    /&(?:amp|quot|apos|lt|gt|#\d+|#x[\da-f]+);/gi,
+    (entity) => {
+      const normalized = entity.toLowerCase();
+      if (normalized === '&amp;') return '&';
+      if (normalized === '&quot;') return '"';
+      if (normalized === '&apos;') return "'";
+      if (normalized === '&lt;') return '<';
+      if (normalized === '&gt;') return '>';
+      const numeric = normalized.startsWith('&#x')
+        ? Number.parseInt(normalized.slice(3, -1), 16)
+        : Number.parseInt(normalized.slice(2, -1), 10);
+      return Number.isInteger(numeric) && numeric >= 0 && numeric <= 0x10ffff
+        ? String.fromCodePoint(numeric)
+        : entity;
+    },
+  );
+}
+
 function refsFromHtml(html: string): RawArtifactRef[] {
   const refs: RawArtifactRef[] = [];
   for (const tag of html.matchAll(IMG_TAG_RE)) {
     const src = SRC_ATTR_RE.exec(tag[0])?.[1];
     if (src === undefined) continue;
     refs.push({
-      url: src,
-      label: ALT_ATTR_RE.exec(tag[0])?.[1] ?? '',
+      url: decodeHtmlAttributeValue(src),
+      label: decodeHtmlAttributeValue(ALT_ATTR_RE.exec(tag[0])?.[1] ?? ''),
       authoredAs: 'image',
     });
   }
   for (const match of html.matchAll(VIDEO_SRC_RE)) {
-    refs.push({ url: match[1] ?? '', label: '', authoredAs: 'video' });
+    refs.push({
+      url: decodeHtmlAttributeValue(match[1] ?? ''),
+      label: '',
+      authoredAs: 'video',
+    });
   }
   for (const match of html.matchAll(A_HREF_RE)) {
-    refs.push({ url: match[1] ?? '', label: '', authoredAs: 'link' });
+    refs.push({
+      url: decodeHtmlAttributeValue(match[1] ?? ''),
+      label: '',
+      authoredAs: 'link',
+    });
   }
   return refs;
 }
