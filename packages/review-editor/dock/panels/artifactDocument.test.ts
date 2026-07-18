@@ -4,10 +4,12 @@ import {
   artifactContentProxyUrl,
   injectArtifactBaseUrl,
   resolveArtifactReferenceUrl,
+  rewriteArtifactMarkdownReferences,
 } from './artifactDocument';
 
 const github = { platform: 'github', host: 'github.com' } as const;
 const gitlab = { platform: 'gitlab', host: 'gitlab.com' } as const;
+const hasDom = typeof document !== 'undefined';
 
 describe('injectArtifactBaseUrl', () => {
   it('places the base inside an existing head and escapes the URL', () => {
@@ -61,6 +63,44 @@ describe('injectArtifactBaseUrl', () => {
     expect(html).toContain('source=');
     expect(html).toContain('data:image/png;base64,AAAA 1x');
     expect(html).not.toContain('<img src="../images/diff.png">');
+  });
+
+  it('leaves public CDN resources direct while proxying repository resources', () => {
+    const artifactUrl = 'https://github.com/acme/widgets/blob/main/docs/review.html';
+    const html = injectArtifactBaseUrl(
+      '<link href="https://cdn.example.com/theme.css"><img src="./private.png">',
+      artifactUrl,
+      github,
+    );
+    expect(html).toContain('href="https://cdn.example.com/theme.css"');
+    expect(html).toContain('/api/pr-artifact-content?');
+    expect(html).toContain('private.png');
+    expect(html).not.toContain('url=https%3A%2F%2Fcdn.example.com');
+  });
+});
+
+describe('rewriteArtifactMarkdownReferences', () => {
+  it.skipIf(!hasDom)('is idempotent and leaves public CDN images direct', () => {
+    const artifactUrl = 'https://github.com/acme/widgets/blob/main/README.md';
+    const root = document.createElement('div');
+    root.innerHTML = [
+      '<img alt="private" src="/api/image?path=.github/assets/banner.webp">',
+      '<img alt="public" src="https://cdn.example.com/logo.svg">',
+    ].join('');
+
+    rewriteArtifactMarkdownReferences(root, artifactUrl, github);
+    const privateImage = root.querySelector<HTMLImageElement>('img[alt="private"]');
+    const publicImage = root.querySelector<HTMLImageElement>('img[alt="public"]');
+    const firstPrivateUrl = privateImage?.getAttribute('src');
+    expect(firstPrivateUrl).toContain('/api/pr-artifact-content?');
+    expect(publicImage?.getAttribute('src')).toBe('https://cdn.example.com/logo.svg');
+
+    rewriteArtifactMarkdownReferences(root, artifactUrl, github);
+    expect(privateImage?.getAttribute('src')).toBe(firstPrivateUrl);
+    expect(privateImage?.getAttribute('src')).not.toContain(
+      'raw.githubusercontent.com%2Fapi%2Fpr-artifact-content',
+    );
+    expect(publicImage?.getAttribute('src')).toBe('https://cdn.example.com/logo.svg');
   });
 });
 

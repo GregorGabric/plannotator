@@ -290,9 +290,7 @@ describe('fetchPRArtifactContent', () => {
       );
       expect(requestedUrl).toBe('https://raw.githubusercontent.com/acme/widgets/main/assets/demo.png');
       expect(receivedRange).toBe('bytes=0-3');
-      if (result.body.kind !== 'stream') throw new Error('Expected a streaming media response');
-      const bytes = new Uint8Array(await new Response(result.body.stream).arrayBuffer());
-      expect([...bytes]).toEqual([0, 1, 2, 255]);
+      expect([...result.content]).toEqual([0, 1, 2, 255]);
       expect(result).toMatchObject({
         status: 206,
         contentType: 'image/png',
@@ -312,7 +310,10 @@ describe('fetchPRArtifactContent', () => {
     };
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response(
-      '.hero { background: url(../images/hero.png); }',
+      [
+        '.hero { background: url(../images/hero.png); }',
+        '.icon { background: url(https://cdn.example.com/icon.svg); }',
+      ].join('\n'),
       { headers: { 'content-type': 'text/css' } },
     );
     try {
@@ -323,11 +324,56 @@ describe('fetchPRArtifactContent', () => {
         'https://raw.githubusercontent.com/acme/widgets/main/styles/review.css',
         { sourceUrl: 'https://github.com/acme/widgets/blob/main/docs/review.html' },
       );
-      if (result.body.kind !== 'bytes') throw new Error('Expected rewritten CSS bytes');
-      const css = new TextDecoder().decode(result.body.bytes);
+      const css = new TextDecoder().decode(result.content);
       expect(css).toContain('/api/pr-artifact-content?');
       expect(css).toContain('hero.png');
       expect(css).toContain('source=');
+      expect(css).toContain('url(https://cdn.example.com/icon.svg)');
+      expect(css).not.toContain('url=https%3A%2F%2Fcdn.example.com');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('buffers the complete bounded response before returning it', async () => {
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: 'test-token\n', stderr: '', exitCode: 0 };
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let finishBody: (() => void) | undefined;
+    let markBodyStarted: (() => void) | undefined;
+    const bodyStarted = new Promise<void>((resolve) => {
+      markBodyStarted = resolve;
+    });
+    globalThis.fetch = async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.from([1, 2]));
+        finishBody = () => {
+          controller.enqueue(Uint8Array.from([3, 4]));
+          controller.close();
+        };
+        markBodyStarted?.();
+      },
+    }), { headers: { 'content-type': 'video/mp4' } });
+    try {
+      let settled = false;
+      const pending = fetchPRArtifactContent(
+        runtime,
+        github,
+        context,
+        'https://github.com/acme/widgets/blob/main/assets/demo.png',
+      ).then((result) => {
+        settled = true;
+        return result;
+      });
+      await bodyStarted;
+      expect(settled).toBe(false);
+      if (finishBody === undefined) throw new Error('Expected response body controller');
+      finishBody();
+      const result = await pending;
+      expect([...result.content]).toEqual([1, 2, 3, 4]);
     } finally {
       globalThis.fetch = originalFetch;
     }

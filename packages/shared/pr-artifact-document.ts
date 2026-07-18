@@ -33,12 +33,9 @@ export interface PRArtifactDocument {
 
 /** Bounded provider content suitable for a same-origin media response. */
 export interface PRArtifactContent {
-  readonly body:
-    | { readonly kind: 'bytes'; readonly bytes: Uint8Array }
-    | { readonly kind: 'stream'; readonly stream: ReadableStream<Uint8Array> };
+  readonly content: Uint8Array;
   readonly contentType: string;
   readonly status: number;
-  readonly contentLength?: number;
   readonly contentRange?: string;
   readonly acceptRanges?: string;
 }
@@ -321,49 +318,6 @@ async function readBytesWithLimit(response: Response, maxBytes: number): Promise
   return content;
 }
 
-async function streamBytesWithLimit(
-  response: Response,
-  maxBytes: number,
-): Promise<ReadableStream<Uint8Array>> {
-  await rejectOversizedResponse(response, maxBytes);
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    return new ReadableStream({
-      start(controller) {
-        controller.close();
-      },
-    });
-  }
-
-  let totalBytes = 0;
-  return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const chunk = await reader.read();
-        if (chunk.done) {
-          controller.close();
-          return;
-        }
-        totalBytes += chunk.value.byteLength;
-        if (totalBytes > maxBytes) {
-          await reader.cancel();
-          controller.error(new PRArtifactDocumentError(
-            'Artifact content is too large to preview',
-            413,
-          ));
-          return;
-        }
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-      }
-    },
-    async cancel(reason) {
-      await reader.cancel(reason);
-    },
-  });
-}
-
 function isValidRangeHeader(range: string | undefined): range is string {
   return range !== undefined && /^bytes=\d*-\d*$/.test(range);
 }
@@ -372,7 +326,12 @@ function proxyUrl(rawUrl: string, sourceUrl: string): string {
   return `/api/pr-artifact-content?${new URLSearchParams({ url: rawUrl, source: sourceUrl })}`;
 }
 
-function rewriteCssReferences(css: string, cssUrl: URL, sourceUrl: string): string {
+function rewriteCssReferences(
+  css: string,
+  cssUrl: URL,
+  sourceUrl: string,
+  metadata: PRMetadata,
+): string {
   const rewriteReference = (rawReference: string): string | null => {
     const reference = rawReference.trim();
     if (reference === '' || reference.startsWith('#') || /^(?:data|blob):/i.test(reference)) {
@@ -381,6 +340,7 @@ function rewriteCssReferences(css: string, cssUrl: URL, sourceUrl: string): stri
     try {
       const resolved = new URL(reference, cssUrl);
       if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return null;
+      if (!isProviderArtifactUrl(resolved, metadata)) return null;
       return proxyUrl(resolved.href, sourceUrl);
     } catch {
       return null;
@@ -409,7 +369,6 @@ async function fetchArtifactContent(
   rawUrl: string,
   maxBytes: number,
   options: PRArtifactContentOptions,
-  delivery: 'bytes' | 'stream',
 ): Promise<PRArtifactContent> {
   if (!isPRArtifactContentUrlAllowed(rawUrl, options.sourceUrl, metadata, context)) {
     throw new PRArtifactDocumentError('Artifact URL is not available in this review', 403);
@@ -452,30 +411,22 @@ async function fetchArtifactContent(
       const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim()
         || 'text/plain';
       const shouldRewriteCss = contentType === 'text/css' && options.sourceUrl !== undefined;
-      let body: PRArtifactContent['body'];
-      let contentLength: number | undefined;
-      if (delivery === 'stream' && !shouldRewriteCss) {
-        body = { kind: 'stream', stream: await streamBytesWithLimit(response, maxBytes) };
-        contentLength = responseContentLength(response);
-      } else {
-        let bytes = await readBytesWithLimit(
-          response,
-          shouldRewriteCss ? Math.min(maxBytes, MAX_DOCUMENT_BYTES) : maxBytes,
+      let content = await readBytesWithLimit(
+        response,
+        shouldRewriteCss ? Math.min(maxBytes, MAX_DOCUMENT_BYTES) : maxBytes,
+      );
+      if (shouldRewriteCss && options.sourceUrl !== undefined) {
+        const css = new TextDecoder().decode(content);
+        content = new TextEncoder().encode(
+          rewriteCssReferences(css, currentUrl, options.sourceUrl, metadata),
         );
-        if (shouldRewriteCss) {
-          const css = new TextDecoder().decode(bytes);
-          bytes = new TextEncoder().encode(rewriteCssReferences(css, currentUrl, options.sourceUrl));
-        }
-        body = { kind: 'bytes', bytes };
-        contentLength = bytes.byteLength;
       }
       const contentRange = response.headers.get('content-range');
       const acceptRanges = response.headers.get('accept-ranges');
       return {
-        body,
+        content,
         contentType,
         status: response.status,
-        ...(contentLength === undefined ? {} : { contentLength }),
         ...(contentRange === null ? {} : { contentRange }),
         ...(acceptRanges === null ? {} : { acceptRanges }),
       };
@@ -507,7 +458,6 @@ export function fetchPRArtifactContent(
     rawUrl,
     MAX_MEDIA_BYTES,
     options,
-    'stream',
   );
 }
 
@@ -525,13 +475,9 @@ export async function fetchPRArtifactDocument(
     rawUrl,
     MAX_DOCUMENT_BYTES,
     {},
-    'bytes',
   );
-  if (result.body.kind !== 'bytes') {
-    throw new PRArtifactDocumentError('Artifact document body was not buffered', 500);
-  }
   return {
-    content: new TextDecoder().decode(result.body.bytes),
+    content: new TextDecoder().decode(result.content),
     contentType: result.contentType,
   };
 }

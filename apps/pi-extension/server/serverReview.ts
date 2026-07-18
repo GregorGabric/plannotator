@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import os from "node:os";
 import { basename, resolve as resolvePath } from "node:path";
 
@@ -224,62 +224,6 @@ function detectWSL(): boolean {
 		}
 	} catch { /* ignore */ }
 	return false;
-}
-
-function waitForResponseDrain(res: ServerResponse): Promise<boolean> {
-	if (res.destroyed) return Promise.resolve(false);
-	return new Promise((resolve) => {
-		const cleanup = () => {
-			res.off("drain", onDrain);
-			res.off("close", onClose);
-			res.off("error", onClose);
-		};
-		const onDrain = () => {
-			cleanup();
-			resolve(true);
-		};
-		const onClose = () => {
-			cleanup();
-			resolve(false);
-		};
-		res.once("drain", onDrain);
-		res.once("close", onClose);
-		res.once("error", onClose);
-	});
-}
-
-async function sendWebStream(
-	res: ServerResponse,
-	stream: ReadableStream<Uint8Array>,
-	status: number,
-	headers: Record<string, string>,
-): Promise<void> {
-	const reader = stream.getReader();
-	let completed = false;
-	res.writeHead(status, headers);
-	try {
-		while (!res.destroyed) {
-			const chunk = await reader.read();
-			if (chunk.done) {
-				completed = true;
-				res.end();
-				return;
-			}
-			if (!res.write(Buffer.from(chunk.value)) && !(await waitForResponseDrain(res))) {
-				return;
-			}
-		}
-	} finally {
-		if (!completed) {
-			try {
-				await reader.cancel();
-			} catch {
-				// The upstream stream may already have failed or closed.
-			}
-		}
-		reader.releaseLock();
-		if (!completed && !res.destroyed) res.destroy();
-	}
 }
 
 export interface ReviewServerResult {
@@ -2147,26 +2091,15 @@ export async function startReviewServer(options: {
 						range: typeof req.headers.range === "string" ? req.headers.range : undefined,
 					},
 				);
-				const headers = {
+				send(res, Buffer.from(content.content), content.status, {
 					"Content-Type": content.contentType,
 					"Cache-Control": "private, max-age=300",
 					"Content-Security-Policy": "sandbox",
 					"X-Content-Type-Options": "nosniff",
-					...(content.contentLength === undefined
-						? {}
-						: { "Content-Length": String(content.contentLength) }),
+					"Content-Length": String(content.content.byteLength),
 					...(content.contentRange ? { "Content-Range": content.contentRange } : {}),
 					...(content.acceptRanges ? { "Accept-Ranges": content.acceptRanges } : {}),
-				};
-				if (content.body.kind === "bytes") {
-					send(res, Buffer.from(content.body.bytes), content.status, headers);
-				} else {
-					try {
-						await sendWebStream(res, content.body.stream, content.status, headers);
-					} catch {
-						res.destroy();
-					}
-				}
+				});
 			} catch (error) {
 				const status = error instanceof PRArtifactDocumentError ? error.status : 500;
 				const message = error instanceof Error ? error.message : "Failed to fetch artifact content";

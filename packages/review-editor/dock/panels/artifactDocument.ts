@@ -165,10 +165,46 @@ export function artifactContentBaseUrl(
 
 /** Build the same-origin URL used for authenticated provider media/resources. */
 export function artifactContentProxyUrl(url: string, sourceUrl?: string): string {
-  return `/api/pr-artifact-content?${new URLSearchParams({
+  const endpoint = `/api/pr-artifact-content?${new URLSearchParams({
     url,
     ...(sourceUrl === undefined ? {} : { source: sourceUrl }),
   })}`;
+  if (typeof window === 'undefined' || !/^https?:$/.test(window.location.protocol)) return endpoint;
+  return new URL(endpoint, window.location.origin).href;
+}
+
+function existingArtifactContentProxyUrl(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  const browserOrigin = typeof window !== 'undefined' && /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : null;
+  const isRelativeProxy = trimmed.startsWith('/api/pr-artifact-content?');
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed, browserOrigin ?? 'http://plannotator.invalid');
+  } catch {
+    return null;
+  }
+  if (
+    parsed.pathname !== '/api/pr-artifact-content'
+    || (!isRelativeProxy && (browserOrigin === null || parsed.origin !== browserOrigin))
+  ) return null;
+  const targetUrl = parsed.searchParams.get('url');
+  if (targetUrl === null || targetUrl === '') return null;
+  return artifactContentProxyUrl(targetUrl, parsed.searchParams.get('source') ?? undefined);
+}
+
+function isProviderManagedArtifactReference(
+  url: URL,
+  provider: ArtifactProviderLocation,
+): boolean {
+  const host = url.host.toLowerCase();
+  const providerHost = provider.host.toLowerCase();
+  if (host === providerHost) return true;
+  if (provider.platform !== 'github' || providerHost !== 'github.com') return false;
+  return host === 'raw.githubusercontent.com'
+    || host === 'user-images.githubusercontent.com'
+    || host === 'private-user-images.githubusercontent.com';
 }
 
 function proxiedArtifactReferenceUrl(
@@ -176,8 +212,14 @@ function proxiedArtifactReferenceUrl(
   artifactUrl: string,
   provider: ArtifactProviderLocation,
 ): string | null {
+  const existingProxy = existingArtifactContentProxyUrl(rawUrl);
+  if (existingProxy !== null) return existingProxy;
   const resolved = resolveArtifactReferenceUrl(rawUrl, artifactUrl, provider);
-  return resolved === null ? null : artifactContentProxyUrl(resolved, artifactUrl);
+  if (resolved === null) return null;
+  const resolvedUrl = new URL(resolved);
+  return isProviderManagedArtifactReference(resolvedUrl, provider)
+    ? artifactContentProxyUrl(resolved, artifactUrl)
+    : resolved;
 }
 
 function rewriteSrcSetValue(
