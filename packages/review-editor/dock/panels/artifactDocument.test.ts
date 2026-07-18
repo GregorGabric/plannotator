@@ -30,15 +30,36 @@ describe('injectArtifactBaseUrl', () => {
   it('routes private HTML resources through the authenticated content endpoint', () => {
     const artifactUrl = 'https://github.com/acme/widgets/blob/main/docs/review.html';
     const html = injectArtifactBaseUrl(
-      '<head><link rel="stylesheet" href="./review.css"></head><body><img src="../images/diff.png"><style>.hero{background:url(../images/hero.png)}</style></body>',
+      [
+        '<head><link rel="stylesheet" href="./review.css"></head><body>',
+        '<img src="../images/diff.png" srcset="data:image/png;base64,AAAA 1x, ../images/diff@2x.png 2x">',
+        '<video poster="./poster.png"><track src="./captions.vtt"></video>',
+        '<embed src="./review.pdf"><object data="./review.svg"></object>',
+        '<link rel="preload" imagesrcset="./card.png 1x, ./card@2x.png 2x">',
+        '<svg><image href="./diagram.svg"><feImage xlink:href="./texture.png">',
+        '<use xlink:href="./sprites.svg#check"></use></svg>',
+        '<table background="./grid.png"><tr><td></td></tr></table>',
+        '<style>.hero{background:url(../images/hero.png)}</style></body>',
+      ].join(''),
       artifactUrl,
       github,
     );
     expect(html).toContain('/api/pr-artifact-content?');
     expect(html).toContain('review.css');
     expect(html).toContain('diff.png');
+    expect(html).toContain('diff%402x.png');
+    expect(html).toContain('captions.vtt');
+    expect(html).toContain('review.pdf');
+    expect(html).toContain('review.svg');
+    expect(html).toContain('diagram.svg');
+    expect(html).toContain('texture.png');
+    expect(html).toContain('sprites.svg%23check');
+    expect(html).toContain('card.png');
+    expect(html).toContain('card%402x.png');
+    expect(html).toContain('grid.png');
     expect(html).toContain('hero.png');
     expect(html).toContain('source=');
+    expect(html).toContain('data:image/png;base64,AAAA 1x');
     expect(html).not.toContain('<img src="../images/diff.png">');
   });
 });
@@ -85,6 +106,10 @@ describe('artifactContentBaseUrl', () => {
       'https://gitlab.com/acme/widgets/-/blob/feature/docs/explainer.html',
       gitlab,
     )).toBe('https://gitlab.com/acme/widgets/-/raw/feature/docs/explainer.html');
+    expect(artifactContentBaseUrl(
+      'https://github.example.com:8443/acme/widgets/blob/main/review.html',
+      { platform: 'github', host: 'github.example.com:8443' },
+    )).toBe('https://github.example.com:8443/acme/widgets/raw/main/review.html');
   });
 
   it('uses the raw base when resolving assets in a repository-backed explainer', () => {

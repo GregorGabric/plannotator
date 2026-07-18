@@ -1,4 +1,5 @@
 import { marked, type Token } from 'marked';
+import { isPRArtifactDocumentUrlAllowed } from '@plannotator/shared/pr-artifact-document';
 import type { PRContext, PRMetadata } from '@plannotator/shared/pr-types';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'avif']);
@@ -118,10 +119,18 @@ function collectRefs(markdown: string): RawArtifactRef[] {
   marked.walkTokens(tokens, (token: Token) => {
     switch (token.type) {
       case 'image':
-        refs.push({ url: token.href, label: token.text ?? '', authoredAs: 'image' });
+        refs.push({
+          url: decodeHtmlAttributeValue(token.href),
+          label: token.text ?? '',
+          authoredAs: 'image',
+        });
         break;
       case 'link':
-        refs.push({ url: token.href, label: token.text ?? '', authoredAs: 'link' });
+        refs.push({
+          url: decodeHtmlAttributeValue(token.href),
+          label: token.text ?? '',
+          authoredAs: 'link',
+        });
         break;
       case 'html':
         refs.push(...refsFromHtml(token.raw));
@@ -132,7 +141,7 @@ function collectRefs(markdown: string): RawArtifactRef[] {
 }
 
 function isKnownGitHubAssetUrl(url: URL, githubHost: string): boolean {
-  const host = url.hostname.toLowerCase();
+  const host = url.host.toLowerCase();
   if (host === 'user-images.githubusercontent.com' || host === 'private-user-images.githubusercontent.com') {
     return true;
   }
@@ -147,7 +156,7 @@ function isKnownGitLabAssetUrl(
   url: URL,
   metadata: Extract<PRMetadata, { platform: 'gitlab' }>,
 ): boolean {
-  if (url.hostname.toLowerCase() !== metadata.host.toLowerCase()) return false;
+  if (url.host.toLowerCase() !== metadata.host.toLowerCase()) return false;
   const projectPath = `/${metadata.projectPath.replace(/^\/+|\/+$/g, '')}`;
   return url.pathname.startsWith('/uploads/')
     || url.pathname.startsWith(`${projectPath}/uploads/`);
@@ -326,6 +335,7 @@ export function buildPRArtifacts(
     for (const ref of collectRefs(source.markdown)) {
       const url = resolveArtifactUrl(ref.url, metadata.url);
       if (url === null) continue;
+      if (!isPRArtifactDocumentUrlAllowed(url.href, metadata, context)) continue;
       const kind = classifyArtifactUrl(url, ref.label, ref.authoredAs, metadata);
       if (kind === null) continue;
       const key = artifactDedupeKey(url, metadata);

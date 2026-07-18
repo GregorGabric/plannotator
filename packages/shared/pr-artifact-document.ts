@@ -33,9 +33,12 @@ export interface PRArtifactDocument {
 
 /** Bounded provider content suitable for a same-origin media response. */
 export interface PRArtifactContent {
-  readonly content: Uint8Array;
+  readonly body:
+    | { readonly kind: 'bytes'; readonly bytes: Uint8Array }
+    | { readonly kind: 'stream'; readonly stream: ReadableStream<Uint8Array> };
   readonly contentType: string;
   readonly status: number;
+  readonly contentLength?: number;
   readonly contentRange?: string;
   readonly acceptRanges?: string;
 }
@@ -56,6 +59,26 @@ function contextMarkdown(context: PRContext): readonly string[] {
   ];
 }
 
+function decodeHtmlEntities(value: string): string {
+  return value.replace(
+    /&(?:amp|quot|apos|lt|gt|#\d+|#x[\da-f]+);/gi,
+    (entity) => {
+      const normalized = entity.toLowerCase();
+      if (normalized === '&amp;') return '&';
+      if (normalized === '&quot;') return '"';
+      if (normalized === '&apos;') return "'";
+      if (normalized === '&lt;') return '<';
+      if (normalized === '&gt;') return '>';
+      const numeric = normalized.startsWith('&#x')
+        ? Number.parseInt(normalized.slice(3, -1), 16)
+        : Number.parseInt(normalized.slice(2, -1), 10);
+      return Number.isInteger(numeric) && numeric >= 0 && numeric <= 0x10ffff
+        ? String.fromCodePoint(numeric)
+        : entity;
+    },
+  );
+}
+
 function isReferencedByContext(url: URL, metadata: PRMetadata, context: PRContext): boolean {
   const metadataOrigin = new URL(metadata.url).origin.toLowerCase();
   const needles = [url.href];
@@ -63,32 +86,57 @@ function isReferencedByContext(url: URL, metadata: PRMetadata, context: PRContex
     needles.push(`${url.pathname}${url.search}`);
   }
   return contextMarkdown(context).some((markdown) => {
-    const decodedEntities = markdown.replace(/&amp;/gi, '&');
+    const decodedEntities = decodeHtmlEntities(markdown);
     return needles.some((needle) => decodedEntities.includes(needle));
   });
 }
 
+function providerOrigin(metadata: PRMetadata): string {
+  return new URL(metadata.url).origin.toLowerCase();
+}
+
+function isSameOrigin(url: URL, origin: string): boolean {
+  return url.origin.toLowerCase() === origin;
+}
+
+interface GitHubRepositoryPath {
+  readonly mode: 'blob' | 'raw';
+  readonly remainder: string;
+}
+
+function githubRepositoryPath(
+  url: URL,
+  metadata: Extract<PRMetadata, { platform: 'github' }>,
+): GitHubRepositoryPath | null {
+  const [owner, repo, rawMode, ...remainder] = url.pathname.split('/').filter(Boolean);
+  if (
+    owner?.toLowerCase() !== metadata.owner.toLowerCase()
+    || repo?.toLowerCase() !== metadata.repo.toLowerCase()
+  ) return null;
+  const mode = rawMode?.toLowerCase();
+  if ((mode !== 'blob' && mode !== 'raw') || remainder.length === 0) return null;
+  return { mode, remainder: remainder.join('/') };
+}
+
 function isGitHubArtifactHost(url: URL, metadata: Extract<PRMetadata, { platform: 'github' }>): boolean {
-  const host = url.hostname.toLowerCase();
-  const providerHost = metadata.host.toLowerCase();
-  if (host === providerHost || (providerHost === 'github.com' && host === 'github.com')) {
+  const origin = url.origin.toLowerCase();
+  const metadataOrigin = providerOrigin(metadata);
+  if (origin === metadataOrigin) {
     if (/^\/user-attachments\/(?:assets|files)\//.test(url.pathname)) return true;
-    const repoPrefix = `/${metadata.owner}/${metadata.repo}/`;
-    return url.pathname.startsWith(`${repoPrefix}blob/`)
-      || url.pathname.startsWith(`${repoPrefix}raw/`);
+    return githubRepositoryPath(url, metadata) !== null;
   }
-  if (providerHost !== 'github.com') return false;
-  if (host === 'raw.githubusercontent.com') {
+  if (metadataOrigin !== 'https://github.com') return false;
+  if (origin === 'https://raw.githubusercontent.com') {
     const [owner, repo] = url.pathname.split('/').filter(Boolean);
     return owner?.toLowerCase() === metadata.owner.toLowerCase()
       && repo?.toLowerCase() === metadata.repo.toLowerCase();
   }
-  return host === 'user-images.githubusercontent.com'
-    || host === 'private-user-images.githubusercontent.com';
+  return origin === 'https://user-images.githubusercontent.com'
+    || origin === 'https://private-user-images.githubusercontent.com';
 }
 
 function isGitLabArtifactHost(url: URL, metadata: Extract<PRMetadata, { platform: 'gitlab' }>): boolean {
-  if (url.hostname.toLowerCase() !== metadata.host.toLowerCase()) return false;
+  if (!isSameOrigin(url, providerOrigin(metadata))) return false;
   const projectPath = `/${metadata.projectPath.replace(/^\/+|\/+$/g, '')}`;
   return url.pathname.startsWith('/uploads/')
     || url.pathname.startsWith(`${projectPath}/uploads/`)
@@ -97,11 +145,7 @@ function isGitLabArtifactHost(url: URL, metadata: Extract<PRMetadata, { platform
 }
 
 function isProviderArtifactUrl(url: URL, metadata: PRMetadata): boolean {
-  const providerProtocol = new URL(metadata.url).protocol;
-  if (
-    (url.protocol !== 'https:' && url.protocol !== 'http:')
-    || url.protocol !== providerProtocol
-  ) return false;
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
   return metadata.platform === 'github'
     ? isGitHubArtifactHost(url, metadata)
     : isGitLabArtifactHost(url, metadata);
@@ -109,24 +153,22 @@ function isProviderArtifactUrl(url: URL, metadata: PRMetadata): boolean {
 
 function providerContentUrl(url: URL, metadata: PRMetadata): URL {
   if (metadata.platform === 'github') {
-    const providerHost = metadata.host.toLowerCase();
-    const repoPrefix = `/${metadata.owner}/${metadata.repo}/`;
-    const blobPrefix = `${repoPrefix}blob/`;
-    const rawPrefix = `${repoPrefix}raw/`;
-    if (url.hostname.toLowerCase() === providerHost && url.pathname.startsWith(blobPrefix)) {
-      const remainder = url.pathname.slice(blobPrefix.length);
-      if (providerHost === 'github.com') {
-        return new URL(`https://raw.githubusercontent.com${repoPrefix}${remainder}${url.search}`);
+    const metadataOrigin = providerOrigin(metadata);
+    if (isSameOrigin(url, metadataOrigin)) {
+      const repositoryPath = githubRepositoryPath(url, metadata);
+      if (repositoryPath !== null) {
+        const repoPrefix = `/${metadata.owner}/${metadata.repo}/`;
+        if (metadataOrigin === 'https://github.com') {
+          return new URL(
+            `https://raw.githubusercontent.com${repoPrefix}${repositoryPath.remainder}${url.search}`,
+          );
+        }
+        if (repositoryPath.mode === 'blob') {
+          return new URL(
+            `${url.origin}${repoPrefix}raw/${repositoryPath.remainder}${url.search}`,
+          );
+        }
       }
-      return new URL(`${url.origin}${rawPrefix}${remainder}${url.search}`);
-    }
-    if (
-      providerHost === 'github.com'
-      && url.hostname.toLowerCase() === 'github.com'
-      && url.pathname.startsWith(rawPrefix)
-    ) {
-      const remainder = url.pathname.slice(rawPrefix.length);
-      return new URL(`https://raw.githubusercontent.com${repoPrefix}${remainder}${url.search}`);
     }
     return url;
   }
@@ -223,19 +265,32 @@ async function providerAuthHeaders(runtime: PRRuntime, metadata: PRMetadata): Pr
 }
 
 function shouldSendProviderAuth(url: URL, metadata: PRMetadata): boolean {
-  const host = url.hostname.toLowerCase();
-  if (metadata.platform === 'gitlab') return host === metadata.host.toLowerCase();
-  return host === metadata.host.toLowerCase()
-    || host === 'raw.githubusercontent.com'
-    || host === 'private-user-images.githubusercontent.com';
+  const origin = url.origin.toLowerCase();
+  const metadataOrigin = providerOrigin(metadata);
+  if (origin === metadataOrigin) return true;
+  if (metadata.platform === 'gitlab' || metadataOrigin !== 'https://github.com') return false;
+  return origin === 'https://raw.githubusercontent.com'
+    || origin === 'https://private-user-images.githubusercontent.com';
+}
+
+function responseContentLength(response: Response): number | undefined {
+  const contentEncoding = response.headers.get('content-encoding');
+  if (contentEncoding !== null && contentEncoding.toLowerCase() !== 'identity') return undefined;
+  const rawLength = response.headers.get('content-length');
+  if (rawLength === null || !/^\d+$/.test(rawLength)) return undefined;
+  const contentLength = Number(rawLength);
+  return Number.isSafeInteger(contentLength) ? contentLength : undefined;
+}
+
+async function rejectOversizedResponse(response: Response, maxBytes: number): Promise<void> {
+  const contentLength = responseContentLength(response);
+  if (contentLength === undefined || contentLength <= maxBytes) return;
+  await response.body?.cancel();
+  throw new PRArtifactDocumentError('Artifact content is too large to preview', 413);
 }
 
 async function readBytesWithLimit(response: Response, maxBytes: number): Promise<Uint8Array> {
-  const contentLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    await response.body?.cancel();
-    throw new PRArtifactDocumentError('Artifact content is too large to preview', 413);
-  }
+  await rejectOversizedResponse(response, maxBytes);
   const reader = response.body?.getReader();
   if (reader === undefined) {
     const content = new Uint8Array(await response.arrayBuffer());
@@ -264,6 +319,49 @@ async function readBytesWithLimit(response: Response, maxBytes: number): Promise
     offset += chunk.byteLength;
   }
   return content;
+}
+
+async function streamBytesWithLimit(
+  response: Response,
+  maxBytes: number,
+): Promise<ReadableStream<Uint8Array>> {
+  await rejectOversizedResponse(response, maxBytes);
+  const reader = response.body?.getReader();
+  if (reader === undefined) {
+    return new ReadableStream({
+      start(controller) {
+        controller.close();
+      },
+    });
+  }
+
+  let totalBytes = 0;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
+        }
+        totalBytes += chunk.value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          controller.error(new PRArtifactDocumentError(
+            'Artifact content is too large to preview',
+            413,
+          ));
+          return;
+        }
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
+    },
+  });
 }
 
 function isValidRangeHeader(range: string | undefined): range is string {
@@ -311,6 +409,7 @@ async function fetchArtifactContent(
   rawUrl: string,
   maxBytes: number,
   options: PRArtifactContentOptions,
+  delivery: 'bytes' | 'stream',
 ): Promise<PRArtifactContent> {
   if (!isPRArtifactContentUrlAllowed(rawUrl, options.sourceUrl, metadata, context)) {
     throw new PRArtifactDocumentError('Artifact URL is not available in this review', 403);
@@ -352,17 +451,31 @@ async function fetchArtifactContent(
       }
       const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.trim()
         || 'text/plain';
-      let content = await readBytesWithLimit(response, maxBytes);
-      if (contentType === 'text/css' && options.sourceUrl !== undefined) {
-        const css = new TextDecoder().decode(content);
-        content = new TextEncoder().encode(rewriteCssReferences(css, currentUrl, options.sourceUrl));
+      const shouldRewriteCss = contentType === 'text/css' && options.sourceUrl !== undefined;
+      let body: PRArtifactContent['body'];
+      let contentLength: number | undefined;
+      if (delivery === 'stream' && !shouldRewriteCss) {
+        body = { kind: 'stream', stream: await streamBytesWithLimit(response, maxBytes) };
+        contentLength = responseContentLength(response);
+      } else {
+        let bytes = await readBytesWithLimit(
+          response,
+          shouldRewriteCss ? Math.min(maxBytes, MAX_DOCUMENT_BYTES) : maxBytes,
+        );
+        if (shouldRewriteCss) {
+          const css = new TextDecoder().decode(bytes);
+          bytes = new TextEncoder().encode(rewriteCssReferences(css, currentUrl, options.sourceUrl));
+        }
+        body = { kind: 'bytes', bytes };
+        contentLength = bytes.byteLength;
       }
       const contentRange = response.headers.get('content-range');
       const acceptRanges = response.headers.get('accept-ranges');
       return {
-        content,
+        body,
         contentType,
         status: response.status,
+        ...(contentLength === undefined ? {} : { contentLength }),
         ...(contentRange === null ? {} : { contentRange }),
         ...(acceptRanges === null ? {} : { acceptRanges }),
       };
@@ -387,7 +500,15 @@ export function fetchPRArtifactContent(
   rawUrl: string,
   options: PRArtifactContentOptions = {},
 ): Promise<PRArtifactContent> {
-  return fetchArtifactContent(runtime, metadata, context, rawUrl, MAX_MEDIA_BYTES, options);
+  return fetchArtifactContent(
+    runtime,
+    metadata,
+    context,
+    rawUrl,
+    MAX_MEDIA_BYTES,
+    options,
+    'stream',
+  );
 }
 
 /** Fetch one active PR/MR text document without exposing provider credentials to the browser. */
@@ -404,9 +525,13 @@ export async function fetchPRArtifactDocument(
     rawUrl,
     MAX_DOCUMENT_BYTES,
     {},
+    'bytes',
   );
+  if (result.body.kind !== 'bytes') {
+    throw new PRArtifactDocumentError('Artifact document body was not buffered', 500);
+  }
   return {
-    content: new TextDecoder().decode(result.content),
+    content: new TextDecoder().decode(result.body.bytes),
     contentType: result.contentType,
   };
 }

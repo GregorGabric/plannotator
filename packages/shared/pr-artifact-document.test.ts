@@ -60,6 +60,23 @@ describe('isPRArtifactDocumentUrlAllowed', () => {
     )).toBe(true);
   });
 
+  test('matches GitHub owner and repository casing without weakening the origin check', () => {
+    const mixedCaseUrl = 'https://github.com/ACME/Widgets/blob/main/docs/review.html';
+    expect(isPRArtifactDocumentUrlAllowed(
+      mixedCaseUrl,
+      github,
+      { ...context, body: `[review](${mixedCaseUrl})` },
+    )).toBe(true);
+    expect(isPRArtifactDocumentUrlAllowed(
+      'https://github.com:8443/ACME/Widgets/blob/main/docs/review.html',
+      github,
+      {
+        ...context,
+        body: '[review](https://github.com:8443/ACME/Widgets/blob/main/docs/review.html)',
+      },
+    )).toBe(false);
+  });
+
   test('rejects unreferenced URLs and raw files from a different repository', () => {
     expect(isPRArtifactDocumentUrlAllowed(
       'https://github.com/user-attachments/files/999/private.html',
@@ -128,6 +145,71 @@ describe('fetchPRArtifactDocument', () => {
       );
       expect(result.content).toBe('<main>Review</main>');
       expect(requestedUrl).toBe('https://raw.githubusercontent.com/acme/widgets/main/docs/review.html');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('supports an exact self-hosted provider origin including its port', async () => {
+    const enterprise: GithubPRMetadata = {
+      ...github,
+      host: 'github.example.com:8443',
+      url: 'https://github.example.com:8443/acme/widgets/pull/1',
+    };
+    const artifactUrl = 'https://github.example.com:8443/acme/widgets/blob/main/review.md';
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: 'enterprise-token\n', stderr: '', exitCode: 0 };
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    let receivedToken = '';
+    let requestedUrl = '';
+    globalThis.fetch = async (input, init) => {
+      requestedUrl = String(input);
+      receivedToken = new Headers(init?.headers).get('authorization') ?? '';
+      return new Response('# Review', { headers: { 'content-type': 'text/markdown' } });
+    };
+    try {
+      const result = await fetchPRArtifactDocument(
+        runtime,
+        enterprise,
+        { ...context, body: `[review](${artifactUrl})` },
+        artifactUrl,
+      );
+      expect(result.content).toBe('# Review');
+      expect(requestedUrl).toBe(
+        'https://github.example.com:8443/acme/widgets/raw/main/review.md',
+      );
+      expect(receivedToken).toBe('Bearer enterprise-token');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('does not forward provider credentials to a redirect on another port', async () => {
+    const artifactUrl = 'https://github.com/user-attachments/files/123/explainer.html';
+    const runtime: PRRuntime = {
+      async runCommand() {
+        return { stdout: 'test-token\n', stderr: '', exitCode: 0 };
+      },
+    };
+    const originalFetch = globalThis.fetch;
+    const authorizations: string[] = [];
+    globalThis.fetch = async (_input, init) => {
+      authorizations.push(new Headers(init?.headers).get('authorization') ?? '');
+      if (authorizations.length === 1) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://github.com:8443/download/explainer.html' },
+        });
+      }
+      return new Response('<main>Review</main>', { headers: { 'content-type': 'text/html' } });
+    };
+    try {
+      const result = await fetchPRArtifactDocument(runtime, github, context, artifactUrl);
+      expect(result.content).toBe('<main>Review</main>');
+      expect(authorizations).toEqual(['Bearer test-token', '']);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -208,7 +290,9 @@ describe('fetchPRArtifactContent', () => {
       );
       expect(requestedUrl).toBe('https://raw.githubusercontent.com/acme/widgets/main/assets/demo.png');
       expect(receivedRange).toBe('bytes=0-3');
-      expect([...result.content]).toEqual([0, 1, 2, 255]);
+      if (result.body.kind !== 'stream') throw new Error('Expected a streaming media response');
+      const bytes = new Uint8Array(await new Response(result.body.stream).arrayBuffer());
+      expect([...bytes]).toEqual([0, 1, 2, 255]);
       expect(result).toMatchObject({
         status: 206,
         contentType: 'image/png',
@@ -239,7 +323,8 @@ describe('fetchPRArtifactContent', () => {
         'https://raw.githubusercontent.com/acme/widgets/main/styles/review.css',
         { sourceUrl: 'https://github.com/acme/widgets/blob/main/docs/review.html' },
       );
-      const css = new TextDecoder().decode(result.content);
+      if (result.body.kind !== 'bytes') throw new Error('Expected rewritten CSS bytes');
+      const css = new TextDecoder().decode(result.body.bytes);
       expect(css).toContain('/api/pr-artifact-content?');
       expect(css).toContain('hero.png');
       expect(css).toContain('source=');

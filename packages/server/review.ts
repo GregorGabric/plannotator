@@ -2202,17 +2202,25 @@ export async function startReviewServer(
                   range: req.headers.get("range") ?? undefined,
                 },
               );
-              return new Response(Uint8Array.from(content.content).buffer, {
+              return new Response(
+                content.body.kind === "bytes"
+                  ? Uint8Array.from(content.body.bytes).buffer
+                  : content.body.stream,
+                {
                 status: content.status,
                 headers: {
                   "Content-Type": content.contentType,
                   "Cache-Control": "private, max-age=300",
                   "Content-Security-Policy": "sandbox",
                   "X-Content-Type-Options": "nosniff",
+                  ...(content.contentLength === undefined
+                    ? {}
+                    : { "Content-Length": String(content.contentLength) }),
                   ...(content.contentRange ? { "Content-Range": content.contentRange } : {}),
                   ...(content.acceptRanges ? { "Accept-Ranges": content.acceptRanges } : {}),
                 },
-              });
+                },
+              );
             } catch (error) {
               const status = error instanceof PRArtifactDocumentError ? error.status : 500;
               const message = error instanceof Error ? error.message : "Failed to fetch artifact content";

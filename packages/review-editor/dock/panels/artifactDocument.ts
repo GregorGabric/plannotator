@@ -141,7 +141,7 @@ export function artifactContentBaseUrl(
   provider: ArtifactProviderLocation,
 ): string {
   const url = new URL(artifactUrl);
-  if (url.hostname.toLowerCase() !== provider.host.toLowerCase()) return artifactUrl;
+  if (url.host.toLowerCase() !== provider.host.toLowerCase()) return artifactUrl;
 
   const gitlabBlobMarker = '/-/blob/';
   if (provider.platform === 'gitlab' && url.pathname.includes(gitlabBlobMarker)) {
@@ -180,6 +180,48 @@ function proxiedArtifactReferenceUrl(
   return resolved === null ? null : artifactContentProxyUrl(resolved, artifactUrl);
 }
 
+function rewriteSrcSetValue(
+  value: string,
+  rewriteUrl: (rawUrl: string) => string | null,
+): string {
+  const candidates: string[] = [];
+  let position = 0;
+  while (position < value.length) {
+    while (position < value.length && /[\s,]/.test(value[position] ?? '')) position += 1;
+    if (position >= value.length) break;
+
+    const urlStart = position;
+    while (position < value.length && !/\s/.test(value[position] ?? '')) position += 1;
+    let rawUrl = value.slice(urlStart, position);
+    let endedWithComma = false;
+    while (rawUrl.endsWith(',')) {
+      rawUrl = rawUrl.slice(0, -1);
+      endedWithComma = true;
+    }
+    if (rawUrl === '') continue;
+
+    let descriptor = '';
+    if (!endedWithComma) {
+      while (position < value.length && /\s/.test(value[position] ?? '')) position += 1;
+      const descriptorStart = position;
+      let parentheses = 0;
+      while (position < value.length) {
+        const character = value[position];
+        if (character === '(') parentheses += 1;
+        if (character === ')' && parentheses > 0) parentheses -= 1;
+        if (character === ',' && parentheses === 0) break;
+        position += 1;
+      }
+      descriptor = value.slice(descriptorStart, position).trim();
+      if (value[position] === ',') position += 1;
+    }
+
+    const rewrittenUrl = rewriteUrl(rawUrl) ?? rawUrl;
+    candidates.push(descriptor === '' ? rewrittenUrl : `${rewrittenUrl} ${descriptor}`);
+  }
+  return candidates.join(', ');
+}
+
 /**
  * Repair relative references after RenderedMarkdown has produced DOM. Its
  * normal image resolver targets local files through /api/image; remote
@@ -190,18 +232,48 @@ export function rewriteArtifactMarkdownReferences(
   artifactUrl: string,
   provider: ArtifactProviderLocation,
 ): void {
-  for (const element of root.querySelectorAll<HTMLElement>('img[src], source[src], video[src]')) {
-    const rawSrc = element.getAttribute('src');
-    if (rawSrc === null) continue;
-    const resolved = proxiedArtifactReferenceUrl(rawSrc, artifactUrl, provider);
-    if (resolved !== null) element.setAttribute('src', resolved);
+  const rewriteAttribute = (selector: string, attribute: string): void => {
+    for (const element of root.querySelectorAll<HTMLElement>(selector)) {
+      const rawValue = element.getAttribute(attribute);
+      if (rawValue === null) continue;
+      const resolved = proxiedArtifactReferenceUrl(rawValue, artifactUrl, provider);
+      if (resolved !== null) element.setAttribute(attribute, resolved);
+    }
+  };
+  rewriteAttribute(
+    'img[src], source[src], video[src], audio[src], track[src], embed[src], iframe[src], frame[src], input[src]',
+    'src',
+  );
+  rewriteAttribute('object[data]', 'data');
+  rewriteAttribute('image[href], feImage[href], use[href], script[href], link[href]', 'href');
+  rewriteAttribute(
+    'image[xlink\\:href], feImage[xlink\\:href], use[xlink\\:href], script[xlink\\:href]',
+    'xlink:href',
+  );
+  rewriteAttribute('body[background], table[background], td[background], th[background]', 'background');
+  for (const element of root.querySelectorAll<HTMLElement>('img[srcset], source[srcset]')) {
+    const rawSrcSet = element.getAttribute('srcset');
+    if (rawSrcSet === null) continue;
+    element.setAttribute(
+      'srcset',
+      rewriteSrcSetValue(
+        rawSrcSet,
+        (rawUrl) => proxiedArtifactReferenceUrl(rawUrl, artifactUrl, provider),
+      ),
+    );
   }
-  for (const element of root.querySelectorAll<HTMLElement>('[poster]')) {
-    const rawPoster = element.getAttribute('poster');
-    if (rawPoster === null) continue;
-    const resolved = proxiedArtifactReferenceUrl(rawPoster, artifactUrl, provider);
-    if (resolved !== null) element.setAttribute('poster', resolved);
+  for (const element of root.querySelectorAll<HTMLElement>('link[imagesrcset]')) {
+    const rawSrcSet = element.getAttribute('imagesrcset');
+    if (rawSrcSet === null) continue;
+    element.setAttribute(
+      'imagesrcset',
+      rewriteSrcSetValue(
+        rawSrcSet,
+        (rawUrl) => proxiedArtifactReferenceUrl(rawUrl, artifactUrl, provider),
+      ),
+    );
   }
+  rewriteAttribute('[poster]', 'poster');
   for (const link of root.querySelectorAll<HTMLAnchorElement>('a[href]')) {
     const rawHref = link.getAttribute('href');
     if (rawHref === null) continue;
@@ -238,8 +310,8 @@ function rewriteResourceAttributes(
   artifactUrl: string,
   provider: ArtifactProviderLocation,
 ): string {
-  const rewriteAttribute = (tag: string, attribute: 'src' | 'poster' | 'href'): string => tag.replace(
-    new RegExp(`(\\b${attribute}\\s*=\\s*)(["'])(.*?)\\2`, 'gi'),
+  const rewriteAttribute = (tag: string, attribute: string): string => tag.replace(
+    new RegExp(`(\\s${attribute}\\s*=\\s*)(["'])(.*?)\\2`, 'gi'),
     (match, prefix: string, quote: string, rawValue: string) => {
       const proxied = proxiedArtifactReferenceUrl(
         decodeHtmlAttributeValue(rawValue),
@@ -250,33 +322,40 @@ function rewriteResourceAttributes(
       return escaped === undefined ? match : `${prefix}${quote}${escaped}${quote}`;
     },
   );
-  const rewriteSrcSet = (tag: string): string => tag.replace(
-    /(\bsrcset\s*=\s*)(["'])(.*?)\2/gi,
+  const rewriteSrcSet = (tag: string, attribute = 'srcset'): string => tag.replace(
+    new RegExp(`(\\s${attribute}\\s*=\\s*)(["'])(.*?)\\2`, 'gi'),
     (match, prefix: string, quote: string, rawValue: string) => {
-      if (/\bdata:/i.test(rawValue)) return match;
-      const candidates = rawValue.split(',').map((candidate) => {
-        const [rawUrl, ...descriptor] = candidate.trim().split(/\s+/);
-        if (!rawUrl) return candidate;
-        const proxied = proxiedArtifactReferenceUrl(
+      const rewritten = rewriteSrcSetValue(
+        rawValue,
+        (rawUrl) => proxiedArtifactReferenceUrl(
           decodeHtmlAttributeValue(rawUrl),
           artifactUrl,
           provider,
-        );
-        return proxied === null
-          ? candidate
-          : [proxied.replace(/&/g, '&amp;'), ...descriptor].join(' ');
-      });
-      return `${prefix}${quote}${candidates.join(', ')}${quote}`;
+        )?.replace(/&/g, '&amp;') ?? null,
+      );
+      return `${prefix}${quote}${rewritten}${quote}`;
     },
   );
 
   let rewritten = html.replace(
-    /<(?:img|video|audio|source|script|iframe)\b[^>]*>/gi,
+    /<(?:img|video|audio|source|script|iframe|frame|track|embed|input)\b[^>]*>/gi,
     (tag) => rewriteSrcSet(rewriteAttribute(rewriteAttribute(tag, 'src'), 'poster')),
   );
   rewritten = rewritten.replace(
     /<link\b[^>]*>/gi,
-    (tag) => rewriteAttribute(tag, 'href'),
+    (tag) => rewriteSrcSet(rewriteAttribute(tag, 'href'), 'imagesrcset'),
+  );
+  rewritten = rewritten.replace(
+    /<object\b[^>]*>/gi,
+    (tag) => rewriteAttribute(tag, 'data'),
+  );
+  rewritten = rewritten.replace(
+    /<(?:image|feimage|use|script)\b[^>]*>/gi,
+    (tag) => rewriteAttribute(rewriteAttribute(tag, 'xlink:href'), 'href'),
+  );
+  rewritten = rewritten.replace(
+    /<(?:body|table|td|th)\b[^>]*>/gi,
+    (tag) => rewriteAttribute(tag, 'background'),
   );
   const rewriteCssReference = (rawValue: string): string | null => proxiedArtifactReferenceUrl(
     decodeHtmlAttributeValue(rawValue),

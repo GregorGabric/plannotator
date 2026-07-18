@@ -58,8 +58,8 @@ describe('buildPRArtifacts', () => {
       ...emptyContext,
       body: [
         `![architecture](${SHOT_URL})`,
-        '[notes](https://example.com/notes.md)',
-        '<video src="https://example.com/repro.webm"></video>',
+        '[notes](https://github.com/acme/widgets/blob/main/notes.md)',
+        '<video src="https://github.com/acme/widgets/blob/main/repro.webm"></video>',
         '[ordinary link](https://example.com/docs)',
         `inline \`![not real](${SHOT_URL}?inside=code-span)\` code`,
         `\`\`\`md\n![not real](${SHOT_URL}?inside=code)\n\`\`\``,
@@ -106,9 +106,9 @@ describe('buildPRArtifacts', () => {
     const context: PRContext = {
       ...emptyContext,
       body: [
-        '![before](https://example.com/render.png?variant=before&X-Amz-Signature=old)',
-        '![after](https://example.com/render.png?variant=after&X-Amz-Signature=new)',
-        '![before duplicate](https://example.com/render.png?X-Amz-Signature=renewed&variant=before)',
+        '![before](https://github.com/acme/widgets/blob/main/render.png?variant=before&X-Amz-Signature=old)',
+        '![after](https://github.com/acme/widgets/blob/main/render.png?variant=after&X-Amz-Signature=new)',
+        '![before duplicate](https://github.com/acme/widgets/blob/main/render.png?X-Amz-Signature=renewed&variant=before)',
       ].join('\n\n'),
     };
 
@@ -121,16 +121,41 @@ describe('buildPRArtifacts', () => {
   it('decodes HTML entities in attachment attributes before resolving URLs', () => {
     const context: PRContext = {
       ...emptyContext,
-      body: '<img alt="quality &amp; diff" src="https://example.com/render.png?left=1&amp;right=2">',
+      body: '<img alt="quality &amp; diff" src="https://github.com/acme/widgets/blob/main/render.png?left=1&amp;right=2">',
     };
 
     expect(buildPRArtifacts(githubMetadata, context)).toMatchObject([
       {
         kind: 'image',
         name: 'quality & diff',
-        url: 'https://example.com/render.png?left=1&right=2',
+        url: 'https://github.com/acme/widgets/blob/main/render.png?left=1&right=2',
       },
     ]);
+  });
+
+  it('decodes HTML entities in Markdown token destinations', () => {
+    const artifacts = buildPRArtifacts(githubMetadata, {
+      ...emptyContext,
+      body: '![quality](https://github.com/acme/widgets/blob/main/render.png?left=1&amp;right=2)',
+    });
+
+    expect(artifacts).toMatchObject([
+      {
+        kind: 'image',
+        url: 'https://github.com/acme/widgets/blob/main/render.png?left=1&right=2',
+      },
+    ]);
+  });
+
+  it('excludes external artifacts that the authenticated provider proxy cannot render', () => {
+    expect(buildPRArtifacts(githubMetadata, {
+      ...emptyContext,
+      body: [
+        '![image](https://example.com/render.png)',
+        '[notes](https://example.com/notes.md)',
+        '<video src="https://example.com/repro.webm"></video>',
+      ].join('\n'),
+    })).toEqual([]);
   });
 
   it('recognizes an extensionless GitHub upload authored as a bare video URL', () => {
@@ -180,7 +205,7 @@ describe('buildPRArtifacts', () => {
         {
           id: 'late',
           author: 'late-reviewer',
-          body: '![late](https://example.com/late.png)',
+          body: '![late](https://github.com/acme/widgets/blob/main/late.png)',
           createdAt: '2026-07-15T12:00:00Z',
           url: `${githubMetadata.url}#issuecomment-late`,
         },
@@ -190,7 +215,7 @@ describe('buildPRArtifacts', () => {
           id: 'early',
           author: 'early-reviewer',
           state: 'COMMENTED',
-          body: '![early](https://example.com/early.png)',
+          body: '![early](https://github.com/acme/widgets/blob/main/early.png)',
           submittedAt: '2026-07-15T10:00:00Z',
           url: `${githubMetadata.url}#pullrequestreview-early`,
         },
@@ -208,7 +233,7 @@ describe('buildPRArtifacts', () => {
             {
               id: 'middle',
               author: 'thread-reviewer',
-              body: '![middle](https://example.com/middle.png)',
+              body: '![middle](https://github.com/acme/widgets/blob/main/middle.png)',
               createdAt: '2026-07-15T11:00:00Z',
               url: `${githubMetadata.url}#discussion-middle`,
             },
