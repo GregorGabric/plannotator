@@ -59,7 +59,7 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
             if (!isOpen && showUpdateDot) updateInfo?.dismiss();
             toggleMenu();
           }}
-          className={`relative flex items-center gap-1.5 p-1.5 md:px-2.5 md:py-1 rounded-md text-xs font-medium transition-colors ${
+          className={`relative flex h-7 items-center gap-1.5 px-1.5 lg:px-2.5 rounded-md text-xs font-medium transition-colors ${
             isOpen
               ? 'bg-muted text-foreground'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted'
@@ -70,14 +70,14 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
         >
           {isOpen ? <CloseIcon /> : <MenuIcon />}
           {showUpdateDot ? (
-            <TextShimmer className="hidden md:inline text-xs font-medium" duration={2.5} spread={1.5}>
+            <TextShimmer className="hidden lg:inline text-xs font-medium" duration={2.5} spread={1.5}>
               Options
             </TextShimmer>
           ) : (
-            <span className="hidden md:inline">Options</span>
+            <span className="hidden lg:inline">Options</span>
           )}
           {showUpdateDot && (
-            <span className="absolute top-0.5 right-0.5 md:-top-0.5 md:-right-0.5 w-2 h-2 rounded-full bg-primary ring-2 ring-background" />
+            <span className="absolute top-0.5 right-0.5 lg:-top-0.5 lg:-right-0.5 w-2 h-2 rounded-full bg-primary ring-2 ring-background" />
           )}
         </button>
       )}
