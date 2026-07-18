@@ -16,6 +16,7 @@ import { AnnotationType, type Block } from '../types';
 // Keep the adjacent public theme/menu contracts in that same DOM run without
 // requiring workflow-only test-path maintenance.
 import './ActionMenu.test';
+import './DocBadges.test';
 import './ThemeProvider.test';
 
 const hasDom = typeof document !== 'undefined';
