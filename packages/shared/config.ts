@@ -235,6 +235,22 @@ export function resolveDefaultDiffType(cfg?: PlannotatorConfig): DefaultDiffType
 }
 
 /**
+ * Coerce a config.json value that should be a boolean. JSON parsing preserves
+ * whatever type the user typed, so a hand-edited `"false"` (quoted) arrives as
+ * a string and would fail `=== false` checks downstream. Accepts real booleans
+ * plus "true"/"false"/"1"/"0" strings; anything else falls back to the default.
+ */
+function coerceConfigBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const v = value.trim().toLowerCase();
+    if (v === "true" || v === "1") return true;
+    if (v === "false" || v === "0") return false;
+  }
+  return fallback;
+}
+
+/**
  * Resolve whether to use Glimpse native window.
  *
  * Priority (highest wins):
@@ -245,8 +261,7 @@ export function resolveUseGlimpse(config: PlannotatorConfig): boolean {
   if (envVal !== undefined) {
     return envVal === "1" || envVal.toLowerCase() === "true";
   }
-  if (config.glimpse !== undefined) return config.glimpse;
-  return true;
+  return coerceConfigBoolean(config.glimpse, true);
 }
 
 /**
@@ -266,8 +281,7 @@ export function resolveAnnotateHistory(config: PlannotatorConfig): boolean {
   if (envVal !== undefined) {
     return envVal === "1" || envVal.toLowerCase() === "true";
   }
-  if (config.annotateHistory !== undefined) return config.annotateHistory;
-  return true;
+  return coerceConfigBoolean(config.annotateHistory, true);
 }
 
 export function resolveUseJina(cliNoJina: boolean, config: PlannotatorConfig): boolean {
@@ -280,11 +294,8 @@ export function resolveUseJina(cliNoJina: boolean, config: PlannotatorConfig): b
     return envVal === "1" || envVal.toLowerCase() === "true";
   }
 
-  // Config file
-  if (config.jina !== undefined) return config.jina;
-
-  // Default: enabled
-  return true;
+  // Config file (default: enabled)
+  return coerceConfigBoolean(config.jina, true);
 }
 
 /**
@@ -316,6 +327,5 @@ export function resolveCursorSandbox(config: PlannotatorConfig): boolean {
     const v = envVal.toLowerCase();
     return v !== "0" && v !== "false" && v !== "disabled";
   }
-  if (config.cursorSandbox !== undefined) return config.cursorSandbox;
-  return true;
+  return coerceConfigBoolean(config.cursorSandbox, true);
 }
