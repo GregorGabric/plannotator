@@ -71,11 +71,12 @@ export const GuideDiffSection: React.FC<GuideDiffSectionProps> = ({ diffRef, isF
     if (!wasViewed) setCollapsed(true);
   };
 
-  // Reveal channel (state.guideRevealFile): a sidebar jump — annotation click
-  // or AI line citation — targeted THIS file. The viewed-collapse above
-  // unmounts the diff body, so the jump would silently no-op on a collapsed
-  // file; expand it first. GuideSectionCard's companion effect handles the
-  // section-level expand and scroll — this one only reopens the file.
+  // Reveal channel (state.guideRevealFile): a jump — sidebar annotation click,
+  // AI line citation, or a section file chip — targeted THIS file. The
+  // viewed-collapse above unmounts the diff body, so the jump would silently
+  // no-op on a collapsed file; expand it first. GuideSectionCard's companion
+  // effect handles the section-level expand and scroll — this one only
+  // reopens the file.
   const revealTarget = state.guideRevealFile?.path === diffRef.file ? state.guideRevealFile : null;
   useEffect(() => {
     if (revealTarget) setCollapsed(false);

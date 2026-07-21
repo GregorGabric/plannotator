@@ -113,14 +113,21 @@ export interface ReviewState {
    *  activeWorktreePath memo — the same parse that drives the sections/tree
    *  UI, so context matching aligns with what's on screen). */
   currentWorktreePath?: string | null;
-  /** Guide-mode reveal channel: set (with a fresh token) when a sidebar jump
-   *  — annotation click or AI line citation — targets a file while the guide
-   *  takeover is open. The GuideSectionCard containing that file expands its
+  /** Guide-mode reveal channel: set (with a fresh token) when a jump —
+   *  sidebar annotation click, AI line citation, or a section file chip —
+   *  targets a file while the guide takeover is open. The GuideSectionCard
+   *  containing that file expands its
    *  collapsed (reviewed) section, focuses the file's diff, and scrolls to
    *  it; without this, jumps into collapsed sections silently no-op because
    *  no viewer is mounted for the file. Cleared when the guide closes so a
    *  reopen doesn't replay the last reveal. */
   guideRevealFile?: { path: string; token: number } | null;
+  /** Sets guideRevealFile with a fresh token. Entry point for jumps that
+   *  originate INSIDE the guide (section file chips) so they get the same
+   *  expand-focus-scroll treatment as the sidebar paths above — a direct
+   *  scrollIntoView would land on a bare header when the target diff is
+   *  collapsed (marked viewed). */
+  onGuideRevealFile?: (filePath: string) => void;
   stageError: string | null;
 
   // Search
