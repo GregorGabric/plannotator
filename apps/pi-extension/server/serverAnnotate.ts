@@ -6,7 +6,8 @@ import { randomUUID } from "node:crypto";
 import { contentHash, deleteDraft } from "../generated/draft.js";
 import { saveToHistory, getPlanVersion, getVersionCount, listVersions } from "../generated/storage.js";
 import { htmlDiff } from "../generated/html-diff.js";
-import { saveConfig, detectGitUser, getServerConfig, loadConfig, resolveSharingEnabled, resolveAnnotateHistory } from "../generated/config.js";
+import { saveConfig, detectGitUser, getServerConfig, loadConfig, resolveSharingEnabled, resolveAnnotateHistory, type PromptRuntime } from "../generated/config.js";
+import { getAnnotateFileFeedbackTemplate, getAnnotateMessageFeedbackTemplate } from "../generated/prompts.js";
 import { disabledSourceSave, type SourceSaveRequest } from "../generated/source-save.js";
 import { getAnnotateReferenceRootPaths } from "../generated/annotate-reference-roots-node.js";
 import {
@@ -435,6 +436,19 @@ export async function startAnnotateServer(options: {
 				serverConfig: getServerConfig(gitUser),
 				agentTerminal: agentTerminalCapability,
 				...(options.recentMessages ? { recentMessages: options.recentMessages } : {}),
+				// Resolved copy-wrapper templates (config-aware, placeholders
+				// intact) so clipboard Copy matches what Send Feedback produces
+				// instead of the plan-deny wrap (#1107). Resolved per request so
+				// config edits mid-session behave like Send Feedback (which
+				// resolves at submit time).
+				feedbackTemplates: {
+					fileFeedback: getAnnotateFileFeedbackTemplate(
+						(options.origin ?? "pi") as PromptRuntime,
+					),
+					messageFeedback: getAnnotateMessageFeedbackTemplate(
+						(options.origin ?? "pi") as PromptRuntime,
+					),
+				},
 			});
 		} else if (url.pathname === "/api/plan/version" && req.method === "GET") {
 			// fetch a specific version of the annotated file (version diff base picker)
