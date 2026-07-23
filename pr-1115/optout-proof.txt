@@ -1,0 +1,23 @@
+$ PLANNOTATOR_GUIDE_HISTORY=0  # server restarted with guide history disabled
+
+$ curl -s http://localhost:19571/api/guides   # listing still works
+[
+    {
+        "id": "1784660806748-regional-tax-rules-for-checkout-totals",
+        "label": "feature/tax-rules",
+        "title": "Regional tax rules for checkout totals",
+        "savedAt": 1784660806748,
+        "progress": {
+            "reviewed": 2,
+            "total": 3
+        },
+        "moved": false
+    }
+]
+
+$ bun optout-proof.ts   # but a new save is blocked by the writesEnabled gate
+PLANNOTATOR_GUIDE_HISTORY = 0
+resolveGuideHistory(loadConfig()) = false
+guides on disk before save attempt: 1
+guides on disk after save attempt:  1
+new save blocked: true
