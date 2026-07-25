@@ -28,6 +28,7 @@ export interface SettingDef<T> {
   toServer?: (value: T) => Record<string, unknown>;
 }
 
+/** Typed registry of persisted UI settings and their storage codecs. */
 export const SETTINGS = {
   displayName: {
     defaultValue: () => generateIdentity(),
@@ -48,6 +49,20 @@ export const SETTINGS = {
       return v === 'true' ? true : v === 'false' ? false : undefined;
     },
     toCookie: (v: boolean) => storage.setItem('plannotator-grid-enabled', String(v)),
+    serverKey: undefined, fromServer: undefined, toServer: undefined,
+  },
+
+  vimModeEnabled: {
+    // Vim bindings deliberately default OFF. Unmodified letter keys must remain
+    // inert for existing users until they explicitly opt into modal document
+    // navigation from Settings > Shortcuts.
+    defaultValue: false as boolean,
+    fromCookie: () => {
+      const value = storage.getItem('plannotator-vim-mode-enabled');
+      return value === 'true' ? true : value === 'false' ? false : undefined;
+    },
+    toCookie: (value: boolean) =>
+      storage.setItem('plannotator-vim-mode-enabled', String(value)),
     serverKey: undefined, fromServer: undefined, toServer: undefined,
   },
 

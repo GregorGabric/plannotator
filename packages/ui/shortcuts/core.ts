@@ -46,12 +46,6 @@ const NAMED_TOKENS = new Set([
   'Enter',
   'Escape',
   'Tab',
-  // TODO(migration): `matchesKeyToken` does not currently match `Space` —
-  // pressing Spacebar produces `event.key === ' '` (length 1), which the
-  // matcher uppercases to `' '` and then compares to the literal `'Space'`,
-  // always failing. Add a special case in `matchesKeyToken` (e.g.
-  // `if (token === 'Space') return event.key === ' ' || event.code === 'Space'`)
-  // before any scope binds Space.
   'Space',
   'Backspace',
   'Delete',
@@ -70,6 +64,10 @@ const NAMED_TOKENS = new Set([
   '.',
   '[',
   ']',
+  '{',
+  '}',
+  '?',
+  '$',
 ]);
 
 for (let n = 1; n <= 12; n += 1) {
@@ -77,6 +75,7 @@ for (let n = 1; n <= 12; n += 1) {
 }
 
 const MODIFIER_TOKENS = new Set(['Mod', 'Shift', 'Alt']);
+const SHIFTED_LITERAL_TOKENS = new Set(['{', '}', '?', '$']);
 
 export function defineShortcutScope<TAction extends string>(scope: ShortcutScopeDefinition<TAction>): ShortcutScopeDefinition<TAction> {
   return scope;
@@ -351,6 +350,10 @@ function matchesKeyToken(event: KeyboardEvent, token: string): boolean {
   const key = event.key.length === 1 ? event.key.toUpperCase() : event.key;
   const shortcutDigit = getShortcutDigit(event);
 
+  if (token === 'Space') {
+    return event.key === ' ' || event.key === 'Spacebar' || event.code === 'Space';
+  }
+
   if (token === 'A-Z') {
     return /^[A-Z]$/.test(key);
   }
@@ -370,6 +373,12 @@ function matchesKeyToken(event: KeyboardEvent, token: string): boolean {
   return key === token;
 }
 
+/**
+ * Match a keyboard event against one normalized, single-press binding.
+ *
+ * Sequential and hold bindings deliberately return false; their timing
+ * semantics are handled by the shortcut runtime's dedicated paths.
+ */
 export function matchesShortcutBinding(event: KeyboardEvent, binding: string): boolean {
   if (binding.includes(' ') || binding.includes('hold')) {
     return false;
@@ -385,13 +394,24 @@ export function matchesShortcutBinding(event: KeyboardEvent, binding: string): b
   if (keyTokens.length !== 1) return false;
 
   const keyToken = keyTokens[0];
-  const shiftMatches = requiresShift === event.shiftKey || (!requiresShift && keyToken === 'A-Z' && event.shiftKey);
+  const shiftMatches = requiresShift === event.shiftKey
+    || (!requiresShift && keyToken === 'A-Z' && event.shiftKey)
+    || (!requiresShift && SHIFTED_LITERAL_TOKENS.has(keyToken) && event.key === keyToken);
 
   if (requiresMod !== (event.metaKey || event.ctrlKey)) return false;
   if (!shiftMatches) return false;
   if (requiresAlt !== event.altKey) return false;
 
   return matchesKeyToken(event, keyToken);
+}
+
+/**
+ * Match one key group from a sequential binding such as `G G`.
+ *
+ * The group uses the same normalized syntax as an ordinary one-press binding.
+ */
+export function matchesShortcutBindingGroup(event: KeyboardEvent, group: string): boolean {
+  return matchesShortcutBinding(event, group);
 }
 
 export function getMatchingShortcutBindingIndex(event: KeyboardEvent, bindings: string[]): number {

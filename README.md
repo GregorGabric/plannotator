@@ -333,6 +333,22 @@ See the [verification docs](https://docs.plannotator.ai/open-source/start/instal
 
 Settings are saved in cookies (not localStorage) because each hook invocation runs on a random port. You can also set options through environment variables or `~/.plannotator/config.json`.
 
+### Optional Vim controls
+
+Plan and annotate views offer a default-off **Vim controls** profile under
+**Settings → Shortcuts**. Once enabled, focus the document and use `j` / `k`
+to move one rendered block at a time. After `l` refines into a semantic level,
+`j` / `k` move among sibling rows, cells, or inline targets; `h` moves back to
+the containing target. Refining past the deepest target enters text. `v`
+starts characterwise Visual selection and
+`V` selects whole blocks. `Space` opens the normal annotation toolbar; `c`,
+`d`, `m`, and `t` select comment, redline, markup, and label actions. The same
+semantic target graph drives pointer Pinpoint and keyboard navigation. Press
+`?` in the document for the contextual key reference. Inputs, dialogs,
+editors, `Tab`, and all pointer interactions retain their native behavior.
+See [Vim controls](docs/vim-controls.md) for the interaction contract and
+implementation architecture.
+
 | Variable | Description |
 |---|---|
 | `PLANNOTATOR_REMOTE` | `1`/`true` for remote mode, `0`/`false` for local, unset for SSH auto-detection |

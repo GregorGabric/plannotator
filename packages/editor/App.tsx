@@ -322,6 +322,7 @@ const App: React.FC = () => {
     return stored === 'true';
   });
   const gridEnabled = useConfigValue('gridEnabled');
+  const vimModeEnabled = useConfigValue('vimModeEnabled');
   const [uiPrefs, setUiPrefs] = useState(() => getUIPreferences());
 
   // Plan-area width (inside the OverlayScrollArea, after sidebar/panel
@@ -4512,6 +4513,7 @@ const App: React.FC = () => {
                     selectedAnnotationId={selectedAnnotationId}
                     mode={editorMode}
                     inputMethod={inputMethod}
+                    vimModeEnabled={vimModeEnabled}
                     globalAttachments={globalAttachments}
                     onAddGlobalAttachment={handleAddGlobalAttachment}
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
@@ -4545,6 +4547,7 @@ const App: React.FC = () => {
                     selectedAnnotationId={selectedAnnotationId}
                     mode={editorMode}
                     inputMethod={inputMethod}
+                    vimModeEnabled={vimModeEnabled}
                     taterMode={taterMode}
                     gridEnabled={gridEnabled}
                     globalAttachments={globalAttachments}

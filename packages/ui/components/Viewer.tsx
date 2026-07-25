@@ -45,8 +45,10 @@ import { DocBadges, type LinkedDocBadgeInfo } from './DocBadges';
 import { PinpointOverlay } from './PinpointOverlay';
 import { usePinpoint } from '../hooks/usePinpoint';
 import { useAnnotationHighlighter } from '../hooks/useAnnotationHighlighter';
+import { useVimSelection } from '../hooks/useVimSelection';
 import { useScrollViewport } from '../hooks/useScrollViewport';
 import { decodeAnchorHash } from '../utils/anchors';
+import { VimModeOverlay } from './VimModeOverlay';
 
 interface ViewerProps {
   blocks: Block[];
@@ -123,6 +125,8 @@ interface ViewerProps {
    *  comment, attachments, checkbox toggles). Existing annotations still
    *  render and remain selectable. Default false — today's behavior. */
   readOnly?: boolean;
+  /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
+  vimModeEnabled?: boolean;
 }
 
 export interface ViewerHandle {
@@ -164,6 +168,12 @@ const FrontmatterCard: React.FC<{ frontmatter: Frontmatter }> = ({ frontmatter }
   );
 };
 
+/**
+ * Render and annotate a parsed Markdown document.
+ *
+ * Pointer and opt-in keyboard annotations share the same highlight callbacks;
+ * the imperative handle mutates only highlights owned by this viewer.
+ */
 export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   blocks,
   markdown,
@@ -206,6 +216,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   onAskAI,
   allowImages = true,
   readOnly = false,
+  vimModeEnabled = false,
 }, ref) => {
   const [copied, setCopied] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
@@ -276,7 +287,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
 
   // Shared annotation infrastructure via hook
   const {
-    highlighterRef,
     toolbarState,
     commentPopover: hookCommentPopover,
     quickLabelPicker: hookQuickLabelPicker,
@@ -288,6 +298,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     handleCommentClose: hookCommentClose,
     handleFloatingQuickLabel: hookFloatingQuickLabel,
     handleQuickLabelPickerDismiss: hookQuickLabelPickerDismiss,
+    highlightRange,
+    highlightMathElement,
     removeHighlight: hookRemoveHighlight,
     clearAllHighlights,
     applyAnnotations,
@@ -307,17 +319,56 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   const modeRef = useRef<EditorMode>(mode);
   useEffect(() => { modeRef.current = mode; }, [mode]);
 
+  const applyCodeBlockAnnotation = useCallback((
+    blockId: string,
+    codeEl: Element,
+    type: AnnotationType,
+    text?: string,
+    images?: ImageAttachment[],
+    isQuickLabel?: boolean,
+    quickLabelTip?: string,
+  ) => {
+    const id = `codeblock-${Date.now()}`;
+    const codeText = codeEl.textContent || '';
+
+    const wrapper = document.createElement('mark');
+    wrapper.className = `annotation-highlight ${type === AnnotationType.DELETION ? 'deletion' : type === AnnotationType.COMMENT ? 'comment' : ''}`.trim();
+    wrapper.dataset.bindId = id;
+    wrapper.textContent = codeText;
+
+    codeEl.replaceChildren(wrapper);
+
+    const newAnnotation: Annotation = {
+      id,
+      blockId,
+      startOffset: 0,
+      endOffset: codeText.length,
+      type,
+      text,
+      originalText: codeText,
+      createdA: Date.now(),
+      author: getIdentity(),
+      images,
+      ...(isQuickLabel ? { isQuickLabel: true } : {}),
+      ...(quickLabelTip ? { quickLabelTip } : {}),
+    };
+
+    onAddAnnotationRef.current(newAnnotation);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
   // Pinpoint mode: hover + click to select elements
   const handlePinpointCodeBlockClick = useCallback((blockId: string, element: HTMLElement) => {
+    const block = blocks.find((candidate) => candidate.id === blockId);
     const codeEl = element.querySelector('code');
-    if (!codeEl) return;
+    if (!block || !codeEl) return;
     // In pinpoint mode, apply code block annotation based on current editor mode
     if (modeRef.current === 'redline') {
       applyCodeBlockAnnotation(blockId, codeEl, AnnotationType.DELETION);
     } else if (modeRef.current === 'quickLabel') {
       setCodeBlockQuickLabelPicker({
         anchorEl: element,
-        codeBlock: { block: blocks.find(b => b.id === blockId)!, element },
+        codeBlock: { block, element },
       });
     } else {
       // Show comment popover anchored to the code block
@@ -326,16 +377,71 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
         contextText: (codeEl.textContent || '').slice(0, 80),
         selectedText: codeEl.textContent || '',
         isGlobal: false,
-        codeBlock: { block: blocks.find(b => b.id === blockId)!, element },
+        codeBlock: { block, element },
       });
     }
-  }, [blocks]);
+  }, [applyCodeBlockAnnotation, blocks]);
+
+  const handleKeyboardCodeBlockAction = useCallback((
+    blockId: string,
+    element: HTMLElement,
+    modeOverride?: EditorMode,
+  ) => {
+    const block = blocks.find((candidate) => candidate.id === blockId);
+    const codeEl = element.querySelector('code');
+    if (!block || !codeEl) return;
+
+    const effectiveMode = modeOverride ?? modeRef.current;
+    if (effectiveMode === 'redline') {
+      applyCodeBlockAnnotation(blockId, codeEl, AnnotationType.DELETION);
+      return;
+    }
+    if (effectiveMode === 'quickLabel') {
+      setCodeBlockQuickLabelPicker({
+        anchorEl: element,
+        codeBlock: { block, element },
+      });
+      return;
+    }
+    if (effectiveMode === 'selection') {
+      setHoveredCodeBlock({ block, element });
+      return;
+    }
+    setViewerCommentPopover({
+      anchorEl: element,
+      contextText: (codeEl.textContent || '').slice(0, 80),
+      selectedText: codeEl.textContent || '',
+      isGlobal: false,
+      codeBlock: { block, element },
+    });
+  }, [applyCodeBlockAnnotation, blocks]);
+
+  const vimModeActive = vimModeEnabled && !readOnly;
+  const vimBlocked = !!toolbarState
+    || !!hookCommentPopover
+    || !!viewerCommentPopover
+    || !!hookQuickLabelPicker
+    || !!codeBlockQuickLabelPicker
+    || !!hoveredCodeBlock
+    || !!isPlanDiffActive
+    || !!popoutTable
+    || !!lightbox;
+  const vim = useVimSelection({
+    containerRef,
+    enabled: vimModeActive,
+    blocked: vimBlocked,
+    activeMode: mode,
+    contentVersion: blocks,
+    onHighlightRange: highlightRange,
+    onCodeBlockAction: handleKeyboardCodeBlockAction,
+    onMathAction: highlightMathElement,
+  });
 
   const { hoverTarget } = usePinpoint({
     containerRef,
-    highlighterRef,
     inputMethod,
-    enabled: !readOnly && !toolbarState && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false),
+    enabled: !readOnly && !toolbarState && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false) && !vim.helpOpen,
+    onSelectRange: highlightRange,
     onCodeBlockClick: handlePinpointCodeBlockClick,
   });
 
@@ -462,45 +568,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
 
   // --- Viewer-specific: code block annotation ---
 
-  const applyCodeBlockAnnotation = (
-    blockId: string,
-    codeEl: Element,
-    type: AnnotationType,
-    text?: string,
-    images?: ImageAttachment[],
-    isQuickLabel?: boolean,
-    quickLabelTip?: string,
-  ) => {
-    const id = `codeblock-${Date.now()}`;
-    const codeText = codeEl.textContent || '';
-
-    const wrapper = document.createElement('mark');
-    wrapper.className = `annotation-highlight ${type === AnnotationType.DELETION ? 'deletion' : type === AnnotationType.COMMENT ? 'comment' : ''}`.trim();
-    wrapper.dataset.bindId = id;
-    wrapper.textContent = codeText;
-
-    codeEl.innerHTML = '';
-    codeEl.appendChild(wrapper);
-
-    const newAnnotation: Annotation = {
-      id,
-      blockId,
-      startOffset: 0,
-      endOffset: codeText.length,
-      type,
-      text,
-      originalText: codeText,
-      createdA: Date.now(),
-      author: getIdentity(),
-      images,
-      ...(isQuickLabel ? { isQuickLabel: true } : {}),
-      ...(quickLabelTip ? { quickLabelTip } : {}),
-    };
-
-    onAddAnnotationRef.current(newAnnotation);
-    window.getSelection()?.removeAllRanges();
-  };
-
   const handleCodeBlockAnnotate = (type: AnnotationType) => {
     if (!hoveredCodeBlock) return;
     const codeEl = hoveredCodeBlock.element.querySelector('code');
@@ -580,8 +647,20 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
       <article
         ref={containerRef}
         data-print-region="article"
+        data-vim-mode={vimModeActive ? 'enabled' : undefined}
+        data-vim-phase={vimModeActive ? vim.state.phase : undefined}
+        data-vim-focused={vimModeActive ? String(vim.focused) : undefined}
+        data-vim-blocked={vimModeActive ? String(vimBlocked) : undefined}
+        data-vim-target-key={vimModeActive ? vim.activeTarget?.key : undefined}
+        tabIndex={vimModeActive ? 0 : undefined}
+        onFocus={vim.onFocus}
+        onBlur={vim.onBlur}
+        onMouseDown={vim.onMouseDown}
         className={`w-full bg-card rounded-xl py-5 md:py-8 lg:py-10 xl:py-12 relative ${gridEnabled ? 'px-5 md:px-8 lg:px-10 xl:px-12 shadow-xl border border-border/50' : ''} ${inputMethod === 'pinpoint' ? 'cursor-pointer' : ''}`}
-        style={{ WebkitTouchCallout: 'none' } as React.CSSProperties}
+        style={{
+          WebkitTouchCallout: 'none',
+          ...(vimModeActive ? { outline: 'none' } : {}),
+        } as React.CSSProperties}
       >
         {/* Repo info + plan diff badge + demo badge + linked doc badge + archive badge - top left */}
         {(repoInfo || hasPreviousVersion || showDemoBadge || linkedDocInfo || archiveInfo || sourceInfo || openInAppPath) && (
@@ -882,8 +961,24 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
         )}
 
         {/* Pinpoint hover overlay */}
-        {inputMethod === 'pinpoint' && (
-          <PinpointOverlay target={hoverTarget} containerRef={containerRef} />
+        {(inputMethod === 'pinpoint' || vim.activeTarget) && (
+          <PinpointOverlay
+            target={
+              (vim.focused || vim.state.phase === 'action' ? vim.activeTarget : null)
+              ?? (inputMethod === 'pinpoint' ? hoverTarget : null)
+            }
+            containerRef={containerRef}
+          />
+        )}
+        {vimModeActive && (
+          <VimModeOverlay
+            containerRef={containerRef}
+            inputMethod={inputMethod}
+            state={vim.state}
+            focused={vim.focused}
+            helpOpen={vim.helpOpen}
+            onCloseHelp={vim.closeHelp}
+          />
         )}
 
         {/* Comment popover — hook handles text selection, Viewer handles global + code block */}
@@ -992,7 +1087,3 @@ const ImageLightbox: React.FC<{ src: string; alt: string; onClose: () => void }>
     </div>
   );
 };
-
-
-
-

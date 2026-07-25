@@ -665,6 +665,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
   }, [themePreview]);
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const gridEnabled = useConfigValue('gridEnabled');
+  const vimModeEnabled = useConfigValue('vimModeEnabled');
   const [identity, setIdentity] = useState('');
   const [obsidian, setObsidian] = useState<ObsidianSettings>({
     enabled: false,
@@ -1711,7 +1712,20 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
 
                 {/* === SHORTCUTS TAB === */}
                 {activeTab === 'shortcuts' && (
-                  <KeyboardShortcuts mode={mode} />
+                  <>
+                    {mode !== 'review' && (
+                      <>
+                        <ToggleSwitch
+                          checked={vimModeEnabled}
+                          onChange={(enabled) => configStore.set('vimModeEnabled', enabled)}
+                          label="Vim controls"
+                          description="Navigate and annotate documents with Vim-style keys. Off by default."
+                        />
+                        <div className="border-t border-border" />
+                      </>
+                    )}
+                    <KeyboardShortcuts mode={mode} vimModeEnabled={vimModeEnabled} />
+                  </>
                 )}
 
                 {/* === COMMENTS TAB === */}

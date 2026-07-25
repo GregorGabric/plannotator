@@ -8,6 +8,10 @@ export { commentPopoverShortcuts } from './plan-review/commentPopover.shortcuts'
 export { imageAnnotatorShortcuts, useImageAnnotatorShortcuts } from './plan-review/imageAnnotator.shortcuts';
 export { inputMethodShortcuts } from './plan-review/inputMethod.shortcuts';
 export { viewerShortcuts, useViewerShortcuts } from './plan-review/viewer.shortcuts';
+export {
+  vimSelectionShortcuts,
+  useVimSelectionShortcuts,
+} from './plan-review/vimSelection.shortcuts';
 export { goalSetupShortcuts, useGoalSetupShortcuts } from './plan-review/goalSetup.shortcuts';
 export { annotateSidebarShortcuts, useAnnotateSidebarShortcuts } from './plan-review/sidebar.shortcuts';
 

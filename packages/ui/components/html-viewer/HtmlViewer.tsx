@@ -41,6 +41,14 @@ function isLightTheme(): boolean {
   return document.documentElement.classList.contains("light");
 }
 
+function isBridgeReadyMessage(value: unknown): boolean {
+  return typeof value === "object"
+    && value !== null
+    && "type" in value
+    && value.type === `${PREFIX}ready`;
+}
+
+/** Inputs for the sandboxed raw-HTML viewer and its parent-side annotation UI. */
 export interface HtmlViewerProps {
   rawHtml: string;
   annotations: Annotation[];
@@ -50,6 +58,8 @@ export interface HtmlViewerProps {
   mode: EditorMode;
   /** Input method: 'drag' = text selection, 'pinpoint' = click an element. */
   inputMethod: InputMethod;
+  /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
+  vimModeEnabled?: boolean;
   globalAttachments?: ImageAttachment[];
   onAddGlobalAttachment?: (image: ImageAttachment) => void;
   onRemoveGlobalAttachment?: (path: string) => void;
@@ -71,6 +81,10 @@ export interface HtmlViewerProps {
   title?: string;
 }
 
+/**
+ * Render arbitrary HTML in a sandbox and adapt its validated bridge messages
+ * to the same annotation controls used by the Markdown viewer.
+ */
 export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
   (
     {
@@ -81,6 +95,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       selectedAnnotationId,
       mode,
       inputMethod,
+      vimModeEnabled = false,
       globalAttachments = [],
       onAddGlobalAttachment,
       onRemoveGlobalAttachment,
@@ -98,7 +113,9 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
     const [iframeHeight, setIframeHeight] = useState(600);
-    const [iframeReady, setIframeReady] = useState(false);
+    // Increment on every bridge-ready event so srcdoc navigations re-send
+    // state even though the iframe element and its WindowProxy are reused.
+    const [iframeReadyVersion, setIframeReadyVersion] = useState(0);
     const [globalCommentPopover, setGlobalCommentPopover] = useState<{
       anchorEl: HTMLElement;
       contextText: string;
@@ -133,9 +150,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     });
 
     useEffect(() => {
-      function handler(e: MessageEvent) {
-        if (e.data?.type === `${PREFIX}ready`) {
-          setIframeReady(true);
+      function handler(e: MessageEvent<unknown>) {
+        if (e.source !== iframeRef.current?.contentWindow) return;
+        if (isBridgeReadyMessage(e.data)) {
+          setIframeReadyVersion((version) => version + 1);
         }
       }
       window.addEventListener("message", handler);
@@ -143,24 +161,51 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     }, []);
 
     useEffect(() => {
-      if (!iframeReady) return;
+      if (iframeReadyVersion === 0) return;
       if (annotations.length > 0) {
         hook.applyAnnotations(annotations);
       }
-    }, [iframeReady]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Tell the bridge the current input method (drag vs pinpoint). Re-posts on
     // ready (fresh iframe) and whenever the user switches it in the toolstrip.
     useEffect(() => {
-      if (!iframeReady) return;
+      if (iframeReadyVersion === 0) return;
       iframeRef.current?.contentWindow?.postMessage(
         { type: `${PREFIX}set-input-method`, method: inputMethod },
         "*",
       );
-    }, [iframeReady, inputMethod]);
+    }, [iframeReadyVersion, inputMethod]);
 
     useEffect(() => {
-      if (!iframeReady) return;
+      if (iframeReadyVersion === 0) return;
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: `${PREFIX}set-vim-mode`, enabled: vimModeEnabled, mode },
+        "*",
+      );
+    }, [iframeReadyVersion, mode, vimModeEnabled]);
+
+    const vimOverlayWasOpenRef = useRef(false);
+    useEffect(() => {
+      const overlayOpen = !!hook.toolbarState || !!hook.commentPopover || !!hook.quickLabelPicker;
+      const wasOpen = vimOverlayWasOpenRef.current;
+      vimOverlayWasOpenRef.current = overlayOpen;
+      if (
+        vimModeEnabled
+        && wasOpen
+        && !overlayOpen
+        && (document.activeElement === document.body || document.activeElement === null)
+      ) {
+        iframeRef.current?.focus({ preventScroll: true });
+        iframeRef.current?.contentWindow?.postMessage(
+          { type: `${PREFIX}focus-vim` },
+          "*",
+        );
+      }
+    }, [hook.commentPopover, hook.quickLabelPicker, hook.toolbarState, vimModeEnabled]);
+
+    useEffect(() => {
+      if (iframeReadyVersion === 0) return;
       function sendTheme() {
         iframeRef.current?.contentWindow?.postMessage(
           {
@@ -179,7 +224,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         attributeFilter: ["class", "style"],
       });
       return () => observer.disconnect();
-    }, [iframeReady, hostTheme]);
+    }, [iframeReadyVersion, hostTheme]);
 
     useImperativeHandle(ref, () => ({
       removeHighlight: hook.removeHighlight,
@@ -288,6 +333,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               border: "none",
               display: "block",
               colorScheme: "auto",
+              outline: vimModeEnabled ? "none" : undefined,
             }}
             title={title}
           />
