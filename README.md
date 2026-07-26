@@ -346,6 +346,10 @@ starts characterwise Visual selection and
 semantic target graph drives pointer Pinpoint and keyboard navigation. Press
 `?` in the document for the contextual key reference. Inputs, dialogs,
 editors, `Tab`, and all pointer interactions retain their native behavior.
+An additional default-off **Vim HUD** toggle appears beneath Vim controls. It
+uses the product-demo HUD styling to show recent handled keys, the current
+block/line/word/Visual phase, and the command meaning without capturing text
+typed into comments or other controls.
 See [Vim controls](docs/vim-controls.md) for the interaction contract and
 implementation architecture.
 

@@ -6,6 +6,8 @@ annotation in the plan and annotate applications.
 ## Goal
 
 - Add an opt-in Vim mode setting. It must default to off.
+- Offer a second, separately opt-in HUD that visualizes only handled Vim
+  commands.
 - Preserve every existing pointer and keyboard interaction when Vim mode is
   off.
 - Support keyboard navigation and annotation in both Select and Pinpoint.
@@ -56,8 +58,12 @@ annotation in the plan and annotate applications.
 The document element may own technical keyboard focus, but it is never drawn
 as the active target. BLOCK and INLINE use the existing Pinpoint wash and
 label around the exact semantic element. TEXT uses a caret. VISUAL and VISUAL
-BLOCK use the browser selection. The status badge reports BLOCK, INLINE,
-NORMAL, VISUAL, VISUAL BLOCK, or ACTION.
+BLOCK use the browser selection. The compact status badge reports BLOCK,
+INLINE, NORMAL, VISUAL, VISUAL BLOCK, or ACTION. Users who additionally enable
+**Vim HUD** get the same information in a larger bottom-right command display:
+recent handled keys, the active navigation granularity, the input method, and
+a contextual action description. The HUD uses the same component and styling
+for Markdown and raw HTML.
 
 Pointer Pinpoint and keyboard navigation resolve through the same canonical
 graph, which owns target identity, hierarchy, labels, annotation ranges, and
@@ -98,3 +104,6 @@ annotation bridge.
 Vim controls are cookie-persisted, default off, and scoped to the focused
 document. No global letter-key listener is installed. Disabling the setting
 removes the document focus surface and leaves existing behavior unchanged.
+Vim HUD is independently cookie-persisted, default off, and only records or
+renders commands while enabled. Text entered into annotation composers is
+neither captured nor displayed.

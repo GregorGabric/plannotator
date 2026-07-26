@@ -66,6 +66,19 @@ export const SETTINGS = {
     serverKey: undefined, fromServer: undefined, toServer: undefined,
   },
 
+  vimHudEnabled: {
+    // The larger command HUD is an optional presentation layer on top of Vim
+    // controls. It has no effect while Vim mode itself is disabled.
+    defaultValue: false as boolean,
+    fromCookie: () => {
+      const value = storage.getItem('plannotator-vim-hud-enabled');
+      return value === 'true' ? true : value === 'false' ? false : undefined;
+    },
+    toCookie: (value: boolean) =>
+      storage.setItem('plannotator-vim-hud-enabled', String(value)),
+    serverKey: undefined, fromServer: undefined, toServer: undefined,
+  },
+
   // --- Diff display options (namespaced under diffOptions in config.json) ---
 
   // Which left-panel view a code review OPENS in. 'sections' = the git-status

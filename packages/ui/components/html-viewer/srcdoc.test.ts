@@ -479,6 +479,78 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(document.body.hasAttribute("tabindex")).toBe(false);
     document.body.replaceChildren();
   });
+
+  test("Vim HUD mode suppresses the iframe badge and emits handled command DTOs", async () => {
+    document.body.innerHTML = "<h1>First block</h1><p>Second block</p>";
+    const hudMessages: Array<Record<string, unknown>> = [];
+    const capture = (event: MessageEvent) => {
+      if (
+        event.data
+        && typeof event.data === "object"
+        && ["plannotator-bridge-vim-command", "plannotator-bridge-vim-state"]
+          .includes((event.data as { type?: string }).type ?? "")
+      ) {
+        hudMessages.push(event.data as Record<string, unknown>);
+      }
+    };
+    window.addEventListener("message", capture);
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: true,
+      hudEnabled: false,
+    });
+    postBridge({ type: "plannotator-bridge-focus-vim" });
+    document.body.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "j",
+      bubbles: true,
+      cancelable: true,
+    }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(hudMessages).toEqual([]);
+    expect(document.querySelector("[data-plannotator-vim-badge]")).not.toBeNull();
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.innerHTML = "<h1>First block</h1><p>Second block</p>";
+    postBridge({
+      type: "plannotator-bridge-set-input-method",
+      method: "pinpoint",
+    });
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: true,
+      hudEnabled: true,
+    });
+    postBridge({ type: "plannotator-bridge-focus-vim" });
+    document.body.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "j",
+      bubbles: true,
+      cancelable: true,
+    }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    window.removeEventListener("message", capture);
+
+    expect(document.querySelector("[data-plannotator-vim-badge]")).toBeNull();
+    expect(hudMessages).toContainEqual({
+      type: "plannotator-bridge-vim-state",
+      phase: "block",
+    });
+    expect(hudMessages).toContainEqual({
+      type: "plannotator-bridge-vim-command",
+      actionId: "moveDown",
+      key: "j",
+      context: "block",
+    });
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.replaceChildren();
+  });
 });
 
 describe("injectIntoHead", () => {

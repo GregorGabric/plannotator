@@ -226,4 +226,65 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
     act(() => root.unmount());
     host.remove();
   });
+
+  test('renders the video-style HUD from real handled commands instead of the compact badge', async () => {
+    if (!viewerModule || !parserModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const markdown = '# Keyboard HUD\n\nFirst paragraph.\n\nSecond paragraph.';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <viewerModule.Viewer
+          blocks={parserModule.parseMarkdownToBlocks(markdown)}
+          markdown={markdown}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+          taterMode={false}
+          stickyActions={false}
+          disableCodePathValidation
+          vimModeEnabled
+          vimHudEnabled
+        />,
+      );
+    });
+
+    const article = host.querySelector<HTMLElement>('[data-vim-mode="enabled"]');
+    if (!article) throw new Error('Vim article missing');
+    act(() => article.focus());
+    act(() => { keydown(article, 'j'); });
+
+    const hud = document.querySelector<HTMLElement>('[data-vim-key-hud]');
+    expect(hud).not.toBeNull();
+    expect(document.querySelector('[data-vim-mode-badge]')).toBeNull();
+    expect(hud?.style.height).toBe('88px');
+    expect(hud?.style.bottom).toBe('150px');
+    expect(hud?.style.borderRadius).toBe('20px');
+    expect(hud?.style.background).toContain('rgba(43,35,59,0.46)');
+    expect(hud?.style.backdropFilter).toBe('blur(10px)');
+    expect(document.querySelector('[data-vim-hud-active-key="j"]')).not.toBeNull();
+    expect(document.querySelector('[data-vim-hud-phase]')?.textContent)
+      .toBe('BLOCK / PINPOINT');
+    expect(document.querySelector('[data-vim-hud-command]')?.textContent)
+      .toBe('Next block');
+
+    act(() => { keydown(article, 'k'); });
+    act(() => { keydown(article, 'j'); });
+    act(() => { keydown(article, 'k'); });
+    expect(
+      Array.from(document.querySelectorAll<HTMLElement>('[data-vim-hud-previous-key]'))
+        .map((element) => element.dataset.vimHudPreviousKey),
+    ).toEqual(['j', 'k', 'j']);
+    expect(document.querySelector('[data-vim-hud-active-key="k"]')).not.toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
 });

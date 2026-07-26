@@ -146,6 +146,7 @@ export const BRIDGE_SCRIPT = `(function() {
   var currentInputMethod = 'drag'; // 'drag' = text selection, 'pinpoint' = click an element
   var pinpointHover = null;
   var vimEnabled = false;
+  var vimHudEnabled = false;
   var vimPhase = 'inactive';
   var vimActiveMode = 'selection';
   var vimPinpointEl = null;
@@ -304,6 +305,7 @@ export const BRIDGE_SCRIPT = `(function() {
     else if (type === PREFIX + 'set-vim-mode') {
       var wasVimEnabled = vimEnabled;
       vimEnabled = e.data.enabled === true;
+      vimHudEnabled = e.data.hudEnabled === true;
       vimActiveMode = e.data.mode === 'comment'
         || e.data.mode === 'redline'
         || e.data.mode === 'quickLabel'
@@ -1124,16 +1126,25 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function updateVimUi() {
     if (!vimEnabled) return;
-    var badge = getVimBadgeEl();
+    if (vimHudEnabled) {
+      parent.postMessage({
+        type: PREFIX + 'vim-state',
+        phase: vimPhase
+      }, '*');
+    }
+    var badge = document.querySelector('[data-plannotator-vim-badge]');
+    if (!vimHudEnabled && !badge) badge = getVimBadgeEl();
     var cursor = getVimCursorEl();
     if (vimPhase === 'inactive') {
-      badge.style.display = 'none';
+      if (badge) badge.style.display = 'none';
       cursor.style.display = 'none';
       return;
     }
-    badge.style.display = 'block';
+    if (badge) badge.style.display = vimHudEnabled ? 'none' : 'block';
     var phaseLabel = vimPhase === 'text' ? 'NORMAL' : vimPhase.toUpperCase().replace('-', ' ');
-    badge.textContent = phaseLabel + ' · ' + (currentInputMethod === 'pinpoint' ? 'PINPOINT' : 'SELECT');
+    if (badge) {
+      badge.textContent = phaseLabel + ' · ' + (currentInputMethod === 'pinpoint' ? 'PINPOINT' : 'SELECT');
+    }
     if (vimPhase !== 'text') {
       cursor.style.display = 'none';
       return;
@@ -1212,12 +1223,43 @@ export const BRIDGE_SCRIPT = `(function() {
     return null;
   }
 
+  function vimActionIdForKey(key) {
+    if (key === 'j') return 'moveDown';
+    if (key === 'k') return 'moveUp';
+    if (key === 'G') return 'documentEnd';
+    if (key === 'h' || key === 'H') return 'moveOut';
+    if (key === 'l') return 'refine';
+    if (key === 'v') return 'visual';
+    if (key === 'V') return 'visualBlock';
+    if (key === 'w') return 'wordForward';
+    if (key === 'b') return 'wordBackward';
+    if (key === 'e') return 'wordEnd';
+    if (key === '0') return 'lineStart';
+    if (key === '$') return 'lineEnd';
+    if (key === '{') return 'previousTextBlock';
+    if (key === '}') return 'nextTextBlock';
+    if (key === 'o') return 'swapSelectionEnds';
+    if (key === 'Enter') return 'activeAnnotation';
+    if (key === ' ' || key === 'Space' || key === 'Spacebar') return 'annotationMenu';
+    if (key === 'c') return 'comment';
+    if (key === 'd') return 'redline';
+    if (key === 'm') return 'markup';
+    if (key === 't') return 'label';
+    if (key === 'y') return 'copy';
+    if (key === 'Escape') return 'cancel';
+    if (key === '?') return 'help';
+    return null;
+  }
+
   function handleVimKeydown(e) {
     if (!vimEnabled || isVimEditableTarget(e.target) || e.isComposing) return false;
     if (e.metaKey || e.ctrlKey || e.altKey) return false;
 
     var key = e.key;
     var handled = false;
+    var hudKey = key;
+    var vimCommandContext = vimPhase;
+    var vimActionId = key === 'g' ? null : vimActionIdForKey(key);
 
     if (vimHelpOpen) {
       if (key === '?' || key === 'Escape') {
@@ -1274,6 +1316,8 @@ export const BRIDGE_SCRIPT = `(function() {
       if (vimPendingG) {
         clearTimeout(vimPendingGTimer);
         vimPendingG = false;
+        vimActionId = 'documentStart';
+        hudKey = 'gg';
         if (vimPhase === 'text' || vimPhase === 'visual') moveVimDocumentBoundary(false);
         else {
           var firstGraph = buildSemanticTargetGraph();
@@ -1439,6 +1483,14 @@ export const BRIDGE_SCRIPT = `(function() {
     }
 
     if (handled) {
+      if (vimHudEnabled && vimActionId) {
+        parent.postMessage({
+          type: PREFIX + 'vim-command',
+          actionId: vimActionId,
+          key: hudKey,
+          context: vimCommandContext
+        }, '*');
+      }
       e.preventDefault();
       e.stopImmediatePropagation();
     }

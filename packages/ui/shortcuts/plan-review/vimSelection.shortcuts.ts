@@ -166,5 +166,86 @@ export const vimSelectionShortcuts = defineShortcutScope({
   },
 });
 
+/** Stable action identifiers emitted by the Vim selection shortcut scope. */
+export type VimSelectionActionId = keyof typeof vimSelectionShortcuts.shortcuts;
+
+/** Vim navigation state used to make HUD command descriptions contextual. */
+export type VimSelectionHudContext =
+  | 'inactive'
+  | 'block'
+  | 'inline'
+  | 'text'
+  | 'visual'
+  | 'visual-block'
+  | 'action';
+
+/**
+ * Return the user-facing HUD description for a handled Vim action.
+ *
+ * Contextual movement keys keep one registered shortcut while accurately
+ * describing whether they moved by document structure, line, or character.
+ */
+export function describeVimSelectionAction(
+  actionId: VimSelectionActionId,
+  context: VimSelectionHudContext,
+): string {
+  switch (actionId) {
+    case 'moveDown':
+      if (context === 'inline') return 'Next semantic sibling';
+      if (context === 'text' || context === 'visual') return 'Next line';
+      if (context === 'visual-block') return 'Extend to next block';
+      return 'Next block';
+    case 'moveUp':
+      if (context === 'inline') return 'Previous semantic sibling';
+      if (context === 'text' || context === 'visual') return 'Previous line';
+      if (context === 'visual-block') return 'Extend to previous block';
+      return 'Previous block';
+    case 'moveOut':
+      return context === 'text' || context === 'visual'
+        ? 'Move left one character'
+        : 'Move to containing target';
+    case 'refine':
+      return context === 'text' || context === 'visual'
+        ? 'Move right one character'
+        : 'Refine into child or text';
+    case 'visual':
+      return context === 'visual'
+        ? 'Return to Normal mode'
+        : 'Start Visual selection';
+    case 'visualBlock':
+      return context === 'visual-block'
+        ? 'Return to block navigation'
+        : 'Select the whole block';
+    case 'documentStart':
+    case 'documentEnd':
+    case 'wordForward':
+    case 'wordBackward':
+    case 'wordEnd':
+    case 'lineStart':
+    case 'lineEnd':
+    case 'previousTextBlock':
+    case 'nextTextBlock':
+    case 'swapSelectionEnds':
+    case 'activeAnnotation':
+    case 'annotationMenu':
+    case 'comment':
+    case 'redline':
+    case 'markup':
+    case 'label':
+    case 'copy':
+    case 'cancel':
+    case 'help':
+      return vimSelectionShortcuts.shortcuts[actionId].description;
+  }
+}
+
+/** Parse an unknown bridge value into a registered Vim action identifier. */
+export function isVimSelectionActionId(
+  value: unknown,
+): value is VimSelectionActionId {
+  return typeof value === 'string'
+    && Object.prototype.hasOwnProperty.call(vimSelectionShortcuts.shortcuts, value);
+}
+
 /** Bind Vim selection handlers to the opted-in document focus surface. */
 export const useVimSelectionShortcuts = createShortcutScopeHook(vimSelectionShortcuts);

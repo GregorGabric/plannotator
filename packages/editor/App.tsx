@@ -323,6 +323,7 @@ const App: React.FC = () => {
   });
   const gridEnabled = useConfigValue('gridEnabled');
   const vimModeEnabled = useConfigValue('vimModeEnabled');
+  const vimHudEnabled = useConfigValue('vimHudEnabled');
   const [uiPrefs, setUiPrefs] = useState(() => getUIPreferences());
 
   // Plan-area width (inside the OverlayScrollArea, after sidebar/panel
@@ -4514,6 +4515,7 @@ const App: React.FC = () => {
                     mode={editorMode}
                     inputMethod={inputMethod}
                     vimModeEnabled={vimModeEnabled}
+                    vimHudEnabled={vimModeEnabled && vimHudEnabled}
                     globalAttachments={globalAttachments}
                     onAddGlobalAttachment={handleAddGlobalAttachment}
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
@@ -4548,6 +4550,7 @@ const App: React.FC = () => {
                     mode={editorMode}
                     inputMethod={inputMethod}
                     vimModeEnabled={vimModeEnabled}
+                    vimHudEnabled={vimModeEnabled && vimHudEnabled}
                     taterMode={taterMode}
                     gridEnabled={gridEnabled}
                     globalAttachments={globalAttachments}

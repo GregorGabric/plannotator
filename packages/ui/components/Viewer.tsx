@@ -127,6 +127,8 @@ interface ViewerProps {
   readOnly?: boolean;
   /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
   vimModeEnabled?: boolean;
+  /** Replace the compact Vim badge with the live video-style key HUD. */
+  vimHudEnabled?: boolean;
 }
 
 export interface ViewerHandle {
@@ -217,6 +219,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   allowImages = true,
   readOnly = false,
   vimModeEnabled = false,
+  vimHudEnabled = false,
 }, ref) => {
   const [copied, setCopied] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
@@ -429,6 +432,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   const vim = useVimSelection({
     containerRef,
     enabled: vimModeActive,
+    hudEnabled: vimHudEnabled,
     blocked: vimBlocked,
     activeMode: mode,
     contentVersion: blocks,
@@ -976,6 +980,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
             inputMethod={inputMethod}
             state={vim.state}
             focused={vim.focused}
+            hudEnabled={vimHudEnabled}
+            hudCommand={vim.hudCommand}
             helpOpen={vim.helpOpen}
             onCloseHelp={vim.closeHelp}
           />

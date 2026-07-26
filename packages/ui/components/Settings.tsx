@@ -666,6 +666,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
   const gridEnabled = useConfigValue('gridEnabled');
   const vimModeEnabled = useConfigValue('vimModeEnabled');
+  const vimHudEnabled = useConfigValue('vimHudEnabled');
   const [identity, setIdentity] = useState('');
   const [obsidian, setObsidian] = useState<ObsidianSettings>({
     enabled: false,
@@ -1721,6 +1722,16 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                           label="Vim controls"
                           description="Navigate and annotate documents with Vim-style keys. Off by default."
                         />
+                        {vimModeEnabled && (
+                          <div className="ml-5 border-l border-primary/20 pl-4">
+                            <ToggleSwitch
+                              checked={vimHudEnabled}
+                              onChange={(enabled) => configStore.set('vimHudEnabled', enabled)}
+                              label="Vim HUD"
+                              description="Show live keys, command history, and navigation context."
+                            />
+                          </div>
+                        )}
                         <div className="border-t border-border" />
                       </>
                     )}

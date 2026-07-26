@@ -8,13 +8,23 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  isVimSelectionActionId,
+  type VimSelectionHudContext,
+} from "../../shortcuts";
 import type { Annotation, EditorMode, ImageAttachment, InputMethod } from "../../types";
 import { AnnotationType } from "../../types";
 import { getIdentity } from "../../utils/identity";
+import {
+  createVimHudCommand,
+  getVimHudPhase,
+  type VimHudCommand,
+} from "../../utils/vimHud";
 import { AnnotationToolbar } from "../AnnotationToolbar";
 import { AttachmentsButton } from "../AttachmentsButton";
 import { CommentPopover, type CommentAskAIHandler } from "../CommentPopover";
 import { FloatingQuickLabelPicker } from "../FloatingQuickLabelPicker";
+import { VimKeyHud } from "../VimKeyHud";
 import type { ViewerHandle } from "../Viewer";
 import { useHtmlAnnotation } from "./useHtmlAnnotation";
 import {
@@ -48,6 +58,51 @@ function isBridgeReadyMessage(value: unknown): boolean {
     && value.type === `${PREFIX}ready`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function parseVimSelectionHudContext(
+  value: unknown,
+): VimSelectionHudContext | null {
+  return value === "inactive"
+    || value === "block"
+    || value === "inline"
+    || value === "text"
+    || value === "visual"
+    || value === "visual-block"
+    || value === "action"
+    ? value
+    : null;
+}
+
+interface VimBridgeCommand {
+  readonly actionId: Parameters<typeof createVimHudCommand>[1];
+  readonly key: string;
+  readonly context: VimSelectionHudContext;
+}
+
+function parseVimBridgeCommand(value: unknown): VimBridgeCommand | null {
+  if (
+    !isRecord(value)
+    || value.type !== `${PREFIX}vim-command`
+    || !isVimSelectionActionId(value.actionId)
+    || typeof value.key !== "string"
+  ) {
+    return null;
+  }
+  const context = parseVimSelectionHudContext(value.context);
+  return context
+    ? { actionId: value.actionId, key: value.key, context }
+    : null;
+}
+
+function parseVimBridgeState(value: unknown): VimSelectionHudContext | null {
+  return isRecord(value) && value.type === `${PREFIX}vim-state`
+    ? parseVimSelectionHudContext(value.phase)
+    : null;
+}
+
 /** Inputs for the sandboxed raw-HTML viewer and its parent-side annotation UI. */
 export interface HtmlViewerProps {
   rawHtml: string;
@@ -60,6 +115,8 @@ export interface HtmlViewerProps {
   inputMethod: InputMethod;
   /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
   vimModeEnabled?: boolean;
+  /** Replace the iframe-local compact badge with the shared live key HUD. */
+  vimHudEnabled?: boolean;
   globalAttachments?: ImageAttachment[];
   onAddGlobalAttachment?: (image: ImageAttachment) => void;
   onRemoveGlobalAttachment?: (path: string) => void;
@@ -96,6 +153,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       mode,
       inputMethod,
       vimModeEnabled = false,
+      vimHudEnabled = false,
       globalAttachments = [],
       onAddGlobalAttachment,
       onRemoveGlobalAttachment,
@@ -116,6 +174,12 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // Increment on every bridge-ready event so srcdoc navigations re-send
     // state even though the iframe element and its WindowProxy are reused.
     const [iframeReadyVersion, setIframeReadyVersion] = useState(0);
+    const [iframeFocused, setIframeFocused] = useState(false);
+    const [vimBridgePhase, setVimBridgePhase] =
+      useState<VimSelectionHudContext>("inactive");
+    const [vimHudCommand, setVimHudCommand] = useState<VimHudCommand | null>(null);
+    const vimHudSequenceRef = useRef(0);
+    const vimHudActive = vimModeEnabled && vimHudEnabled;
     const [globalCommentPopover, setGlobalCommentPopover] = useState<{
       anchorEl: HTMLElement;
       contextText: string;
@@ -154,11 +218,36 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         if (e.source !== iframeRef.current?.contentWindow) return;
         if (isBridgeReadyMessage(e.data)) {
           setIframeReadyVersion((version) => version + 1);
+          setVimBridgePhase("inactive");
+          setVimHudCommand(null);
+          return;
+        }
+        if (!vimHudActive) return;
+        const vimState = parseVimBridgeState(e.data);
+        if (vimState) {
+          setVimBridgePhase(vimState);
+          return;
+        }
+        const vimCommand = parseVimBridgeCommand(e.data);
+        if (vimCommand) {
+          vimHudSequenceRef.current += 1;
+          setVimHudCommand(createVimHudCommand(
+            vimHudSequenceRef.current,
+            vimCommand.actionId,
+            vimCommand.key,
+            vimCommand.context,
+          ));
         }
       }
       window.addEventListener("message", handler);
       return () => window.removeEventListener("message", handler);
-    }, []);
+    }, [vimHudActive]);
+
+    useEffect(() => {
+      if (vimHudActive) return;
+      setVimBridgePhase("inactive");
+      setVimHudCommand(null);
+    }, [vimHudActive]);
 
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
@@ -180,10 +269,15 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
       iframeRef.current?.contentWindow?.postMessage(
-        { type: `${PREFIX}set-vim-mode`, enabled: vimModeEnabled, mode },
+        {
+          type: `${PREFIX}set-vim-mode`,
+          enabled: vimModeEnabled,
+          hudEnabled: vimHudEnabled,
+          mode,
+        },
         "*",
       );
-    }, [iframeReadyVersion, mode, vimModeEnabled]);
+    }, [iframeReadyVersion, mode, vimHudEnabled, vimModeEnabled]);
 
     const vimOverlayWasOpenRef = useRef(false);
     useEffect(() => {
@@ -336,9 +430,23 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               outline: vimModeEnabled ? "none" : undefined,
             }}
             title={title}
+            onFocus={() => setIframeFocused(true)}
+            onBlur={() => setIframeFocused(false)}
           />
           </article>
         </div>
+
+        {vimHudActive
+          && vimBridgePhase !== "inactive"
+          && (iframeFocused || vimBridgePhase === "action")
+          && createPortal(
+            <VimKeyHud
+              command={vimHudCommand}
+              phase={getVimHudPhase(vimBridgePhase, vimHudCommand?.actionId)}
+              inputMethod={inputMethod}
+            />,
+            document.body,
+          )}
 
         {/* Toolbar portal */}
         {hook.toolbarState &&

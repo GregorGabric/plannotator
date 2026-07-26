@@ -7,7 +7,10 @@ import {
   type MouseEvent as ReactMouseEvent,
   type RefObject,
 } from 'react';
-import { useVimSelectionShortcuts } from '../shortcuts';
+import {
+  useVimSelectionShortcuts,
+  type VimSelectionActionId,
+} from '../shortcuts';
 import type { EditorMode } from '../types';
 import {
   buildSemanticTargetGraph,
@@ -21,6 +24,10 @@ import {
   type SemanticTargetGraph,
 } from '../utils/blockTargeting';
 import { isDocumentKeyboardControl } from '../utils/domSelection';
+import {
+  createVimHudCommand,
+  type VimHudCommand,
+} from '../utils/vimHud';
 import {
   applyNativeTextSelection,
   createInitialVimSelectionState,
@@ -44,6 +51,7 @@ import {
 export interface UseVimSelectionOptions {
   readonly containerRef: RefObject<HTMLElement | null>;
   readonly enabled: boolean;
+  readonly hudEnabled: boolean;
   readonly blocked: boolean;
   readonly activeMode: EditorMode;
   /** Identity that changes when the rendered document is replaced. */
@@ -62,6 +70,7 @@ export interface UseVimSelectionReturn {
   readonly state: VimSelectionState;
   readonly focused: boolean;
   readonly helpOpen: boolean;
+  readonly hudCommand: VimHudCommand | null;
   readonly activeTarget: SemanticTarget | null;
   readonly onFocus: (event: ReactFocusEvent<HTMLElement>) => void;
   readonly onBlur: (event: ReactFocusEvent<HTMLElement>) => void;
@@ -231,6 +240,7 @@ function applyVisualBlockSelection(
 export function useVimSelection({
   containerRef,
   enabled,
+  hudEnabled,
   blocked,
   activeMode,
   contentVersion,
@@ -244,6 +254,8 @@ export function useVimSelection({
   const stateRef = useRef(state);
   const [focused, setFocused] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [hudCommand, setHudCommand] = useState<VimHudCommand | null>(null);
+  const hudSequenceRef = useRef(0);
   const restoreFocusRef = useRef(false);
   const wasBlockedRef = useRef(blocked);
   const pointerFocusRef = useRef(false);
@@ -283,6 +295,7 @@ export function useVimSelection({
       setState(createInitialVimSelectionState());
       setFocused(false);
       setHelpOpen(false);
+      setHudCommand(null);
       window.getSelection()?.removeAllRanges();
       return;
     }
@@ -303,6 +316,10 @@ export function useVimSelection({
     initializeSemanticNavigation,
     setState,
   ]);
+
+  useEffect(() => {
+    setHudCommand(null);
+  }, [contentVersion, hudEnabled]);
 
   useEffect(() => {
     const wasBlocked = wasBlockedRef.current;
@@ -823,7 +840,25 @@ export function useVimSelection({
     && !event.altKey
   ), [blocked, enabled, focused]);
 
-  const onKeyDown = useCallback((event: KeyboardEvent) => {
+  const recordHudCommand = useCallback((
+    actionId: VimSelectionActionId,
+    event: KeyboardEvent,
+    context: VimSelectionState['phase'],
+  ) => {
+    if (!hudEnabled) return;
+    hudSequenceRef.current += 1;
+    setHudCommand(createVimHudCommand(
+      hudSequenceRef.current,
+      actionId,
+      event.key,
+      context,
+    ));
+  }, [hudEnabled]);
+
+  const onKeyDown = useCallback((
+    event: KeyboardEvent,
+    actionId: VimSelectionActionId,
+  ) => {
     if (!canHandleShortcut(event)) return;
 
     if (stateRef.current.phase === 'action') {
@@ -834,6 +869,7 @@ export function useVimSelection({
     if (!container) return;
     const graph = buildSemanticTargetGraph(container);
     const key = event.key;
+    const context = stateRef.current.phase;
     let handled = false;
 
     if (helpOpen) {
@@ -868,6 +904,7 @@ export function useVimSelection({
     }
 
     if (handled) {
+      recordHudCommand(actionId, event, context);
       event.preventDefault();
       event.stopPropagation();
     }
@@ -881,47 +918,53 @@ export function useVimSelection({
     helpOpen,
     initializeSemanticNavigation,
     jumpToDocumentBlock,
+    recordHudCommand,
   ]);
 
   const onDocumentStart = useCallback((event: KeyboardEvent) => {
     if (!canHandleShortcut(event) || stateRef.current.phase === 'action') return;
     const container = containerRef.current;
     if (!container) return;
+    const context = stateRef.current.phase;
     if (jumpToDocumentBlock(buildSemanticTargetGraph(container), false)) {
+      recordHudCommand('documentStart', event, context);
       event.preventDefault();
       event.stopPropagation();
     }
-  }, [canHandleShortcut, containerRef, jumpToDocumentBlock]);
+  }, [canHandleShortcut, containerRef, jumpToDocumentBlock, recordHudCommand]);
 
-  const shortcutHandler = { when: canHandleShortcut, handle: onKeyDown };
+  const shortcutHandler = (actionId: VimSelectionActionId) => ({
+    when: canHandleShortcut,
+    handle: (event: KeyboardEvent) => onKeyDown(event, actionId),
+  });
   useVimSelectionShortcuts({
     target: containerRef.current,
     handlers: {
-      moveDown: shortcutHandler,
-      moveUp: shortcutHandler,
+      moveDown: shortcutHandler('moveDown'),
+      moveUp: shortcutHandler('moveUp'),
       documentStart: { when: canHandleShortcut, handle: onDocumentStart },
-      documentEnd: shortcutHandler,
-      moveOut: shortcutHandler,
-      refine: shortcutHandler,
-      visual: shortcutHandler,
-      visualBlock: shortcutHandler,
-      wordForward: shortcutHandler,
-      wordBackward: shortcutHandler,
-      wordEnd: shortcutHandler,
-      lineStart: shortcutHandler,
-      lineEnd: shortcutHandler,
-      previousTextBlock: shortcutHandler,
-      nextTextBlock: shortcutHandler,
-      swapSelectionEnds: shortcutHandler,
-      activeAnnotation: shortcutHandler,
-      annotationMenu: shortcutHandler,
-      comment: shortcutHandler,
-      redline: shortcutHandler,
-      markup: shortcutHandler,
-      label: shortcutHandler,
-      copy: shortcutHandler,
-      cancel: shortcutHandler,
-      help: shortcutHandler,
+      documentEnd: shortcutHandler('documentEnd'),
+      moveOut: shortcutHandler('moveOut'),
+      refine: shortcutHandler('refine'),
+      visual: shortcutHandler('visual'),
+      visualBlock: shortcutHandler('visualBlock'),
+      wordForward: shortcutHandler('wordForward'),
+      wordBackward: shortcutHandler('wordBackward'),
+      wordEnd: shortcutHandler('wordEnd'),
+      lineStart: shortcutHandler('lineStart'),
+      lineEnd: shortcutHandler('lineEnd'),
+      previousTextBlock: shortcutHandler('previousTextBlock'),
+      nextTextBlock: shortcutHandler('nextTextBlock'),
+      swapSelectionEnds: shortcutHandler('swapSelectionEnds'),
+      activeAnnotation: shortcutHandler('activeAnnotation'),
+      annotationMenu: shortcutHandler('annotationMenu'),
+      comment: shortcutHandler('comment'),
+      redline: shortcutHandler('redline'),
+      markup: shortcutHandler('markup'),
+      label: shortcutHandler('label'),
+      copy: shortcutHandler('copy'),
+      cancel: shortcutHandler('cancel'),
+      help: shortcutHandler('help'),
     },
   });
 
@@ -949,6 +992,7 @@ export function useVimSelection({
     state,
     focused,
     helpOpen,
+    hudCommand,
     activeTarget,
     onFocus,
     onBlur,

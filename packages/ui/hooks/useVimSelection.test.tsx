@@ -9,16 +9,23 @@ const hookModule = hasDom ? await import('./useVimSelection') : null;
 
 interface VimHarnessProps {
   enabled: boolean;
+  hudEnabled?: boolean;
   blocked?: boolean;
   onRange: (text: string, mode?: EditorMode) => void;
 }
 
-function VimHarness({ enabled, blocked = false, onRange }: VimHarnessProps) {
+function VimHarness({
+  enabled,
+  hudEnabled = false,
+  blocked = false,
+  onRange,
+}: VimHarnessProps) {
   if (!hookModule) throw new Error('DOM test environment is not registered');
   const articleRef = useRef<HTMLElement | null>(null);
   const vim = hookModule.useVimSelection({
     containerRef: articleRef,
     enabled,
+    hudEnabled,
     blocked,
     activeMode: 'selection',
     onHighlightRange: (range, mode) => onRange(range.toString(), mode),
@@ -33,6 +40,8 @@ function VimHarness({ enabled, blocked = false, onRange }: VimHarnessProps) {
       tabIndex={enabled ? 0 : undefined}
       data-phase={vim.state.phase}
       data-target-key={vim.activeTarget?.key ?? ''}
+      data-hud-key={vim.hudCommand?.key ?? ''}
+      data-hud-command={vim.hudCommand?.description ?? ''}
       onFocus={vim.onFocus}
       onBlur={vim.onBlur}
       onMouseDown={vim.onMouseDown}
@@ -99,6 +108,20 @@ describe.if(hasDom)('useVimSelection', () => {
     expect(deleteAction.defaultPrevented).toBe(false);
     expect(article.dataset.phase).toBe('inactive');
     expect(actions).toEqual([]);
+    act(() => root.unmount());
+  });
+
+  test('does not retain handled commands when the optional HUD is disabled', () => {
+    const { article, root } = mountHarness({
+      enabled: true,
+      hudEnabled: false,
+      onRange: () => {},
+    });
+
+    act(() => article.focus());
+    act(() => { keydown(article, 'j'); });
+    expect(article.dataset.phase).toBe('block');
+    expect(article.dataset.hudKey).toBe('');
     act(() => root.unmount());
   });
 
@@ -224,6 +247,7 @@ describe.if(hasDom)('useVimSelection', () => {
     const actions: Array<{ text: string; mode?: EditorMode }> = [];
     const { article, root } = mountHarness({
       enabled: true,
+      hudEnabled: true,
       onRange: (text, mode) => actions.push({ text, mode }),
     });
 
@@ -231,21 +255,28 @@ describe.if(hasDom)('useVimSelection', () => {
     expect(article.dataset.targetKey).toBe('intro:block');
     act(() => { keydown(article, 'j'); });
     expect(article.dataset.targetKey).toBe('matrix:table');
+    expect(article.dataset.hudKey).toBe('j');
+    expect(article.dataset.hudCommand).toBe('Next block');
     act(() => { keydown(article, 'k'); });
     expect(article.dataset.targetKey).toBe('intro:block');
+    expect(article.dataset.hudCommand).toBe('Previous block');
     act(() => { keydown(article, 'G'); });
     expect(article.dataset.targetKey).toBe('code:code');
+    expect(article.dataset.hudCommand).toBe('End of document');
     act(() => {
       keydown(article, 'g');
       keydown(article, 'g');
     });
     expect(article.dataset.targetKey).toBe('intro:block');
+    expect(article.dataset.hudKey).toBe('gg');
+    expect(article.dataset.hudCommand).toBe('Start of document');
 
     act(() => { keydown(article, 'V'); });
     expect(article.dataset.phase).toBe('visual-block');
     expect(window.getSelection()?.toString()).toContain('Alpha');
     act(() => { keydown(article, 'j'); });
     expect(window.getSelection()?.toString()).toContain('B2');
+    expect(article.dataset.hudCommand).toBe('Extend to next block');
     act(() => { keydown(article, 'd'); });
     expect(actions).toHaveLength(1);
     expect(actions[0]?.mode).toBe('redline');

@@ -10,6 +10,8 @@ import {
   resolveTextPosition,
   type VimSelectionState,
 } from '../utils/vimNavigation';
+import { getVimHudPhase, type VimHudCommand } from '../utils/vimHud';
+import { VimKeyHud } from './VimKeyHud';
 
 interface CursorPosition {
   readonly top: number;
@@ -23,6 +25,8 @@ export interface VimModeOverlayProps {
   inputMethod: InputMethod;
   state: VimSelectionState;
   focused: boolean;
+  hudEnabled: boolean;
+  hudCommand: VimHudCommand | null;
   helpOpen: boolean;
   onCloseHelp: () => void;
 }
@@ -36,6 +40,8 @@ export function VimModeOverlay({
   inputMethod,
   state,
   focused,
+  hudEnabled,
+  hudCommand,
   helpOpen,
   onCloseHelp,
 }: VimModeOverlayProps) {
@@ -100,6 +106,7 @@ export function VimModeOverlay({
       ? 'NORMAL'
       : state.phase.toUpperCase();
   const inputLabel = inputMethod === 'pinpoint' ? 'PINPOINT' : 'SELECT';
+  const hudPhase = getVimHudPhase(state.phase, hudCommand?.actionId);
 
   return (
     <>
@@ -116,7 +123,16 @@ export function VimModeOverlay({
         />
       )}
 
-      {active && createPortal(
+      {active && hudEnabled && createPortal(
+        <VimKeyHud
+          command={hudCommand}
+          phase={hudPhase}
+          inputMethod={inputMethod}
+        />,
+        document.body,
+      )}
+
+      {active && !hudEnabled && createPortal(
         <div
           data-vim-mode-badge
           aria-live="polite"
