@@ -349,9 +349,12 @@ editors, `Tab`, and all pointer interactions retain their native behavior.
 The document takes focus automatically when the page is otherwise neutral;
 press `Escape` from app chrome to return to it without clicking.
 An additional default-off **Vim HUD** toggle appears beneath Vim controls. It
-uses the product-demo HUD styling to show recent handled keys, the current
-block/line/word/Visual phase, and the command meaning without capturing text
-typed into comments or other controls.
+uses the product-demo styling for the live target reticle and navigation
+context. Its bottom-right **Key panel** is independently hideable while the
+reticle remains active; `?` still opens the complete key map on demand. The
+panel shows recent handled keys, the current block/line/word/Visual phase, and
+the command meaning without capturing text typed into comments or other
+controls.
 See [Vim controls](docs/vim-controls.md) for the interaction contract and
 implementation architecture.
 

@@ -74,6 +74,12 @@ tell when `j` / `k` move by blocks versus lines. Raw HTML mirrors the same
 target treatment inside its sandboxed iframe while using the shared parent key
 HUD and key map.
 
+The bottom-right **Key panel** is independently persisted and defaults on for
+backward compatibility. Its Hide control removes only that panel; the reticle,
+cursor, and Vim navigation remain active. Users can restore it in
+**Settings → Vim**, or press `?` while it is hidden to temporarily open the
+complete key map. Closing the map returns to the reticle-only HUD.
+
 Pointer Pinpoint and keyboard navigation resolve through the same canonical
 graph, which owns target identity, hierarchy, labels, annotation ranges, and
 overlay elements. Table rows, cells, and inline formatting remain keyboard
@@ -115,7 +121,8 @@ document. No global letter-key listener is installed. Disabling the setting
 removes the document focus surface and leaves existing behavior unchanged.
 Vim HUD is independently cookie-persisted, default off, and only records or
 renders commands while enabled. Text entered into annotation composers is
-neither captured nor displayed.
+neither captured nor displayed. The HUD key panel is separately
+cookie-persisted, defaults on, and never controls the reticle.
 
 Both controls live in their own **Settings → Vim** panel. The Shortcuts panel
 is reserved for the key-binding reference.

@@ -235,6 +235,7 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
     const root = createRoot(host);
+    let keyPanelEnabled = true;
 
     await act(async () => {
       root.render(
@@ -252,6 +253,7 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
           disableCodePathValidation
           vimModeEnabled
           vimHudEnabled
+          onVimHudKeyPanelChange={(enabled) => { keyPanelEnabled = enabled; }}
         />,
       );
     });
@@ -319,8 +321,64 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
 
     act(() => { keydown(article, '?'); });
     expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
-    act(() => { keydown(article, '?'); });
+
+    const hideButton = document.querySelector<HTMLButtonElement>(
+      '[data-vim-key-panel-hide]',
+    );
+    expect(hideButton?.getAttribute('title')).toContain('keep target reticle');
+    act(() => { hideButton?.click(); });
+    expect(keyPanelEnabled).toBe(false);
     expect(document.querySelector('[data-vim-key-map]')).toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test('keeps the HUD reticle active when its persistent key panel is hidden', async () => {
+    if (!viewerModule || !parserModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const markdown = '# Reticle only\n\nNavigate without a persistent legend.';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <viewerModule.Viewer
+          blocks={parserModule.parseMarkdownToBlocks(markdown)}
+          markdown={markdown}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+          taterMode={false}
+          stickyActions={false}
+          disableCodePathValidation
+          vimModeEnabled
+          vimHudEnabled
+          vimHudKeyPanelEnabled={false}
+        />,
+      );
+    });
+
+    const article = host.querySelector<HTMLElement>('[data-vim-mode="enabled"]');
+    if (!article) throw new Error('Vim article missing');
+    act(() => article.focus());
+    act(() => { keydown(article, 'j'); });
+
+    expect(host.querySelector('[data-vim-target-reticle]')).not.toBeNull();
+    expect(document.querySelector('[data-vim-key-hud]')).toBeNull();
+
+    act(() => { keydown(article, '?'); });
+    expect(document.querySelector('[data-vim-key-hud]')).not.toBeNull();
+    expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
+
+    act(() => { keydown(article, '?'); });
+    expect(document.querySelector('[data-vim-key-hud]')).toBeNull();
+    expect(host.querySelector('[data-vim-target-reticle]')).not.toBeNull();
 
     act(() => root.unmount());
     host.remove();

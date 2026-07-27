@@ -207,16 +207,20 @@ function ToggleSwitch({ checked, onChange, label, description, disabled = false 
 interface VimSettingsTabProps {
   readonly vimModeEnabled: boolean;
   readonly vimHudEnabled: boolean;
+  readonly vimHudKeyPanelEnabled: boolean;
   readonly onVimModeChange: (enabled: boolean) => void;
   readonly onVimHudChange: (enabled: boolean) => void;
+  readonly onVimHudKeyPanelChange: (enabled: boolean) => void;
 }
 
 /** First-class Vim configuration, separate from the shortcut reference. */
 function VimSettingsTab({
   vimModeEnabled,
   vimHudEnabled,
+  vimHudKeyPanelEnabled,
   onVimModeChange,
   onVimHudChange,
+  onVimHudKeyPanelChange,
 }: VimSettingsTabProps) {
   return (
     <div className="space-y-5">
@@ -241,10 +245,22 @@ function VimSettingsTab({
           label="Vim HUD"
           description={
             vimModeEnabled
-              ? 'Show the target reticle, live keypress feedback, and navigation context.'
-              : 'Enable Vim controls first to use the target reticle and live key guide.'
+              ? 'Show the four-corner target reticle and navigation context.'
+              : 'Enable Vim controls first to use the target reticle.'
           }
           disabled={!vimModeEnabled}
+        />
+        <div className="border-t border-border" />
+        <ToggleSwitch
+          checked={vimModeEnabled && vimHudEnabled && vimHudKeyPanelEnabled}
+          onChange={onVimHudKeyPanelChange}
+          label="Key panel"
+          description={
+            vimModeEnabled && vimHudEnabled
+              ? 'Show the bottom-right live keypress legend and command panel.'
+              : 'Enable the Vim HUD first to use the live keypress legend.'
+          }
+          disabled={!vimModeEnabled || !vimHudEnabled}
         />
       </div>
 
@@ -260,7 +276,8 @@ function VimSettingsTab({
               <span className="font-mono text-foreground">Esc</span> to return to the document, then
               use <span className="font-mono text-foreground">j</span> and{' '}
               <span className="font-mono text-foreground">k</span> to move by block. Press{' '}
-              <span className="font-mono text-foreground">?</span> for the complete key map.
+              <span className="font-mono text-foreground">?</span> for the complete key map,
+              even when the Key panel is hidden.
             </p>
           </div>
         </div>
@@ -752,6 +769,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
   const gridEnabled = useConfigValue('gridEnabled');
   const vimModeEnabled = useConfigValue('vimModeEnabled');
   const vimHudEnabled = useConfigValue('vimHudEnabled');
+  const vimHudKeyPanelEnabled = useConfigValue('vimHudKeyPanelEnabled');
   const [identity, setIdentity] = useState('');
   const [obsidian, setObsidian] = useState<ObsidianSettings>({
     enabled: false,
@@ -1819,8 +1837,11 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                   <VimSettingsTab
                     vimModeEnabled={vimModeEnabled}
                     vimHudEnabled={vimHudEnabled}
+                    vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}
                     onVimModeChange={(enabled) => configStore.set('vimModeEnabled', enabled)}
                     onVimHudChange={(enabled) => configStore.set('vimHudEnabled', enabled)}
+                    onVimHudKeyPanelChange={(enabled) =>
+                      configStore.set('vimHudKeyPanelEnabled', enabled)}
                   />
                 )}
 

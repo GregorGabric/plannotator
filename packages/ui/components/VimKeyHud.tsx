@@ -1,3 +1,4 @@
+import { EyeOff } from 'lucide-react';
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { InputMethod } from '../types';
 import {
@@ -255,6 +256,8 @@ export interface VimKeyHudProps {
   readonly inputMethod: InputMethod;
   readonly expanded: boolean;
   readonly onExpandedChange: (expanded: boolean) => void;
+  /** Hide the persistent key panel while leaving the targeting HUD enabled. */
+  readonly onHide?: () => void;
   /** Notify the owner when keyboard focus leaves the HUD for another surface. */
   readonly onFocusLeave?: () => void;
 }
@@ -271,6 +274,7 @@ export function VimKeyHud({
   inputMethod,
   expanded,
   onExpandedChange,
+  onHide,
   onFocusLeave,
 }: VimKeyHudProps) {
   const [history, setHistory] = useState<readonly VimHudCommand[]>([]);
@@ -454,6 +458,38 @@ export function VimKeyHud({
             {phase} {inputLabel}: {keyLabel}, {description}
           </span>
         </div>
+
+        {onHide && (
+          <button
+            type="button"
+            data-vim-key-panel-hide
+            aria-label="Hide Vim key panel"
+            title="Hide key panel (keep target reticle)"
+            onPointerDown={(event) => {
+              // Preserve document ownership for pointer users. Keyboard
+              // activation is handed back by the owner after hiding.
+              event.preventDefault();
+            }}
+            onClick={onHide}
+            style={{
+              width: 40,
+              height: 40,
+              display: 'grid',
+              flex: '0 0 auto',
+              placeItems: 'center',
+              marginLeft: 10,
+              padding: 0,
+              border: '1px solid rgba(196,181,253,0.16)',
+              borderRadius: 10,
+              color: '#aaa0ba',
+              background: 'rgba(17,14,24,0.2)',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+            }}
+          >
+            <EyeOff size={15} strokeWidth={1.8} aria-hidden="true" />
+          </button>
+        )}
 
         <button
           type="button"

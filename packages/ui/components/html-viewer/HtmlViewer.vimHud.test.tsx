@@ -119,6 +119,48 @@ describe.if(hasDom)('HtmlViewer Vim HUD bridge', () => {
           mode="selection"
           inputMethod="pinpoint"
           vimModeEnabled
+          vimHudEnabled
+          vimHudKeyPanelEnabled={false}
+        />,
+      );
+    });
+    act(() => iframe.focus());
+    expect(document.querySelector('[data-vim-key-hud]')).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: iframe.contentWindow,
+        data: {
+          type: 'plannotator-bridge-vim-help',
+          open: true,
+        },
+      }));
+    });
+    expect(document.querySelector('[data-vim-key-hud]')).not.toBeNull();
+    expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: iframe.contentWindow,
+        data: {
+          type: 'plannotator-bridge-vim-help',
+          open: false,
+        },
+      }));
+    });
+    expect(document.querySelector('[data-vim-key-hud]')).toBeNull();
+
+    await act(async () => {
+      root.render(
+        <htmlViewerModule.HtmlViewer
+          rawHtml="<html><body><p>First</p><p>Second</p></body></html>"
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+          vimModeEnabled
           vimHudEnabled={false}
         />,
       );

@@ -129,6 +129,10 @@ interface ViewerProps {
   vimModeEnabled?: boolean;
   /** Replace the compact Vim badge with the live video-style key HUD. */
   vimHudEnabled?: boolean;
+  /** Show the bottom-right key panel without affecting the HUD reticle. */
+  vimHudKeyPanelEnabled?: boolean;
+  /** Persist a user request to hide the bottom-right key panel. */
+  onVimHudKeyPanelChange?: (enabled: boolean) => void;
 }
 
 export interface ViewerHandle {
@@ -226,6 +230,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   readOnly = false,
   vimModeEnabled = false,
   vimHudEnabled = false,
+  vimHudKeyPanelEnabled = true,
+  onVimHudKeyPanelChange,
 }, ref) => {
   const [copied, setCopied] = useState(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
@@ -1033,10 +1039,16 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
             state={vim.state}
             focused={vim.focused}
             hudEnabled={vimHudEnabled}
+            keyPanelEnabled={vimHudKeyPanelEnabled}
             hudCommand={vim.hudCommand}
             activeTarget={vim.activeTarget}
             helpOpen={vim.helpOpen}
             onHelpOpenChange={vim.onHelpOpenChange}
+            onKeyPanelHide={
+              onVimHudKeyPanelChange
+                ? () => onVimHudKeyPanelChange(false)
+                : undefined
+            }
             onHudFocusLeave={vim.onHudFocusLeave}
           />
         )}

@@ -28,10 +28,12 @@ export interface VimModeOverlayProps {
   state: VimSelectionState;
   focused: boolean;
   hudEnabled: boolean;
+  keyPanelEnabled: boolean;
   hudCommand: VimHudCommand | null;
   activeTarget: SemanticTarget | null;
   helpOpen: boolean;
   onHelpOpenChange: (open: boolean) => void;
+  onKeyPanelHide?: () => void;
   onHudFocusLeave: () => void;
 }
 
@@ -45,10 +47,12 @@ export function VimModeOverlay({
   state,
   focused,
   hudEnabled,
+  keyPanelEnabled,
   hudCommand,
   activeTarget,
   helpOpen,
   onHelpOpenChange,
+  onKeyPanelHide,
   onHudFocusLeave,
 }: VimModeOverlayProps) {
   const [cursorPosition, setCursorPosition] = useState<CursorPosition | null>(null);
@@ -106,7 +110,8 @@ export function VimModeOverlay({
 
   const active = state.phase !== 'inactive'
     && (focused || state.phase === 'action');
-  const hudVisible = hudEnabled && (active || helpOpen);
+  const keyPanelVisible = hudEnabled
+    && (helpOpen || (keyPanelEnabled && active));
   const phaseLabel = state.phase === 'visual-block'
     ? 'VISUAL BLOCK'
     : state.phase === 'text'
@@ -139,13 +144,21 @@ export function VimModeOverlay({
         />
       )}
 
-      {hudVisible && createPortal(
+      {keyPanelVisible && createPortal(
         <VimKeyHud
           command={hudCommand}
           phase={hudPhase}
           inputMethod={inputMethod}
           expanded={helpOpen}
           onExpandedChange={onHelpOpenChange}
+          onHide={
+            onKeyPanelHide
+              ? () => {
+                onHelpOpenChange(false);
+                onKeyPanelHide();
+              }
+              : undefined
+          }
           onFocusLeave={onHudFocusLeave}
         />,
         document.body,

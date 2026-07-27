@@ -126,6 +126,10 @@ export interface HtmlViewerProps {
   vimModeEnabled?: boolean;
   /** Replace the iframe-local compact badge with the shared live key HUD. */
   vimHudEnabled?: boolean;
+  /** Show the parent key panel without affecting the iframe HUD reticle. */
+  vimHudKeyPanelEnabled?: boolean;
+  /** Persist a user request to hide the parent key panel. */
+  onVimHudKeyPanelChange?: (enabled: boolean) => void;
   globalAttachments?: ImageAttachment[];
   onAddGlobalAttachment?: (image: ImageAttachment) => void;
   onRemoveGlobalAttachment?: (path: string) => void;
@@ -163,6 +167,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       inputMethod,
       vimModeEnabled = false,
       vimHudEnabled = false,
+      vimHudKeyPanelEnabled = true,
+      onVimHudKeyPanelChange,
       globalAttachments = [],
       onAddGlobalAttachment,
       onRemoveGlobalAttachment,
@@ -504,7 +510,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         </div>
 
         {vimHudActive
-          && (vimBridgePhase !== "inactive" || vimHelpOpen)
+          && (vimHelpOpen || (
+            vimHudKeyPanelEnabled
+            && vimBridgePhase !== "inactive"
+          ))
           && (iframeFocused || vimBridgePhase === "action" || vimHelpOpen)
           && createPortal(
             <VimKeyHud
@@ -513,6 +522,14 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               inputMethod={inputMethod}
               expanded={vimHelpOpen}
               onExpandedChange={handleVimHelpOpenChange}
+              onHide={
+                onVimHudKeyPanelChange
+                  ? () => {
+                    handleVimHelpOpenChange(false);
+                    onVimHudKeyPanelChange(false);
+                  }
+                  : undefined
+              }
               onFocusLeave={handleVimHudFocusLeave}
             />,
             document.body,

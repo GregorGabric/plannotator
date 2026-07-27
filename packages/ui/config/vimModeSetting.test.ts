@@ -19,6 +19,8 @@ describe('Vim mode setting', () => {
     expect(SETTINGS.vimModeEnabled.fromCookie()).toBeUndefined();
     expect(SETTINGS.vimHudEnabled.defaultValue).toBe(false);
     expect(SETTINGS.vimHudEnabled.fromCookie()).toBeUndefined();
+    expect(SETTINGS.vimHudKeyPanelEnabled.defaultValue).toBe(true);
+    expect(SETTINGS.vimHudKeyPanelEnabled.fromCookie()).toBeUndefined();
   });
 
   test('round-trips only explicit boolean values', () => {
@@ -50,5 +52,16 @@ describe('Vim mode setting', () => {
 
     values.set('plannotator-vim-hud-enabled', 'unexpected');
     expect(SETTINGS.vimHudEnabled.fromCookie()).toBeUndefined();
+
+    SETTINGS.vimHudKeyPanelEnabled.toCookie(false);
+    expect(values.get('plannotator-vim-hud-key-panel-enabled')).toBe('false');
+    expect(SETTINGS.vimHudKeyPanelEnabled.fromCookie()).toBe(false);
+
+    SETTINGS.vimHudKeyPanelEnabled.toCookie(true);
+    expect(values.get('plannotator-vim-hud-key-panel-enabled')).toBe('true');
+    expect(SETTINGS.vimHudKeyPanelEnabled.fromCookie()).toBe(true);
+
+    values.set('plannotator-vim-hud-key-panel-enabled', 'unexpected');
+    expect(SETTINGS.vimHudKeyPanelEnabled.fromCookie()).toBeUndefined();
   });
 });
