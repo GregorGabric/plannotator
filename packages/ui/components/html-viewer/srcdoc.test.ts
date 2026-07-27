@@ -217,6 +217,16 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
       .toBe("BLOCK · PINPOINT");
 
+    const tab = new KeyboardEvent("keydown", {
+      key: "Tab",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.body.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+    expect(document.querySelector(".plannotator-pinpoint-hover")?.textContent)
+      .toBe("Keyboard document");
+
     const move = new KeyboardEvent("keydown", {
       key: "j",
       bubbles: true,
@@ -608,6 +618,144 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       enabled: false,
     });
     window.removeEventListener("message", capture);
+    document.body.replaceChildren();
+  });
+
+  test("routes Vim yank text to the trusted parent without sandbox clipboard access", async () => {
+    document.body.innerHTML = "<h1>Keyboard review fixture</h1><p>After</p>";
+    const copyMessages: Array<Record<string, unknown>> = [];
+    const capture = (event: MessageEvent) => {
+      const data = bridgeMessageData(event);
+      if (data?.type === "plannotator-bridge-vim-copy") {
+        copyMessages.push(data);
+      }
+    };
+    window.addEventListener("message", capture);
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: true,
+      hudEnabled: true,
+    });
+    postBridge({ type: "plannotator-bridge-focus-vim" });
+    for (const key of ["V", "y"]) {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    window.removeEventListener("message", capture);
+
+    expect(copyMessages).toContainEqual({
+      type: "plannotator-bridge-vim-copy",
+      text: "Keyboard review fixture",
+    });
+    const reticle = document.querySelector<HTMLElement>(
+      "[data-plannotator-vim-reticle]",
+    );
+    expect(reticle?.dataset.vimTargetPhase).toBe("block");
+    expect(reticle?.dataset.vimTargetLabel).toBe("BLOCK · HEADING");
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.replaceChildren();
+  });
+
+  test("restores the committed Visual range after annotation markup mutates the DOM", () => {
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.innerHTML = "<p>Alpha bravo charlie</p>";
+    postBridge({
+      type: "plannotator-bridge-set-input-method",
+      method: "drag",
+    });
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: true,
+      hudEnabled: false,
+    });
+    postBridge({ type: "plannotator-bridge-focus-vim" });
+
+    for (const key of ["v", "w", "c"]) {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+    expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
+      .toBe("ACTION · SELECT");
+
+    postBridge({
+      type: "plannotator-bridge-create-mark",
+      id: "vim-committed-range",
+      annotationType: "comment",
+    });
+
+    expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
+      .toBe("VISUAL · SELECT");
+    expect(window.getSelection()?.toString()).toBe("Alpha ");
+    expect(
+      document.querySelector('[data-bind-id="vim-committed-range"]')?.textContent,
+    ).toBe("Alpha ");
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.replaceChildren();
+  });
+
+  test("restores a whole-block Visual range after annotation markup mutates the DOM", () => {
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
+    document.body.innerHTML = "<p>Whole block target</p><p>After</p>";
+    postBridge({
+      type: "plannotator-bridge-set-input-method",
+      method: "drag",
+    });
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: true,
+      hudEnabled: false,
+    });
+    postBridge({ type: "plannotator-bridge-focus-vim" });
+
+    for (const key of ["V", "c"]) {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+    expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
+      .toBe("ACTION · SELECT");
+
+    postBridge({
+      type: "plannotator-bridge-create-mark",
+      id: "vim-committed-block-range",
+      annotationType: "comment",
+    });
+
+    expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
+      .toBe("VISUAL BLOCK · SELECT");
+    expect(window.getSelection()?.toString()).toBe("Whole block target");
+    expect(
+      document.querySelector('[data-bind-id="vim-committed-block-range"]')?.textContent,
+    ).toBe("Whole block target");
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-mode",
+      enabled: false,
+    });
     document.body.replaceChildren();
   });
 });

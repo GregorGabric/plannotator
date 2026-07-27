@@ -175,6 +175,88 @@ describe.if(hasDom)('useVimSelection', () => {
     act(() => root.unmount());
   });
 
+  test('opens the annotation toolbar with both m and Space overrides', () => {
+    const actions: Array<{ text: string; mode?: EditorMode }> = [];
+    const first = mountHarness({
+      enabled: true,
+      onRange: (text, mode) => actions.push({ text, mode }),
+    });
+
+    act(() => first.article.focus());
+    let markupEvent: KeyboardEvent | null = null;
+    act(() => { markupEvent = keydown(first.article, 'm'); });
+    expect(markupEvent?.defaultPrevented).toBe(true);
+    expect(actions).toEqual([{ text: 'Alpha bravo charlie', mode: 'selection' }]);
+    expect(first.article.dataset.phase).toBe('action');
+    act(() => first.root.unmount());
+    first.host.remove();
+
+    const second = mountHarness({
+      enabled: true,
+      onRange: (text, mode) => actions.push({ text, mode }),
+    });
+    act(() => second.article.focus());
+    let menuEvent: KeyboardEvent | null = null;
+    act(() => { menuEvent = keydown(second.article, ' '); });
+    expect(menuEvent?.defaultPrevented).toBe(true);
+    expect(actions).toEqual([
+      { text: 'Alpha bravo charlie', mode: 'selection' },
+      { text: 'Alpha bravo charlie', mode: 'selection' },
+    ]);
+    expect(second.article.dataset.phase).toBe('action');
+    act(() => second.root.unmount());
+  });
+
+  test('copies a Visual selection, collapses it, and keeps document focus', async () => {
+    const copied: string[] = [];
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      'clipboard',
+    );
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          copied.push(text);
+        },
+      },
+    });
+    const { article, root } = mountHarness({
+      enabled: true,
+      onRange: () => {},
+    });
+
+    try {
+      act(() => article.focus());
+      act(() => { keydown(article, 'v'); });
+      act(() => { keydown(article, 'w'); });
+      expect(window.getSelection()?.toString()).toBe('Alpha ');
+
+      let copyEvent: KeyboardEvent | null = null;
+      await act(async () => {
+        copyEvent = keydown(article, 'y');
+        await Promise.resolve();
+      });
+
+      expect(copyEvent?.defaultPrevented).toBe(true);
+      expect(copied).toEqual(['Alpha ']);
+      expect(article.dataset.phase).toBe('text');
+      expect(document.activeElement).toBe(article);
+      expect(window.getSelection()?.isCollapsed).toBe(true);
+    } finally {
+      act(() => root.unmount());
+      if (clipboardDescriptor) {
+        Object.defineProperty(
+          navigator,
+          'clipboard',
+          clipboardDescriptor,
+        );
+      } else {
+        delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+      }
+    }
+  });
+
   test('does not restore stale document focus after the action UI closes elsewhere', () => {
     const props: VimHarnessProps = {
       enabled: true,
@@ -215,6 +297,9 @@ describe.if(hasDom)('useVimSelection', () => {
 
     act(() => article.focus());
     expect(article.dataset.phase).toBe('block');
+    expect(article.dataset.targetKey).toBe('intro:block');
+    const tab = keydown(article, 'Tab');
+    expect(tab.defaultPrevented).toBe(false);
     expect(article.dataset.targetKey).toBe('intro:block');
     act(() => { keydown(article, 'l'); });
     expect(article.dataset.phase).toBe('inline');

@@ -321,7 +321,15 @@ export const BRIDGE_SCRIPT = `(function() {
         // Text selections wrap a <mark>; element pinpoints (e.g. SVG nodes) carry
         // no range, so there's no inline mark to apply — the annotation is still
         // captured on the parent side from the posted text.
-        if (pendingSelection.startContainerPath) applyMark(id, annType, pendingSelection);
+        if (pendingSelection.startContainerPath) {
+          applyMark(id, annType, pendingSelection);
+          if (
+            vimActionReturn
+            && (vimActionReturn.phase === 'visual' || vimActionReturn.phase === 'visual-block')
+          ) {
+            vimActionReturn.range = committedMarkRange(id) || vimActionReturn.range;
+          }
+        }
         pendingSelection = null;
         pendingRange = null;
         window.getSelection().removeAllRanges();
@@ -1140,6 +1148,21 @@ export const BRIDGE_SCRIPT = `(function() {
     };
   }
 
+  function committedMarkRange(id) {
+    var marks = document.querySelectorAll('[data-bind-id="' + id + '"]');
+    if (!marks.length) return null;
+    var first = marks[0];
+    var last = marks[marks.length - 1];
+    var range = document.createRange();
+    try {
+      range.setStart(first, 0);
+      range.setEnd(last, last.childNodes.length);
+      return range;
+    } catch (ex) {
+      return null;
+    }
+  }
+
   function beginVimAction(mode) {
     if (mode === 'redline' && vimActionReturn) {
       if (vimActionReturn.phase === 'visual') {
@@ -1504,13 +1527,10 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function copyVimText(text) {
     if (!text) return;
-    var textarea = document.createElement('textarea');
-    textarea.value = text;
-    textarea.style.cssText = 'position:fixed;opacity:0';
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand('copy');
-    textarea.remove();
+    parent.postMessage({
+      type: PREFIX + 'vim-copy',
+      text: text
+    }, '*');
   }
 
   function vimActionMode(key) {

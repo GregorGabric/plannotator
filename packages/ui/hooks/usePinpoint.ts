@@ -1,4 +1,10 @@
-import { useEffect, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import type { InputMethod } from '../types';
 import {
   buildSemanticTargetGraph,
@@ -23,6 +29,8 @@ export interface UsePinpointOptions {
 export interface UsePinpointReturn {
   /** Live target from the canonical semantic graph under the pointer. */
   hoverTarget: SemanticTarget | null;
+  /** Release pointer-owned feedback so keyboard navigation can take over. */
+  clearHover: () => void;
 }
 
 /**
@@ -39,25 +47,27 @@ export function usePinpoint({
   onCodeBlockClick,
 }: UsePinpointOptions): UsePinpointReturn {
   const [hoverTarget, setHoverTarget] = useState<SemanticTarget | null>(null);
+  const hoverElementRef = useRef<HTMLElement | null>(null);
 
   const isActive = inputMethod === 'pinpoint' && enabled;
+  const clearHover = useCallback(() => {
+    hoverElementRef.current?.removeAttribute('data-pinpoint-hover');
+    hoverElementRef.current = null;
+    setHoverTarget(null);
+  }, []);
 
   // Clear hover when deactivated
   useEffect(() => {
     if (!isActive) {
-      setHoverTarget((prev) => {
-        if (prev) prev.element.removeAttribute('data-pinpoint-hover');
-        return null;
-      });
+      clearHover();
     }
-  }, [isActive]);
+  }, [clearHover, isActive]);
 
   // Mousemove / touchstart — resolve target and update hover state
   useEffect(() => {
     const container = containerRef.current;
     if (!isActive || !container) return;
 
-    let prevElement: HTMLElement | null = null;
     let graph = buildSemanticTargetGraph(container);
     let graphIsDirty = false;
     const liveGraph = () => {
@@ -80,18 +90,14 @@ export function usePinpoint({
       );
 
       if (resolved) {
-        if (resolved.element !== prevElement) {
-          prevElement?.removeAttribute('data-pinpoint-hover');
+        if (resolved.element !== hoverElementRef.current) {
+          hoverElementRef.current?.removeAttribute('data-pinpoint-hover');
           resolved.element.setAttribute('data-pinpoint-hover', '');
-          prevElement = resolved.element;
+          hoverElementRef.current = resolved.element;
           setHoverTarget(resolved);
         }
       } else {
-        if (prevElement) {
-          prevElement.removeAttribute('data-pinpoint-hover');
-          prevElement = null;
-          setHoverTarget(null);
-        }
+        clearHover();
       }
     };
 
@@ -107,9 +113,7 @@ export function usePinpoint({
     };
 
     const handleMouseLeave = () => {
-      prevElement?.removeAttribute('data-pinpoint-hover');
-      prevElement = null;
-      setHoverTarget(null);
+      clearHover();
     };
 
     container.addEventListener('mousemove', handleMouseMove);
@@ -118,12 +122,13 @@ export function usePinpoint({
 
     return () => {
       observer.disconnect();
-      prevElement?.removeAttribute('data-pinpoint-hover');
+      hoverElementRef.current?.removeAttribute('data-pinpoint-hover');
+      hoverElementRef.current = null;
       container.removeEventListener('mousemove', handleMouseMove);
       container.removeEventListener('mouseleave', handleMouseLeave);
       container.removeEventListener('touchstart', handleTouchStart);
     };
-  }, [isActive, containerRef]);
+  }, [clearHover, isActive, containerRef]);
 
   // Click — create Range and trigger web-highlighter
   useEffect(() => {
@@ -174,5 +179,5 @@ export function usePinpoint({
     };
   }, [isActive, containerRef, onCodeBlockClick, onSelectRange]);
 
-  return { hoverTarget };
+  return { hoverTarget, clearHover };
 }

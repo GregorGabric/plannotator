@@ -11,6 +11,113 @@ afterEach(() => {
 });
 
 describe.if(hasDom)('HtmlViewer Vim HUD bridge', () => {
+  test('copies only validated Vim text from the focused sandbox', async () => {
+    if (!htmlViewerModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(
+      navigator,
+      'clipboard',
+    );
+    const writes: string[] = [];
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          writes.push(text);
+        },
+      },
+    });
+
+    const host = document.createElement('div');
+    const outsideButton = document.createElement('button');
+    document.body.append(host, outsideButton);
+    const root = createRoot(host);
+
+    try {
+      await act(async () => {
+        root.render(
+          <htmlViewerModule.HtmlViewer
+            rawHtml="<html><body><p>Raw copy target</p></body></html>"
+            annotations={[]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="selection"
+            inputMethod="drag"
+            vimModeEnabled
+            vimHudEnabled={false}
+          />,
+        );
+      });
+
+      const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+      if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+      const postCopy = (text: unknown) => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: iframe.contentWindow,
+          data: {
+            type: 'plannotator-bridge-vim-copy',
+            text,
+          },
+        }));
+      };
+
+      act(() => outsideButton.focus());
+      act(() => postCopy('not focused'));
+      expect(writes).toEqual([]);
+
+      act(() => iframe.focus());
+      act(() => postCopy('Raw copy target'));
+      expect(writes).toEqual(['Raw copy target']);
+      expect(document.activeElement).toBe(iframe);
+
+      act(() => postCopy(''));
+      act(() => postCopy({ unsafe: true }));
+      act(() => postCopy('x'.repeat(2 * 1024 * 1024 + 1)));
+      act(() => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: window,
+          data: {
+            type: 'plannotator-bridge-vim-copy',
+            text: 'wrong source',
+          },
+        }));
+      });
+      expect(writes).toEqual(['Raw copy target']);
+
+      await act(async () => {
+        root.render(
+          <htmlViewerModule.HtmlViewer
+            rawHtml="<html><body><p>Raw copy target</p></body></html>"
+            annotations={[]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="selection"
+            inputMethod="drag"
+            vimModeEnabled={false}
+            vimHudEnabled={false}
+          />,
+        );
+      });
+      act(() => iframe.focus());
+      act(() => postCopy('disabled'));
+      expect(writes).toEqual(['Raw copy target']);
+    } finally {
+      act(() => root.unmount());
+      if (clipboardDescriptor) {
+        Object.defineProperty(
+          navigator,
+          'clipboard',
+          clipboardDescriptor,
+        );
+      } else {
+        delete (navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+      }
+    }
+  });
+
   test('renders validated iframe command messages through the shared parent HUD', async () => {
     if (!htmlViewerModule) {
       throw new Error('DOM test environment is not registered');

@@ -15,6 +15,7 @@ import {
 } from "../../shortcuts";
 import type { Annotation, EditorMode, ImageAttachment, InputMethod } from "../../types";
 import { AnnotationType } from "../../types";
+import { copyTextPreservingFocus } from "../../utils/clipboard";
 import { getIdentity } from "../../utils/identity";
 import {
   createVimHudCommand,
@@ -109,6 +110,18 @@ function parseVimBridgeHelp(value: unknown): boolean | null {
     && value.type === `${PREFIX}vim-help`
     && typeof value.open === "boolean"
     ? value.open
+    : null;
+}
+
+const MAX_VIM_COPY_TEXT_LENGTH = 2 * 1024 * 1024;
+
+function parseVimBridgeCopy(value: unknown): string | null {
+  return isRecord(value)
+    && value.type === `${PREFIX}vim-copy`
+    && typeof value.text === "string"
+    && value.text.length > 0
+    && value.text.length <= MAX_VIM_COPY_TEXT_LENGTH
+    ? value.text
     : null;
 }
 
@@ -239,6 +252,18 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
           setVimHelpOpen(false);
           return;
         }
+        const vimCopy = parseVimBridgeCopy(e.data);
+        if (vimCopy !== null) {
+          const iframe = iframeRef.current;
+          if (
+            vimModeEnabled
+            && iframe
+            && document.activeElement === iframe
+          ) {
+            copyTextPreservingFocus(vimCopy, iframe);
+          }
+          return;
+        }
         if (!vimHudActive) return;
         const vimHelp = parseVimBridgeHelp(e.data);
         if (vimHelp !== null) {
@@ -263,7 +288,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       }
       window.addEventListener("message", handler);
       return () => window.removeEventListener("message", handler);
-    }, [vimHudActive]);
+    }, [vimHudActive, vimModeEnabled]);
 
     useEffect(() => {
       if (vimHudActive) return;
@@ -483,29 +508,29 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               </div>
             )}
             <iframe
-            ref={iframeRef}
-            srcDoc={srcdoc}
-            sandbox="allow-scripts"
-            style={{
-              width: "100%",
-              height: fullViewport ? "100%" : `${iframeHeight}px`,
-              border: "none",
-              display: "block",
-              colorScheme: "auto",
-              outline: vimModeEnabled ? "none" : undefined,
-            }}
-            title={title}
-            onFocus={() => setIframeFocused(true)}
-            onBlur={(event) => {
-              if (
-                event.relatedTarget instanceof Element
-                && event.relatedTarget.closest('[data-vim-key-hud]')
-              ) {
-                return;
-              }
-              setIframeFocused(false);
-            }}
-          />
+              ref={iframeRef}
+              srcDoc={srcdoc}
+              sandbox="allow-scripts"
+              style={{
+                width: "100%",
+                height: fullViewport ? "100%" : `${iframeHeight}px`,
+                border: "none",
+                display: "block",
+                colorScheme: "auto",
+                outline: vimModeEnabled ? "none" : undefined,
+              }}
+              title={title}
+              onFocus={() => setIframeFocused(true)}
+              onBlur={(event) => {
+                if (
+                  event.relatedTarget instanceof Element
+                  && event.relatedTarget.closest('[data-vim-key-hud]')
+                ) {
+                  return;
+                }
+                setIframeFocused(false);
+              }}
+            />
           </article>
         </div>
 

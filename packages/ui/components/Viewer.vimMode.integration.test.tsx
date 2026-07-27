@@ -119,6 +119,50 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
     host.remove();
   });
 
+  test('opens the shared annotation toolbar from m in the real Viewer pipeline', async () => {
+    if (!viewerModule || !parserModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const markdown = '# Actions\n\nAnnotate this paragraph.';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <viewerModule.Viewer
+          blocks={parserModule.parseMarkdownToBlocks(markdown)}
+          markdown={markdown}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="comment"
+          inputMethod="drag"
+          taterMode={false}
+          stickyActions={false}
+          disableCodePathValidation
+          vimModeEnabled
+        />,
+      );
+    });
+
+    const article = host.querySelector<HTMLElement>('[data-vim-mode="enabled"]');
+    if (!article) throw new Error('Vim article missing');
+    act(() => article.focus());
+    let markupEvent: KeyboardEvent | null = null;
+    act(() => { markupEvent = keydown(article, 'm'); });
+
+    expect(markupEvent?.defaultPrevented).toBe(true);
+    expect(article.dataset.vimPhase).toBe('action');
+    expect(article.dataset.vimBlocked).toBe('true');
+    expect(document.querySelector('.annotation-toolbar')).not.toBeNull();
+    expect(document.querySelector('[data-comment-popover="true"]')).toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
   test('paints the active block instead of outlining the document container', async () => {
     if (!viewerModule || !parserModule) {
       throw new Error('DOM test environment is not registered');
@@ -222,6 +266,11 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
     expect(
       host.querySelector<HTMLElement>('[data-pinpoint-label]')?.dataset.pinpointLabel,
     ).toBe(pointerLabel);
+    act(() => { keydown(article, 'h'); });
+    expect(article.dataset.vimTargetKey).toContain(':block');
+    expect(
+      host.querySelector<HTMLElement>('[data-pinpoint-label]')?.dataset.pinpointLabel,
+    ).toContain('paragraph');
 
     act(() => root.unmount());
     host.remove();

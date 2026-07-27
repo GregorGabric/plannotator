@@ -447,6 +447,10 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     || !!isPlanDiffActive
     || !!popoutTable
     || !!lightbox;
+  const clearPinpointHoverRef = useRef<() => void>(() => {});
+  const handleVimCommand = useCallback(() => {
+    clearPinpointHoverRef.current();
+  }, []);
   const vim = useVimSelection({
     containerRef,
     enabled: vimModeActive,
@@ -457,15 +461,17 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     onHighlightRange: highlightRange,
     onCodeBlockAction: handleKeyboardCodeBlockAction,
     onMathAction: highlightMathElement,
+    onHandledCommand: handleVimCommand,
   });
 
-  const { hoverTarget } = usePinpoint({
+  const { hoverTarget, clearHover: clearPinpointHover } = usePinpoint({
     containerRef,
     inputMethod,
     enabled: !readOnly && !toolbarState && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false) && !vim.helpOpen,
     onSelectRange: highlightRange,
     onCodeBlockClick: handlePinpointCodeBlockClick,
   });
+  clearPinpointHoverRef.current = clearPinpointHover;
   const vimOwnsHudTarget = vimHudEnabled
     && vim.state.phase !== 'inactive'
     && (vim.focused || vim.state.phase === 'action');
@@ -479,7 +485,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     : null;
   const pinpointOverlayTarget = vimOwnsHudTarget
     ? null
-    : legacyVimTarget ?? (inputMethod === 'pinpoint' ? hoverTarget : null);
+    : (inputMethod === 'pinpoint' ? hoverTarget : null) ?? legacyVimTarget;
 
   useEffect(() => {
     if (!vimOwnsDocumentNavigation) return;

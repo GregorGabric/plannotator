@@ -126,3 +126,11 @@ cookie-persisted, defaults on, and never controls the reticle.
 
 Both controls live in their own **Settings → Vim** panel. The Shortcuts panel
 is reserved for the key-binding reference.
+
+## UX smoke testing
+
+The user-journey matrix and latest real-app run record live in
+[`tests/manual/vim-ux-smoke.md`](../tests/manual/vim-ux-smoke.md). It covers
+focus recovery, structural and exact-text navigation, every annotation entry
+point, HUD learning, copy behavior, rapid-input races, and native-control
+compatibility across Markdown and sandboxed raw HTML.

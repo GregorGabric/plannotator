@@ -23,6 +23,7 @@ import {
   type SemanticTarget,
   type SemanticTargetGraph,
 } from '../utils/blockTargeting';
+import { copyTextPreservingFocus } from '../utils/clipboard';
 import { isDocumentKeyboardControl } from '../utils/domSelection';
 import {
   createVimHudCommand,
@@ -64,6 +65,8 @@ export interface UseVimSelectionOptions {
     modeOverride?: EditorMode,
   ) => void;
   readonly onMathAction: (element: HTMLElement, modeOverride?: EditorMode) => void;
+  /** Clear pointer-owned feedback after a handled keyboard command. */
+  readonly onHandledCommand?: () => void;
 }
 
 /** State and event handlers rendered by the Markdown Viewer. */
@@ -88,16 +91,6 @@ function selectionModeForAction(key: string): EditorMode | null {
     return 'selection';
   }
   return null;
-}
-
-function copyText(text: string): void {
-  const textarea = document.createElement('textarea');
-  textarea.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
-  textarea.value = text;
-  document.body.appendChild(textarea);
-  textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
 }
 
 function motionFromTextKey(key: string): VimTextMotion | null {
@@ -249,6 +242,7 @@ export function useVimSelection({
   onHighlightRange,
   onCodeBlockAction,
   onMathAction,
+  onHandledCommand,
 }: UseVimSelectionOptions): UseVimSelectionReturn {
   const [state, setStateValue] = useState<VimSelectionState>(
     createInitialVimSelectionState,
@@ -529,8 +523,8 @@ export function useVimSelection({
     if (current.phase === 'visual') {
       const range = selectedTextRange(graph.container, current);
       if (!range) return false;
-      copyText(range.toString());
-      setState({
+      copyTextPreservingFocus(range.toString(), graph.container);
+      updateTextState(graph, {
         phase: 'text',
         targetKey: current.targetKey,
         cursor: current.cursor,
@@ -540,16 +534,19 @@ export function useVimSelection({
     if (current.phase === 'visual-block') {
       const range = visualBlockRange(graph, current);
       if (!range) return false;
-      copyText(range.toString());
+      copyTextPreservingFocus(range.toString(), graph.container);
       const target = resolveSemanticTarget(graph, current.targetKey);
-      if (target) setState(semanticStateForTarget(target));
+      if (target) setSemanticTarget(target);
       return true;
     }
     const target = resolveSemanticTarget(graph, current.targetKey);
     if (!target) return false;
-    copyText(target.element.textContent?.trim() ?? '');
+    copyTextPreservingFocus(
+      target.element.textContent?.trim() ?? '',
+      graph.container,
+    );
     return true;
-  }, [setState]);
+  }, [setSemanticTarget, updateTextState]);
 
   const handleSemanticKey = useCallback((
     graph: SemanticTargetGraph,
@@ -907,6 +904,7 @@ export function useVimSelection({
     }
 
     if (handled) {
+      onHandledCommand?.();
       recordHudCommand(actionId, event, context);
       event.preventDefault();
       event.stopPropagation();
@@ -921,6 +919,7 @@ export function useVimSelection({
     helpOpen,
     initializeSemanticNavigation,
     jumpToDocumentBlock,
+    onHandledCommand,
     recordHudCommand,
   ]);
 
@@ -930,11 +929,18 @@ export function useVimSelection({
     if (!container) return;
     const context = stateRef.current.phase;
     if (jumpToDocumentBlock(buildSemanticTargetGraph(container), false)) {
+      onHandledCommand?.();
       recordHudCommand('documentStart', event, context);
       event.preventDefault();
       event.stopPropagation();
     }
-  }, [canHandleShortcut, containerRef, jumpToDocumentBlock, recordHudCommand]);
+  }, [
+    canHandleShortcut,
+    containerRef,
+    jumpToDocumentBlock,
+    onHandledCommand,
+    recordHudCommand,
+  ]);
 
   const shortcutHandler = (actionId: VimSelectionActionId) => ({
     when: canHandleShortcut,
