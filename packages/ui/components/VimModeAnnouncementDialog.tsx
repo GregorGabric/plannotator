@@ -541,7 +541,7 @@ export function VimModeAnnouncementDialog({
 
         <footer className="flex items-center justify-between gap-4 border-t border-border px-7 py-5">
           <p className="text-xs text-muted-foreground">
-            Change this anytime in Options → Shortcuts.
+            Change this anytime in Settings → Vim.
           </p>
           <div className="flex items-center gap-2">
             <button

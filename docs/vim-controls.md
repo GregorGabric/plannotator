@@ -113,3 +113,6 @@ removes the document focus surface and leaves existing behavior unchanged.
 Vim HUD is independently cookie-persisted, default off, and only records or
 renders commands while enabled. Text entered into annotation composers is
 neither captured nor displayed.
+
+Both controls live in their own **Settings → Vim** panel. The Shortcuts panel
+is reserved for the key-binding reference.

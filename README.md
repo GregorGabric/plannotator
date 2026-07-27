@@ -336,7 +336,7 @@ Settings are saved in cookies (not localStorage) because each hook invocation ru
 ### Optional Vim controls
 
 Plan and annotate views offer a default-off **Vim controls** profile under
-**Settings → Shortcuts**. Once enabled, focus the document and use `j` / `k`
+**Settings → Vim**. Once enabled, focus the document and use `j` / `k`
 to move one rendered block at a time. After `l` refines into a semantic level,
 `j` / `k` move among sibling rows, cells, or inline targets; `h` moves back to
 the containing target. Refining past the deepest target enters text. `v`

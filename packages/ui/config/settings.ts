@@ -55,7 +55,7 @@ export const SETTINGS = {
   vimModeEnabled: {
     // Vim bindings deliberately default OFF. Unmodified letter keys must remain
     // inert for existing users until they explicitly opt into modal document
-    // navigation from Settings > Shortcuts.
+    // navigation from Settings > Vim.
     defaultValue: false as boolean,
     fromCookie: () => {
       const value = storage.getItem('plannotator-vim-mode-enabled');
