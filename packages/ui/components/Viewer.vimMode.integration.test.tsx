@@ -262,7 +262,13 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
     act(() => { keydown(article, 'j'); });
 
     const hud = document.querySelector<HTMLElement>('[data-vim-key-hud]');
+    const reticle = host.querySelector<HTMLElement>('[data-vim-target-reticle]');
     expect(hud).not.toBeNull();
+    expect(reticle).not.toBeNull();
+    expect(reticle?.dataset.vimTargetLabel).toBe('BLOCK · PARAGRAPH');
+    expect(host.querySelectorAll('[data-vim-target-corner]')).toHaveLength(4);
+    expect(host.querySelector('[data-vim-target-fill]')).not.toBeNull();
+    expect(host.querySelector('[data-pinpoint-overlay]')).toBeNull();
     expect(document.querySelector('[data-vim-mode-badge]')).toBeNull();
     expect(hud?.style.height).toBe('88px');
     expect(hud?.style.bottom).toBe('150px');
@@ -283,6 +289,182 @@ describe.if(hasDom)('Viewer Vim mode with repository fixtures', () => {
         .map((element) => element.dataset.vimHudPreviousKey),
     ).toEqual(['j', 'k', 'j']);
     expect(document.querySelector('[data-vim-hud-active-key="k"]')).not.toBeNull();
+
+    const mapToggle = document.querySelector<HTMLButtonElement>(
+      '[data-vim-key-map-toggle]',
+    );
+    expect(mapToggle).not.toBeNull();
+    expect(mapToggle?.getAttribute('aria-expanded')).toBe('false');
+    act(() => { mapToggle?.focus(); });
+    expect(document.activeElement).toBe(mapToggle);
+    expect(document.querySelector('[data-vim-key-hud]')).not.toBeNull();
+    act(() => { mapToggle?.click(); });
+
+    expect(mapToggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
+    expect(document.querySelectorAll('[data-vim-key-map-group]')).toHaveLength(5);
+    expect(document.querySelector(
+      '[data-vim-key-map-group="structure"][data-current="true"]',
+    )).not.toBeNull();
+    expect(document.querySelector(
+      '[data-vim-key-map-action="wordForward"]',
+    )?.textContent).toContain('Move to next word');
+    expect(document.querySelector(
+      '[data-vim-key-map-action="comment"]',
+    )?.textContent).toContain('Comment selection or target');
+
+    act(() => { keydown(article, '?'); });
+    expect(document.querySelector('[data-vim-key-map]')).toBeNull();
+    expect(mapToggle?.getAttribute('aria-expanded')).toBe('false');
+
+    act(() => { keydown(article, '?'); });
+    expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
+    act(() => { keydown(article, '?'); });
+    expect(document.querySelector('[data-vim-key-map]')).toBeNull();
+
+    act(() => root.unmount());
+    host.remove();
+  });
+
+  test('moves the HUD reticle from semantic blocks to the real caret and visual range', async () => {
+    if (!viewerModule || !parserModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const markdown = '# Reticle\n\nAlpha bravo charlie.';
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <viewerModule.Viewer
+          blocks={parserModule.parseMarkdownToBlocks(markdown)}
+          markdown={markdown}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="drag"
+          taterMode={false}
+          stickyActions={false}
+          disableCodePathValidation
+          vimModeEnabled
+          vimHudEnabled
+        />,
+      );
+    });
+
+    const article = host.querySelector<HTMLElement>('[data-vim-mode="enabled"]');
+    if (!article) throw new Error('Vim article missing');
+    act(() => article.focus());
+    act(() => { keydown(article, 'l'); });
+
+    let reticle = host.querySelector<HTMLElement>('[data-vim-target-reticle]');
+    expect(article.dataset.vimPhase).toBe('text');
+    expect(reticle?.dataset.vimTargetPhase).toBe('text');
+    expect(reticle?.dataset.vimTargetLabel).toBe('CURSOR · INLINE TEXT');
+    expect(host.querySelector('[data-vim-cursor]')).not.toBeNull();
+
+    act(() => { keydown(article, 'v'); });
+    act(() => { keydown(article, 'e'); });
+    reticle = host.querySelector<HTMLElement>('[data-vim-target-reticle]');
+    expect(article.dataset.vimPhase).toBe('visual');
+    expect(reticle?.dataset.vimTargetPhase).toBe('visual');
+    expect(reticle?.dataset.vimTargetLabel).toBe('VISUAL · EXACT TOKEN');
+
+    act(() => root.unmount());
+    host.remove();
+    window.getSelection()?.removeAllRanges();
+  });
+
+  test('keeps j and k under Vim ownership when a code block crosses the pointer', async () => {
+    if (!viewerModule || !parserModule) {
+      throw new Error('DOM test environment is not registered');
+    }
+    const markdown = [
+      '# Keyboard ownership',
+      '',
+      'Before code.',
+      '',
+      '```ts',
+      'const value = 32;',
+      '```',
+      '',
+      'After code.',
+    ].join('\n');
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+
+    await act(async () => {
+      root.render(
+        <viewerModule.Viewer
+          blocks={parserModule.parseMarkdownToBlocks(markdown)}
+          markdown={markdown}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="drag"
+          taterMode={false}
+          stickyActions={false}
+          disableCodePathValidation
+          vimModeEnabled
+          vimHudEnabled
+        />,
+      );
+    });
+
+    const article = host.querySelector<HTMLElement>('[data-vim-mode="enabled"]');
+    const codeBlock = host.querySelector<HTMLElement>('pre')?.parentElement;
+    if (!article || !codeBlock) throw new Error('Missing code-hover Vim fixture');
+    act(() => article.focus());
+
+    // Scrolling with j/k can move a code block underneath a stationary pointer.
+    // React reports that as mouseenter even though the user did not switch to
+    // pointer annotation.
+    act(() => {
+      codeBlock.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+
+    let nextEvent: KeyboardEvent | null = null;
+    let previousEvent: KeyboardEvent | null = null;
+    act(() => { nextEvent = keydown(article, 'j'); });
+    act(() => { previousEvent = keydown(article, 'k'); });
+
+    expect(nextEvent?.defaultPrevented).toBe(true);
+    expect(previousEvent?.defaultPrevented).toBe(true);
+    expect(article.dataset.vimBlocked).toBe('false');
+    expect(document.querySelector('.annotation-toolbar')).toBeNull();
+    expect(document.querySelector('[data-comment-popover="true"]')).toBeNull();
+    expect(document.querySelector('textarea')).toBeNull();
+
+    // The same code toolbar may take keyboard ownership only after an explicit
+    // Vim action on the code target.
+    act(() => { keydown(article, 'j'); });
+    act(() => { keydown(article, 'j'); });
+    expect(article.dataset.vimTargetKey).toContain(':code');
+    let openActionsEvent: KeyboardEvent | null = null;
+    act(() => { openActionsEvent = keydown(article, 'Enter'); });
+    expect(openActionsEvent?.defaultPrevented).toBe(true);
+    expect(article.dataset.vimPhase).toBe('action');
+    expect(article.dataset.vimBlocked).toBe('true');
+    expect(document.querySelector('.annotation-toolbar')).not.toBeNull();
+
+    const alreadyHandledEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      bubbles: true,
+      cancelable: true,
+    });
+    alreadyHandledEvent.preventDefault();
+    act(() => { article.dispatchEvent(alreadyHandledEvent); });
+    expect(document.querySelector('[data-comment-popover="true"]')).toBeNull();
+
+    act(() => { keydown(article, 'x'); });
+    expect(document.querySelector('[data-comment-popover="true"]')).not.toBeNull();
+    expect(document.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('x');
 
     act(() => root.unmount());
     host.remove();

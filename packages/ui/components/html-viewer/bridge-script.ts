@@ -61,6 +61,99 @@ body[data-plannotator-vim-focus-owner]:focus {
   background: var(--pn-focus-highlight, #4493f8);
   pointer-events: none;
 }
+[data-plannotator-vim-reticle] {
+  position: fixed;
+  z-index: 2147483645;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-fill],
+[data-plannotator-vim-reticle] [data-vim-reticle-corner],
+[data-plannotator-vim-reticle] [data-vim-reticle-label] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  transition: transform 90ms cubic-bezier(.22,1,.36,1);
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-fill] {
+  width: 100px;
+  height: 100px;
+  transform-origin: 0 0;
+  border-radius: 8px;
+  background: rgba(167,139,250,.045);
+  box-shadow:
+    inset 0 0 0 1px rgba(196,181,253,.16),
+    0 0 42px rgba(139,92,246,.12);
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-corner] {
+  width: 28px;
+  height: 28px;
+  border-color: #c4b5fd;
+  filter:
+    drop-shadow(0 0 6px rgba(167,139,250,.92))
+    drop-shadow(0 0 18px rgba(124,58,237,.42));
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-corner="top-left"] {
+  border-top: 3px solid;
+  border-left: 3px solid;
+  border-top-left-radius: 8px;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-corner="top-right"] {
+  border-top: 3px solid;
+  border-right: 3px solid;
+  border-top-right-radius: 8px;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-corner="bottom-left"] {
+  border-bottom: 3px solid;
+  border-left: 3px solid;
+  border-bottom-left-radius: 8px;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-corner="bottom-right"] {
+  border-right: 3px solid;
+  border-bottom: 3px solid;
+  border-bottom-right-radius: 8px;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-label] {
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 118px;
+  height: 30px;
+  max-width: min(280px, calc(100vw - 24px));
+  padding: 0 11px;
+  overflow: hidden;
+  border: 1px solid rgba(216,206,255,.42);
+  border-radius: 9px;
+  color: #f6f2ff;
+  background: rgba(18,14,28,.84);
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.42),
+    0 0 20px rgba(139,92,246,.18);
+  backdrop-filter: blur(10px);
+  font: 700 10px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: .13em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-plannotator-vim-reticle] [data-vim-reticle-label]::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #c4b5fd;
+  box-shadow: 0 0 12px rgba(167,139,250,.94);
+  content: "";
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-plannotator-vim-reticle] [data-vim-reticle-fill],
+  [data-plannotator-vim-reticle] [data-vim-reticle-corner],
+  [data-plannotator-vim-reticle] [data-vim-reticle-label] {
+    transition: none;
+  }
+}
 [data-plannotator-vim-badge] {
   position: fixed;
   z-index: 2147483647;
@@ -77,31 +170,6 @@ body[data-plannotator-vim-focus-owner]:focus {
   letter-spacing: .04em;
   pointer-events: none;
 }
-[data-plannotator-vim-help] {
-  position: fixed;
-  z-index: 2147483647;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: color-mix(in srgb, var(--pn-background, #111) 68%, transparent);
-  backdrop-filter: blur(8px);
-}
-[data-plannotator-vim-help] > div {
-  width: min(480px, 100%);
-  padding: 18px;
-  border: 1px solid color-mix(in srgb, var(--pn-foreground, #eee) 18%, transparent);
-  border-radius: 12px;
-  background: var(--pn-background, #111);
-  color: var(--pn-foreground, #eee);
-  box-shadow: 0 18px 60px rgba(0,0,0,.35);
-  font: 12px/1.55 system-ui, sans-serif;
-}
-[data-plannotator-vim-help] kbd {
-  color: var(--pn-focus-highlight, #4493f8);
-  font: 700 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
-}
 `;
 
 export const BRIDGE_SCRIPT = `(function() {
@@ -113,7 +181,16 @@ export const BRIDGE_SCRIPT = `(function() {
   // root, and its class list is never touched.
   window.addEventListener('message', function(e) {
     if (e.source !== parent) return;
-    if (!e.data || e.data.type !== PREFIX + 'theme') return;
+    if (!e.data) return;
+    if (e.data.type === PREFIX + 'set-vim-help') {
+      vimHelpOpen = !!e.data.open;
+      parent.postMessage({
+        type: PREFIX + 'vim-help',
+        open: vimHelpOpen
+      }, '*');
+      return;
+    }
+    if (e.data.type !== PREFIX + 'theme') return;
     var root = document.documentElement;
     var tokens = e.data.tokens || {};
     var hostTheme = !!e.data.hostTheme;
@@ -156,6 +233,9 @@ export const BRIDGE_SCRIPT = `(function() {
   var vimHelpOpen = false;
   var vimAddedBodyTabIndex = false;
   var vimActionReturn = null;
+  var vimLastActionId = null;
+  var vimLastActionContext = 'inactive';
+  var vimLastPostedPhase = null;
   // A plain click on an element-annotation target opens the toolbar, but the same
   // click's mouseup schedules a handleSelection() that would see an empty selection
   // and immediately clear it. This flag suppresses that one trailing clear.
@@ -304,8 +384,10 @@ export const BRIDGE_SCRIPT = `(function() {
 
     else if (type === PREFIX + 'set-vim-mode') {
       var wasVimEnabled = vimEnabled;
+      var wasVimHudEnabled = vimHudEnabled;
       vimEnabled = e.data.enabled === true;
       vimHudEnabled = e.data.hudEnabled === true;
+      if (wasVimHudEnabled !== vimHudEnabled) vimLastPostedPhase = null;
       vimActiveMode = e.data.mode === 'comment'
         || e.data.mode === 'redline'
         || e.data.mode === 'quickLabel'
@@ -649,10 +731,11 @@ export const BRIDGE_SCRIPT = `(function() {
     }
   }
 
-  function getVimTextNodes() {
-    if (!document.body) return [];
+  function getVimTextNodes(root) {
+    var scope = root || document.body;
+    if (!scope) return [];
     var nodes = [];
-    var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
+    var walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT, {
       acceptNode: function(node) {
         var parentEl = node.parentElement;
         if (!parentEl || !node.data || !node.data.length) return NodeFilter.FILTER_REJECT;
@@ -730,7 +813,7 @@ export const BRIDGE_SCRIPT = `(function() {
   function clampVimSelectionToTarget(selection, target, direction) {
     if (!target || !selection) return false;
     if (selection.focusNode && target.contains(selection.focusNode)) return true;
-    var nodes = getVimTextNodes().filter(function(node) { return target.contains(node); });
+    var nodes = getVimTextNodes(target);
     if (!nodes.length) return false;
     var boundaryNode = direction === 'backward' ? nodes[0] : nodes[nodes.length - 1];
     var boundaryOffset = direction === 'backward' ? 0 : boundaryNode.length;
@@ -783,7 +866,7 @@ export const BRIDGE_SCRIPT = `(function() {
     if (!selection || !selection.focusNode || !textTarget || !Intl.Segmenter) {
       return modifyVimSelection(motion === 'backward' ? 'backward' : 'forward', 'word');
     }
-    var nodes = getVimTextNodes().filter(function(node) { return textTarget.contains(node); });
+    var nodes = getVimTextNodes(textTarget);
     var focusOffset = vimTextOffsetForPoint(nodes, selection.focusNode, selection.focusOffset);
     if (focusOffset === null) return false;
     var text = nodes.map(function(node) { return node.data; }).join('');
@@ -871,8 +954,8 @@ export const BRIDGE_SCRIPT = `(function() {
     }
     var selection = window.getSelection();
     if (!selection) return false;
-    var anchorTexts = getVimTextNodes().filter(function(node) { return anchor.contains(node); });
-    var nextTexts = getVimTextNodes().filter(function(node) { return next.contains(node); });
+    var anchorTexts = getVimTextNodes(anchor);
+    var nextTexts = getVimTextNodes(next);
     if (!anchorTexts.length || !nextTexts.length) return false;
     if (nextIndex >= anchorIndex) {
       selection.setBaseAndExtent(
@@ -933,14 +1016,18 @@ export const BRIDGE_SCRIPT = `(function() {
     if (vimPinpointEl) {
       vimPhase = semanticVimPhase(target);
       window.getSelection().removeAllRanges();
-      vimPinpointEl.classList.add('plannotator-pinpoint-hover');
       vimPinpointEl.scrollIntoView({ block: 'nearest' });
-      var r = vimPinpointEl.getBoundingClientRect();
-      var lbl = getPinpointLabelEl();
-      lbl.textContent = target.label;
-      lbl.style.display = 'block';
-      lbl.style.top = Math.max(2, r.top - 22) + 'px';
-      lbl.style.left = Math.max(2, r.left) + 'px';
+      if (vimHudEnabled) {
+        hidePinpointLabel();
+      } else {
+        vimPinpointEl.classList.add('plannotator-pinpoint-hover');
+        var r = vimPinpointEl.getBoundingClientRect();
+        var lbl = getPinpointLabelEl();
+        lbl.textContent = target.label;
+        lbl.style.display = 'block';
+        lbl.style.top = Math.max(2, r.top - 22) + 'px';
+        lbl.style.left = Math.max(2, r.left) + 'px';
+      }
     } else {
       hidePinpointLabel();
     }
@@ -1008,9 +1095,7 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function enterVimTextTarget(target) {
     if (!target || !target.element) return false;
-    var nodes = getVimTextNodes().filter(function(node) {
-      return target.element.contains(node);
-    });
+    var nodes = getVimTextNodes(target.element);
     if (!nodes.length) return false;
     if (vimPinpointEl) vimPinpointEl.classList.remove('plannotator-pinpoint-hover');
     hidePinpointLabel();
@@ -1124,9 +1209,213 @@ export const BRIDGE_SCRIPT = `(function() {
     return badge;
   }
 
+  function getVimReticleEl() {
+    var reticle = document.querySelector('[data-plannotator-vim-reticle]');
+    if (reticle) return reticle;
+    reticle = document.createElement('div');
+    reticle.setAttribute('data-plannotator-vim-reticle', '');
+    reticle.setAttribute('data-plannotator-vim-ui', '');
+    reticle.innerHTML = [
+      '<div data-vim-reticle-fill></div>',
+      '<div data-vim-reticle-corner="top-left"></div>',
+      '<div data-vim-reticle-corner="top-right"></div>',
+      '<div data-vim-reticle-corner="bottom-left"></div>',
+      '<div data-vim-reticle-corner="bottom-right"></div>',
+      '<div data-vim-reticle-label></div>'
+    ].join('');
+    document.body.appendChild(reticle);
+    return reticle;
+  }
+
+  function hideVimReticle() {
+    var reticle = document.querySelector('[data-plannotator-vim-reticle]');
+    if (reticle) reticle.style.display = 'none';
+  }
+
+  function vimRangeRect(range) {
+    if (!range) return null;
+    var rects = [];
+    if (typeof range.getClientRects === 'function') {
+      try {
+        var rangeRects = range.getClientRects();
+        for (var rangeRectIndex = 0; rangeRectIndex < rangeRects.length; rangeRectIndex++) {
+          rects.push(rangeRects[rangeRectIndex]);
+        }
+      } catch (ex) {}
+    }
+    var visible = rects.filter(function(rect) {
+      return rect.width > 0 || rect.height > 0;
+    });
+    if (!visible.length) {
+      if (typeof range.getBoundingClientRect !== 'function') return null;
+      try {
+        return range.getBoundingClientRect();
+      } catch (ex) {
+        return null;
+      }
+    }
+    var left = Math.min.apply(null, visible.map(function(rect) { return rect.left; }));
+    var top = Math.min.apply(null, visible.map(function(rect) { return rect.top; }));
+    var right = Math.max.apply(null, visible.map(function(rect) { return rect.right; }));
+    var bottom = Math.max.apply(null, visible.map(function(rect) { return rect.bottom; }));
+    return { left: left, top: top, width: right - left, height: bottom - top };
+  }
+
+  function vimReticleSemanticDescriptor(target) {
+    if (!target) return 'TARGET';
+    if (target.kind === 'code') return 'CODE';
+    if (target.kind === 'math') return 'FORMULA';
+    if (target.kind === 'table') return 'TABLE';
+    if (target.kind === 'row') return 'ROW';
+    if (target.kind === 'cell') return 'CELL';
+    return String(target.label || target.kind).split(':')[0].toUpperCase();
+  }
+
+  function vimReticleCursorDescriptor() {
+    if (vimLastActionId === 'moveDown') return 'NEXT LINE';
+    if (vimLastActionId === 'moveUp') return 'PREVIOUS LINE';
+    if (vimLastActionId === 'previousTextBlock') return 'PREVIOUS BLOCK';
+    if (vimLastActionId === 'nextTextBlock') return 'NEXT BLOCK';
+    if (vimLastActionId === 'swapSelectionEnds') return 'SWAPPED ENDS';
+    if (vimLastActionId === 'lineStart') return 'LINE START';
+    if (vimLastActionId === 'lineEnd') return 'LINE END';
+    if (vimLastActionId === 'wordForward') return 'NEXT WORD';
+    if (vimLastActionId === 'wordBackward') return 'PREVIOUS WORD';
+    if (vimLastActionId === 'wordEnd') return 'WORD END';
+    if (vimLastActionId === 'previousTextBlock') return 'PREVIOUS TEXT';
+    if (vimLastActionId === 'nextTextBlock') return 'NEXT TEXT';
+    if (vimLastActionId === 'documentStart') return 'DOCUMENT START';
+    if (vimLastActionId === 'documentEnd') return 'DOCUMENT END';
+    if (vimLastActionId === 'moveOut') {
+      return vimLastActionContext === 'text' || vimLastActionContext === 'visual'
+        ? 'PREVIOUS CHARACTER'
+        : 'TEXT';
+    }
+    if (vimLastActionId === 'refine') {
+      return vimLastActionContext === 'text' || vimLastActionContext === 'visual'
+        ? 'NEXT CHARACTER'
+        : 'INLINE TEXT';
+    }
+    return 'TEXT';
+  }
+
+  function vimReticleVisualDescriptor(blockSelection) {
+    if (blockSelection) return 'BLOCK RANGE';
+    if (vimLastActionId === 'visual') return 'RANGE START';
+    if (vimLastActionId === 'wordForward') return 'NEXT WORD';
+    if (vimLastActionId === 'wordBackward') return 'PREVIOUS WORD';
+    if (vimLastActionId === 'wordEnd') return 'EXACT TOKEN';
+    if (vimLastActionId === 'lineStart') return 'TO LINE START';
+    if (vimLastActionId === 'lineEnd') return 'TO LINE END';
+    if (vimLastActionId === 'moveDown') return 'NEXT LINE';
+    if (vimLastActionId === 'moveUp') return 'PREVIOUS LINE';
+    return 'RANGE';
+  }
+
+  function vimReticleTarget() {
+    var phase = vimPhase;
+    var pinpointEl = vimPinpointEl;
+    var savedRange = null;
+    if (phase === 'action' && vimActionReturn) {
+      phase = vimActionReturn.phase;
+      pinpointEl = vimActionReturn.pinpointEl;
+      savedRange = vimActionReturn.range;
+    }
+
+    if (phase === 'block' || phase === 'inline') {
+      if (!pinpointEl) return null;
+      var graph = buildSemanticTargetGraph();
+      var target = graph.byElement.get(pinpointEl) || null;
+      return {
+        phase: phase,
+        compact: false,
+        rect: pinpointEl.getBoundingClientRect(),
+        label: (phase === 'inline' ? 'INLINE' : 'BLOCK')
+          + ' · ' + vimReticleSemanticDescriptor(target)
+      };
+    }
+
+    var selection = window.getSelection();
+    var range = savedRange;
+    if (!range && selection && selection.rangeCount) {
+      range = selection.getRangeAt(0);
+    }
+    if (!range) return null;
+
+    if (phase === 'text') {
+      var caretRange = range.cloneRange();
+      caretRange.collapse(false);
+      var caretRect = vimRangeRect(caretRange);
+      if (!caretRect) return null;
+      if (!caretRect.height) caretRect.height = 16;
+      if (!caretRect.width) caretRect.width = 1;
+      return {
+        phase: phase,
+        compact: true,
+        rect: caretRect,
+        label: 'CURSOR · ' + vimReticleCursorDescriptor()
+      };
+    }
+
+    if (phase === 'visual' || phase === 'visual-block') {
+      return {
+        phase: phase,
+        compact: false,
+        rect: vimRangeRect(range),
+        label: 'VISUAL · ' + vimReticleVisualDescriptor(phase === 'visual-block')
+      };
+    }
+    return null;
+  }
+
+  function updateVimReticle() {
+    if (!vimHudEnabled || vimPhase === 'inactive') {
+      hideVimReticle();
+      return;
+    }
+    var target = vimReticleTarget();
+    if (!target || !target.rect) {
+      hideVimReticle();
+      return;
+    }
+
+    var rect = target.rect;
+    var paddingX = target.compact ? 10 : 5;
+    var paddingY = target.compact ? 6 : 4;
+    var width = Math.max(44, rect.width + paddingX * 2);
+    var height = Math.max(32, rect.height + paddingY * 2);
+    var left = Math.max(0, rect.left + rect.width / 2 - width / 2);
+    var top = Math.max(0, rect.top + rect.height / 2 - height / 2);
+    var cornerSize = 28;
+    var cornerRight = Math.max(0, width - cornerSize);
+    var cornerBottom = Math.max(0, height - cornerSize);
+    var labelTop = top - 36 >= 4 ? top - 36 : top + height + 6;
+    var reticle = getVimReticleEl();
+    var fill = reticle.querySelector('[data-vim-reticle-fill]');
+    var label = reticle.querySelector('[data-vim-reticle-label]');
+    var topLeft = reticle.querySelector('[data-vim-reticle-corner="top-left"]');
+    var topRight = reticle.querySelector('[data-vim-reticle-corner="top-right"]');
+    var bottomLeft = reticle.querySelector('[data-vim-reticle-corner="bottom-left"]');
+    var bottomRight = reticle.querySelector('[data-vim-reticle-corner="bottom-right"]');
+
+    reticle.style.display = 'block';
+    reticle.setAttribute('data-vim-target-phase', target.phase);
+    reticle.setAttribute('data-vim-target-label', target.label);
+    fill.style.transform = 'translate3d(' + left + 'px,' + top + 'px,0) scale('
+      + (width / 100) + ',' + (height / 100) + ')';
+    topLeft.style.transform = 'translate3d(' + left + 'px,' + top + 'px,0)';
+    topRight.style.transform = 'translate3d(' + (left + cornerRight) + 'px,' + top + 'px,0)';
+    bottomLeft.style.transform = 'translate3d(' + left + 'px,' + (top + cornerBottom) + 'px,0)';
+    bottomRight.style.transform = 'translate3d(' + (left + cornerRight) + 'px,'
+      + (top + cornerBottom) + 'px,0)';
+    label.textContent = target.label;
+    label.style.transform = 'translate3d(' + left + 'px,' + labelTop + 'px,0)';
+  }
+
   function updateVimUi() {
     if (!vimEnabled) return;
-    if (vimHudEnabled) {
+    if (vimHudEnabled && vimLastPostedPhase !== vimPhase) {
+      vimLastPostedPhase = vimPhase;
       parent.postMessage({
         type: PREFIX + 'vim-state',
         phase: vimPhase
@@ -1138,7 +1427,18 @@ export const BRIDGE_SCRIPT = `(function() {
     if (vimPhase === 'inactive') {
       if (badge) badge.style.display = 'none';
       cursor.style.display = 'none';
+      hideVimReticle();
       return;
+    }
+    if (vimHudEnabled) {
+      if (vimPinpointEl) vimPinpointEl.classList.remove('plannotator-pinpoint-hover');
+      hidePinpointLabel();
+      updateVimReticle();
+    } else {
+      hideVimReticle();
+      if (vimPinpointEl && (vimPhase === 'block' || vimPhase === 'inline')) {
+        vimPinpointEl.classList.add('plannotator-pinpoint-hover');
+      }
     }
     if (badge) badge.style.display = vimHudEnabled ? 'none' : 'block';
     var phaseLabel = vimPhase === 'text' ? 'NORMAL' : vimPhase.toUpperCase().replace('-', ' ');
@@ -1168,26 +1468,27 @@ export const BRIDGE_SCRIPT = `(function() {
     }
   }
 
+  var vimUiRaf = 0;
+  function scheduleVimUiUpdate() {
+    if (!vimEnabled || vimPhase === 'inactive' || vimUiRaf) return;
+    vimUiRaf = requestAnimationFrame(function() {
+      vimUiRaf = 0;
+      updateVimUi();
+    });
+  }
+  window.addEventListener('resize', scheduleVimUiUpdate, { passive: true });
+  window.addEventListener('scroll', scheduleVimUiUpdate, { passive: true, capture: true });
+
   function toggleVimHelp() {
     vimHelpOpen = !vimHelpOpen;
-    var existing = document.querySelector('[data-plannotator-vim-help]');
-    if (!vimHelpOpen) {
-      if (existing) existing.remove();
-      return;
-    }
-    if (existing) return;
-    var help = document.createElement('div');
-    help.setAttribute('data-plannotator-vim-help', '');
-    help.setAttribute('data-plannotator-vim-ui', '');
-    help.innerHTML = '<div><strong>Vim controls</strong><p><kbd>j k · gg G</kbd> move between blocks or refined siblings · <kbd>h l · Esc</kbd> move out, refine, or back out · <kbd>v / V</kbd> select text or whole blocks · <kbd>h j k l · w b e · 0 $</kbd> move after entering text · <kbd>Enter</kbd> active annotation · <kbd>Space · c d m t y</kbd> actions · <kbd>?</kbd> help</p></div>';
-    help.addEventListener('mousedown', function(e) {
-      if (e.target === help) toggleVimHelp();
-    });
-    document.body.appendChild(help);
+    parent.postMessage({
+      type: PREFIX + 'vim-help',
+      open: vimHelpOpen
+    }, '*');
   }
 
   function clearVimUi() {
-    var nodes = document.querySelectorAll('[data-plannotator-vim-cursor],[data-plannotator-vim-badge],[data-plannotator-vim-help]');
+    var nodes = document.querySelectorAll('[data-plannotator-vim-cursor],[data-plannotator-vim-badge],[data-plannotator-vim-reticle]');
     for (var i = 0; i < nodes.length; i++) nodes[i].remove();
     if (vimPinpointEl) vimPinpointEl.classList.remove('plannotator-pinpoint-hover');
     vimVisualBlockAnchorEl = null;
@@ -1484,6 +1785,9 @@ export const BRIDGE_SCRIPT = `(function() {
 
     if (handled) {
       if (vimHudEnabled && vimActionId) {
+        vimLastActionId = vimActionId;
+        vimLastActionContext = vimCommandContext;
+        updateVimReticle();
         parent.postMessage({
           type: PREFIX + 'vim-command',
           actionId: vimActionId,
@@ -1670,7 +1974,10 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function onReady() {
     if (typeof ResizeObserver !== 'undefined' && document.body) {
-      new ResizeObserver(postResize).observe(document.body);
+      new ResizeObserver(function() {
+        postResize();
+        scheduleVimUiUpdate();
+      }).observe(document.body);
     }
     parent.postMessage({ type: PREFIX + 'ready' }, '*');
   }

@@ -379,9 +379,16 @@ export function moveTextPosition(
   position: VimTextPosition,
   motion: VimTextMotion,
 ): VimTextPosition {
+  const currentBlock = findBlock(container, position.blockId);
+  if (!currentBlock) return findInitialTextPosition(container) ?? position;
+  const currentText = getBlockText(currentBlock);
+  const nextOffset = moveWithinBlock(currentText, position.textOffset, motion);
+  if (nextOffset !== null) {
+    return { blockId: position.blockId, textOffset: nextOffset };
+  }
+
   const blocks = getBlockElements(container).filter((block) => getBlockText(block).length > 0);
   if (blocks.length === 0) return position;
-
   if (motion === 'document-start') {
     return getPositionAtBlockBoundary(blocks[0], 'start') ?? position;
   }
@@ -389,20 +396,12 @@ export function moveTextPosition(
     return getPositionAtBlockBoundary(blocks[blocks.length - 1], 'end') ?? position;
   }
 
-  const blockIndex = blocks.findIndex((block) => block.dataset.blockId === position.blockId);
+  const blockIndex = blocks.indexOf(currentBlock);
   if (blockIndex < 0) return findInitialTextPosition(container) ?? position;
-
   if (motion === 'block-backward' || motion === 'block-forward') {
     const delta = motion === 'block-backward' ? -1 : 1;
     const nextBlock = blocks[Math.max(0, Math.min(blocks.length - 1, blockIndex + delta))];
     return getPositionAtBlockBoundary(nextBlock, 'start') ?? position;
-  }
-
-  const currentBlock = blocks[blockIndex];
-  const currentText = getBlockText(currentBlock);
-  const nextOffset = moveWithinBlock(currentText, position.textOffset, motion);
-  if (nextOffset !== null) {
-    return { blockId: position.blockId, textOffset: nextOffset };
   }
 
   const direction = motion === 'left' || motion === 'word-backward' ? -1 : 1;

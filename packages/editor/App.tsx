@@ -30,6 +30,7 @@ import { CompletionOverlay } from '@plannotator/ui/components/CompletionOverlay'
 import { useUpdateCheck } from '@plannotator/ui/hooks/useUpdateCheck';
 import { PlanAIAnnouncementDialog } from '@plannotator/ui/components/PlanAIAnnouncementDialog';
 import { LookAndFeelAnnouncementDialog } from '@plannotator/ui/components/LookAndFeelAnnouncementDialog';
+import { VimModeAnnouncementDialog } from '@plannotator/ui/components/VimModeAnnouncementDialog';
 import { getObsidianSettings, getEffectiveVaultPath, isObsidianConfigured, CUSTOM_PATH_SENTINEL } from '@plannotator/ui/utils/obsidian';
 import { getBearSettings } from '@plannotator/ui/utils/bear';
 import { getOctarineSettings, isOctarineConfigured } from '@plannotator/ui/utils/octarine';
@@ -40,6 +41,7 @@ import { type AIProviderOption } from '@plannotator/ui/utils/aiProvider';
 import { useAIProviderConfig } from '@plannotator/ui/hooks/useAIProviderConfig';
 import { markPlanAIAnnouncementSeen, needsPlanAIAnnouncement } from '@plannotator/ui/utils/planAIAnnouncement';
 import { markLookAndFeelAnnouncementSeen, needsLookAndFeelAnnouncement } from '@plannotator/ui/utils/lookAndFeelAnnouncement';
+import { markVimModeAnnouncementSeen, needsVimModeAnnouncement } from '@plannotator/ui/utils/vimModeAnnouncement';
 import { buildDefaultPrompt, useAIChat } from '@plannotator/ui/hooks/useAIChat';
 import { getUIPreferences, type UIPreferences, type PlanWidth } from '@plannotator/ui/utils/uiPreferences';
 import { getEditorMode, saveEditorMode } from '@plannotator/ui/utils/editorMode';
@@ -470,6 +472,7 @@ const App: React.FC = () => {
   });
   const [showPlanAIAnnouncement, setShowPlanAIAnnouncement] = useState(needsPlanAIAnnouncement);
   const [showLookAndFeelAnnouncement, setShowLookAndFeelAnnouncement] = useState(needsLookAndFeelAnnouncement);
+  const [showVimModeAnnouncement, setShowVimModeAnnouncement] = useState(needsVimModeAnnouncement);
   const isMobile = useIsMobile();
 
   const viewerRef = useRef<ViewerHandle>(null);
@@ -593,6 +596,11 @@ const App: React.FC = () => {
   const dismissLookAndFeelAnnouncement = useCallback(() => {
     markLookAndFeelAnnouncementSeen();
     setShowLookAndFeelAnnouncement(false);
+  }, []);
+
+  const dismissVimModeAnnouncement = useCallback(() => {
+    markVimModeAnnouncementSeen();
+    setShowVimModeAnnouncement(false);
   }, []);
 
   const handleAIChatToggle = useCallback(() => {
@@ -3987,9 +3995,18 @@ const App: React.FC = () => {
     !isSharedSession &&
     !goalSetupMode &&
     !showPermissionModeSetup;
+  const shouldShowVimModeAnnouncement =
+    showVimModeAnnouncement &&
+    !shouldShowLookAndFeelAnnouncement &&
+    !isSharedSession &&
+    !archive.archiveMode &&
+    !goalSetupMode &&
+    !showPermissionModeSetup &&
+    !submitted;
   const shouldShowPlanAIAnnouncement =
     showPlanAIAnnouncement &&
     !shouldShowLookAndFeelAnnouncement &&
+    !shouldShowVimModeAnnouncement &&
     canUseAI &&
     aiSessionEnabled &&
     isApiMode &&
@@ -4951,6 +4968,15 @@ const App: React.FC = () => {
           gridEnabled={gridEnabled}
           onToggleGrid={(v) => configStore.set('gridEnabled', v)}
           onDismiss={dismissLookAndFeelAnnouncement}
+        />
+
+        <VimModeAnnouncementDialog
+          isOpen={shouldShowVimModeAnnouncement}
+          vimModeEnabled={vimModeEnabled}
+          vimHudEnabled={vimHudEnabled}
+          onVimModeChange={(enabled) => configStore.set('vimModeEnabled', enabled)}
+          onVimHudChange={(enabled) => configStore.set('vimHudEnabled', enabled)}
+          onDismiss={dismissVimModeAnnouncement}
         />
 
         {/* Image Annotator for pasted images */}

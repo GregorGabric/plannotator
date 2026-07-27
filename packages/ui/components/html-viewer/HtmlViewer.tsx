@@ -103,6 +103,14 @@ function parseVimBridgeState(value: unknown): VimSelectionHudContext | null {
     : null;
 }
 
+function parseVimBridgeHelp(value: unknown): boolean | null {
+  return isRecord(value)
+    && value.type === `${PREFIX}vim-help`
+    && typeof value.open === "boolean"
+    ? value.open
+    : null;
+}
+
 /** Inputs for the sandboxed raw-HTML viewer and its parent-side annotation UI. */
 export interface HtmlViewerProps {
   rawHtml: string;
@@ -178,6 +186,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     const [vimBridgePhase, setVimBridgePhase] =
       useState<VimSelectionHudContext>("inactive");
     const [vimHudCommand, setVimHudCommand] = useState<VimHudCommand | null>(null);
+    const [vimHelpOpen, setVimHelpOpen] = useState(false);
     const vimHudSequenceRef = useRef(0);
     const vimHudActive = vimModeEnabled && vimHudEnabled;
     const [globalCommentPopover, setGlobalCommentPopover] = useState<{
@@ -220,9 +229,15 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
           setIframeReadyVersion((version) => version + 1);
           setVimBridgePhase("inactive");
           setVimHudCommand(null);
+          setVimHelpOpen(false);
           return;
         }
         if (!vimHudActive) return;
+        const vimHelp = parseVimBridgeHelp(e.data);
+        if (vimHelp !== null) {
+          setVimHelpOpen(vimHelp);
+          return;
+        }
         const vimState = parseVimBridgeState(e.data);
         if (vimState) {
           setVimBridgePhase(vimState);
@@ -247,7 +262,21 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       if (vimHudActive) return;
       setVimBridgePhase("inactive");
       setVimHudCommand(null);
+      setVimHelpOpen(false);
     }, [vimHudActive]);
+
+    const handleVimHelpOpenChange = useCallback((open: boolean) => {
+      setVimHelpOpen(open);
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: `${PREFIX}set-vim-help`, open },
+        "*",
+      );
+    }, []);
+
+    const handleVimHudFocusLeave = useCallback(() => {
+      if (iframeRef.current === document.activeElement) return;
+      setIframeFocused(false);
+    }, []);
 
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
@@ -431,19 +460,30 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
             }}
             title={title}
             onFocus={() => setIframeFocused(true)}
-            onBlur={() => setIframeFocused(false)}
+            onBlur={(event) => {
+              if (
+                event.relatedTarget instanceof Element
+                && event.relatedTarget.closest('[data-vim-key-hud]')
+              ) {
+                return;
+              }
+              setIframeFocused(false);
+            }}
           />
           </article>
         </div>
 
         {vimHudActive
-          && vimBridgePhase !== "inactive"
-          && (iframeFocused || vimBridgePhase === "action")
+          && (vimBridgePhase !== "inactive" || vimHelpOpen)
+          && (iframeFocused || vimBridgePhase === "action" || vimHelpOpen)
           && createPortal(
             <VimKeyHud
               command={vimHudCommand}
               phase={getVimHudPhase(vimBridgePhase, vimHudCommand?.actionId)}
               inputMethod={inputMethod}
+              expanded={vimHelpOpen}
+              onExpandedChange={handleVimHelpOpenChange}
+              onFocusLeave={handleVimHudFocusLeave}
             />,
             document.body,
           )}

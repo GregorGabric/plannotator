@@ -64,6 +64,37 @@ describe.if(hasDom)('HtmlViewer Vim HUD bridge', () => {
     expect(document.querySelector('[data-vim-hud-command]')?.textContent)
       .toBe('Next block');
 
+    const mapToggle = document.querySelector<HTMLButtonElement>(
+      '[data-vim-key-map-toggle]',
+    );
+    act(() => mapToggle?.focus());
+    expect(document.activeElement).toBe(mapToggle);
+    expect(document.querySelector('[data-vim-key-hud]')).not.toBeNull();
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: iframe.contentWindow,
+        data: {
+          type: 'plannotator-bridge-vim-help',
+          open: true,
+        },
+      }));
+    });
+    expect(document.querySelector('[data-vim-key-map]')).not.toBeNull();
+    expect(document.querySelector('[data-vim-key-hud]')?.getAttribute('data-expanded'))
+      .toBe('true');
+
+    act(() => {
+      window.dispatchEvent(new MessageEvent('message', {
+        source: iframe.contentWindow,
+        data: {
+          type: 'plannotator-bridge-vim-help',
+          open: false,
+        },
+      }));
+    });
+    expect(document.querySelector('[data-vim-key-map]')).toBeNull();
+
     act(() => {
       window.dispatchEvent(new MessageEvent('message', {
         source: iframe.contentWindow,

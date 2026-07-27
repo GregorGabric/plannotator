@@ -75,7 +75,8 @@ export interface UseVimSelectionReturn {
   readonly onFocus: (event: ReactFocusEvent<HTMLElement>) => void;
   readonly onBlur: (event: ReactFocusEvent<HTMLElement>) => void;
   readonly onMouseDown: (event: ReactMouseEvent<HTMLElement>) => void;
-  readonly closeHelp: () => void;
+  readonly onHelpOpenChange: (open: boolean) => void;
+  readonly onHudFocusLeave: () => void;
 }
 
 function selectionModeForAction(key: string): EditorMode | null {
@@ -266,14 +267,15 @@ export function useVimSelection({
     setStateValue(next);
   }, []);
 
-  const liveGraph = containerRef.current
-    ? buildSemanticTargetGraph(containerRef.current)
-    : null;
-  const activeTarget = liveGraph && (
+  const needsLiveTarget = enabled && (
     state.phase === 'block'
     || state.phase === 'inline'
     || state.phase === 'action'
-  )
+  );
+  const liveGraph = needsLiveTarget && containerRef.current
+    ? buildSemanticTargetGraph(containerRef.current)
+    : null;
+  const activeTarget = liveGraph
     ? resolveSemanticTarget(liveGraph, targetKeyForState(state))
     : null;
 
@@ -975,8 +977,19 @@ export function useVimSelection({
 
   const onBlur = useCallback((event: ReactFocusEvent<HTMLElement>) => {
     if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+    if (
+      event.relatedTarget instanceof Element
+      && event.relatedTarget.closest('[data-vim-key-hud]')
+    ) {
+      return;
+    }
     setFocused(false);
   }, []);
+
+  const onHudFocusLeave = useCallback(() => {
+    if (containerRef.current === document.activeElement) return;
+    setFocused(false);
+  }, [containerRef]);
 
   const onMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (!enabled || isDocumentKeyboardControl(event.target)) return;
@@ -997,6 +1010,7 @@ export function useVimSelection({
     onFocus,
     onBlur,
     onMouseDown,
-    closeHelp: () => setHelpOpen(false),
+    onHelpOpenChange: setHelpOpen,
+    onHudFocusLeave,
   };
 }

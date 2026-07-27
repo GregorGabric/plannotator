@@ -120,8 +120,22 @@ describe('shortcuts', () => {
     const quickLabelEvent = { key: '3', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true, code: 'Digit3' } as KeyboardEvent;
     const macOptionQuickLabelEvent = { key: '£', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true, code: 'Digit3' } as KeyboardEvent;
     const wrongEvent = { key: 'Enter', ctrlKey: false, metaKey: false, shiftKey: false, altKey: true, code: 'Enter' } as KeyboardEvent;
-    const spaceEvent = { key: ' ', ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, code: 'Space' } as KeyboardEvent;
-    const questionEvent = { key: '?', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false, code: 'Slash' } as KeyboardEvent;
+    const spaceEvent = {
+      key: ' ',
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      code: 'Space',
+    };
+    const questionEvent = {
+      key: '?',
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+      altKey: false,
+      code: 'Slash',
+    };
 
     expect(matchesShortcutBinding(submitEvent, 'Mod+Enter')).toBe(true);
     expect(matchesShortcutBinding(reverseSearchEvent, 'Shift+F3')).toBe(true);

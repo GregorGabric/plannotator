@@ -89,6 +89,11 @@ describe("viewer CSS/script namespace", () => {
   test("annotation CSS reads only --pn- variables", () => {
     expect(ANNOTATION_HIGHLIGHT_CSS).toContain("var(--pn-");
     expect(/var\(--(?!pn-)/.test(ANNOTATION_HIGHLIGHT_CSS)).toBe(false);
+    expect(ANNOTATION_HIGHLIGHT_CSS).toContain("[data-plannotator-vim-reticle]");
+    expect(ANNOTATION_HIGHLIGHT_CSS).toContain("@media (prefers-reduced-motion: reduce)");
+    expect(BRIDGE_SCRIPT).toContain("return 'PREVIOUS BLOCK'");
+    expect(BRIDGE_SCRIPT).toContain("return 'NEXT BLOCK'");
+    expect(BRIDGE_SCRIPT).toContain("return 'SWAPPED ENDS'");
   });
 
   test("bridge script reads only --pn- variables and guards bare writes", () => {
@@ -124,6 +129,13 @@ describe("hasHostThemeOptIn", () => {
 // opted in to host theming. Requires DOM_TESTS=1 (happy-dom preload).
 const hasDom = typeof document !== "undefined";
 describe.if(hasDom)("bridge theme handler (DOM)", () => {
+  function bridgeMessageData(event: MessageEvent): Record<string, unknown> | null {
+    if (!event.data || typeof event.data !== "object") return null;
+    return event.data instanceof Object
+      ? Object.fromEntries(Object.entries(event.data))
+      : null;
+  }
+
   beforeAll(() => {
     new Function(BRIDGE_SCRIPT)();
   });
@@ -217,13 +229,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
 
     const bridgeMessages: Array<Record<string, unknown>> = [];
     const capture = (event: MessageEvent) => {
-      if (
-        event.data
-        && typeof event.data === "object"
-        && (event.data as { type?: string }).type === "plannotator-bridge-selection"
-      ) {
-        bridgeMessages.push(event.data as Record<string, unknown>);
-      }
+      const data = bridgeMessageData(event);
+      if (data?.type === "plannotator-bridge-selection") bridgeMessages.push(data);
     };
     window.addEventListener("message", capture);
     const comment = new KeyboardEvent("keydown", {
@@ -484,13 +491,17 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.innerHTML = "<h1>First block</h1><p>Second block</p>";
     const hudMessages: Array<Record<string, unknown>> = [];
     const capture = (event: MessageEvent) => {
+      const data = bridgeMessageData(event);
       if (
-        event.data
-        && typeof event.data === "object"
-        && ["plannotator-bridge-vim-command", "plannotator-bridge-vim-state"]
-          .includes((event.data as { type?: string }).type ?? "")
+        data
+        && [
+          "plannotator-bridge-vim-command",
+          "plannotator-bridge-vim-state",
+          "plannotator-bridge-vim-help",
+        ]
+          .includes(typeof data.type === "string" ? data.type : "")
       ) {
-        hudMessages.push(event.data as Record<string, unknown>);
+        hudMessages.push(data);
       }
     };
     window.addEventListener("message", capture);
@@ -531,7 +542,6 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       cancelable: true,
     }));
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    window.removeEventListener("message", capture);
 
     expect(document.querySelector("[data-plannotator-vim-badge]")).toBeNull();
     expect(hudMessages).toContainEqual({
@@ -544,11 +554,60 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       key: "j",
       context: "block",
     });
+    const reticle = document.querySelector<HTMLElement>(
+      "[data-plannotator-vim-reticle]",
+    );
+    expect(reticle).not.toBeNull();
+    expect(reticle?.dataset.vimTargetPhase).toBe("block");
+    expect(reticle?.dataset.vimTargetLabel).toBe("BLOCK · PARAGRAPH");
+    expect(reticle?.querySelectorAll("[data-vim-reticle-corner]")).toHaveLength(4);
+    expect(document.querySelector(".plannotator-pinpoint-hover")).toBeNull();
+
+    document.body.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "?",
+      bubbles: true,
+      cancelable: true,
+    }));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(hudMessages).toContainEqual({
+      type: "plannotator-bridge-vim-help",
+      open: true,
+    });
+    expect(document.querySelector("[data-plannotator-vim-help]")).toBeNull();
+
+    postBridge({
+      type: "plannotator-bridge-set-vim-help",
+      open: false,
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(hudMessages).toContainEqual({
+      type: "plannotator-bridge-vim-help",
+      open: false,
+    });
+
+    document.body.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "l",
+      bubbles: true,
+      cancelable: true,
+    }));
+    expect(reticle?.dataset.vimTargetPhase).toBe("text");
+    expect(reticle?.dataset.vimTargetLabel).toBe("CURSOR · INLINE TEXT");
+
+    for (const key of ["v", "e"]) {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+    expect(reticle?.dataset.vimTargetPhase).toBe("visual");
+    expect(reticle?.dataset.vimTargetLabel).toBe("VISUAL · EXACT TOKEN");
 
     postBridge({
       type: "plannotator-bridge-set-vim-mode",
       enabled: false,
     });
+    window.removeEventListener("message", capture);
     document.body.replaceChildren();
   });
 });

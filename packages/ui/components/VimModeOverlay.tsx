@@ -6,12 +6,14 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import type { InputMethod } from '../types';
+import type { SemanticTarget } from '../utils/blockTargeting';
 import {
   resolveTextPosition,
   type VimSelectionState,
 } from '../utils/vimNavigation';
 import { getVimHudPhase, type VimHudCommand } from '../utils/vimHud';
 import { VimKeyHud } from './VimKeyHud';
+import { VimTargetReticle } from './VimTargetReticle';
 
 interface CursorPosition {
   readonly top: number;
@@ -27,8 +29,10 @@ export interface VimModeOverlayProps {
   focused: boolean;
   hudEnabled: boolean;
   hudCommand: VimHudCommand | null;
+  activeTarget: SemanticTarget | null;
   helpOpen: boolean;
-  onCloseHelp: () => void;
+  onHelpOpenChange: (open: boolean) => void;
+  onHudFocusLeave: () => void;
 }
 
 /**
@@ -42,8 +46,10 @@ export function VimModeOverlay({
   focused,
   hudEnabled,
   hudCommand,
+  activeTarget,
   helpOpen,
-  onCloseHelp,
+  onHelpOpenChange,
+  onHudFocusLeave,
 }: VimModeOverlayProps) {
   const [cursorPosition, setCursorPosition] = useState<CursorPosition | null>(null);
   const rafRef = useRef(0);
@@ -100,6 +106,7 @@ export function VimModeOverlay({
 
   const active = state.phase !== 'inactive'
     && (focused || state.phase === 'action');
+  const hudVisible = hudEnabled && (active || helpOpen);
   const phaseLabel = state.phase === 'visual-block'
     ? 'VISUAL BLOCK'
     : state.phase === 'text'
@@ -114,7 +121,7 @@ export function VimModeOverlay({
         <div
           data-vim-cursor
           aria-hidden="true"
-          className="absolute z-[22] w-[2px] rounded-full bg-primary pointer-events-none"
+          className="absolute z-[26] w-[2px] rounded-full bg-primary pointer-events-none"
           style={{
             top: cursorPosition.top,
             left: cursorPosition.left,
@@ -123,11 +130,23 @@ export function VimModeOverlay({
         />
       )}
 
-      {active && hudEnabled && createPortal(
+      {active && hudEnabled && (
+        <VimTargetReticle
+          containerRef={containerRef}
+          state={state}
+          target={activeTarget}
+          command={hudCommand}
+        />
+      )}
+
+      {hudVisible && createPortal(
         <VimKeyHud
           command={hudCommand}
           phase={hudPhase}
           inputMethod={inputMethod}
+          expanded={helpOpen}
+          onExpandedChange={onHelpOpenChange}
+          onFocusLeave={onHudFocusLeave}
         />,
         document.body,
       )}
@@ -143,7 +162,7 @@ export function VimModeOverlay({
         document.body,
       )}
 
-      {helpOpen && createPortal(
+      {helpOpen && !hudEnabled && createPortal(
         <div
           className="fixed inset-0 z-[140] flex items-center justify-center bg-background/65 p-4 backdrop-blur-sm"
           role="dialog"
@@ -153,11 +172,11 @@ export function VimModeOverlay({
             if (event.key === 'Escape' || event.key === '?') {
               event.preventDefault();
               event.stopPropagation();
-              onCloseHelp();
+              onHelpOpenChange(false);
             }
           }}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) onCloseHelp();
+            if (event.target === event.currentTarget) onHelpOpenChange(false);
           }}
         >
           <div className="w-full max-w-lg rounded-xl border border-border bg-popover p-5 shadow-2xl">
@@ -170,7 +189,7 @@ export function VimModeOverlay({
               </div>
               <button
                 type="button"
-                onClick={onCloseHelp}
+                onClick={() => onHelpOpenChange(false)}
                 className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
               >
                 Close

@@ -158,7 +158,7 @@ export const vimSelectionShortcuts = defineShortcutScope({
       displayOrder: 240,
     },
     help: {
-      description: 'Show contextual help',
+      description: 'Toggle key map',
       bindings: ['?'],
       section: 'Vim Annotation Actions',
       displayOrder: 250,

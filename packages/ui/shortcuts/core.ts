@@ -76,6 +76,10 @@ for (let n = 1; n <= 12; n += 1) {
 
 const MODIFIER_TOKENS = new Set(['Mod', 'Shift', 'Alt']);
 const SHIFTED_LITERAL_TOKENS = new Set(['{', '}', '?', '$']);
+type ShortcutKeyEvent = Pick<
+  KeyboardEvent,
+  'key' | 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'
+>;
 
 export function defineShortcutScope<TAction extends string>(scope: ShortcutScopeDefinition<TAction>): ShortcutScopeDefinition<TAction> {
   return scope;
@@ -114,7 +118,7 @@ export function parseDoubleTapBinding(binding: string): string | null {
  * Check if a KeyboardEvent matches a named key token (for sequential/stateful matching).
  * Unlike `matchesShortcutBinding`, this matches a single key identity without modifier checks.
  */
-export function matchesKeyName(event: KeyboardEvent, keyName: string): boolean {
+export function matchesKeyName(event: ShortcutKeyEvent, keyName: string): boolean {
   if (keyName === 'Alt') return event.key === 'Alt';
   if (keyName === 'Shift') return event.key === 'Shift';
   if (keyName === 'Mod') return event.key === 'Meta' || event.key === 'Control';
@@ -332,13 +336,13 @@ export function formatShortcutBindingsText(
   return bindings.map(binding => formatShortcutBindingText(binding, platform)).join(' or ');
 }
 
-function getDigitCode(event: KeyboardEvent): string | null {
+function getDigitCode(event: ShortcutKeyEvent): string | null {
   const code = typeof event.code === 'string' ? event.code : '';
   const match = code.match(/^Digit([0-9])$/);
   return match ? match[1] : null;
 }
 
-export function getShortcutDigit(event: KeyboardEvent): number | null {
+export function getShortcutDigit(event: ShortcutKeyEvent): number | null {
   const parsed = Number.parseInt(event.key, 10);
   if (!Number.isNaN(parsed)) return parsed;
 
@@ -346,7 +350,7 @@ export function getShortcutDigit(event: KeyboardEvent): number | null {
   return digitCode === null ? null : Number.parseInt(digitCode, 10);
 }
 
-function matchesKeyToken(event: KeyboardEvent, token: string): boolean {
+function matchesKeyToken(event: ShortcutKeyEvent, token: string): boolean {
   const key = event.key.length === 1 ? event.key.toUpperCase() : event.key;
   const shortcutDigit = getShortcutDigit(event);
 
@@ -379,7 +383,7 @@ function matchesKeyToken(event: KeyboardEvent, token: string): boolean {
  * Sequential and hold bindings deliberately return false; their timing
  * semantics are handled by the shortcut runtime's dedicated paths.
  */
-export function matchesShortcutBinding(event: KeyboardEvent, binding: string): boolean {
+export function matchesShortcutBinding(event: ShortcutKeyEvent, binding: string): boolean {
   if (binding.includes(' ') || binding.includes('hold')) {
     return false;
   }
@@ -410,10 +414,10 @@ export function matchesShortcutBinding(event: KeyboardEvent, binding: string): b
  *
  * The group uses the same normalized syntax as an ordinary one-press binding.
  */
-export function matchesShortcutBindingGroup(event: KeyboardEvent, group: string): boolean {
+export function matchesShortcutBindingGroup(event: ShortcutKeyEvent, group: string): boolean {
   return matchesShortcutBinding(event, group);
 }
 
-export function getMatchingShortcutBindingIndex(event: KeyboardEvent, bindings: string[]): number {
+export function getMatchingShortcutBindingIndex(event: ShortcutKeyEvent, bindings: string[]): number {
   return bindings.findIndex(binding => matchesShortcutBinding(event, binding));
 }

@@ -56,14 +56,20 @@ annotation in the plan and annotate applications.
 - `Escape`: back out exactly one level.
 
 The document element may own technical keyboard focus, but it is never drawn
-as the active target. BLOCK and INLINE use the existing Pinpoint wash and
-label around the exact semantic element. TEXT uses a caret. VISUAL and VISUAL
-BLOCK use the browser selection. The compact status badge reports BLOCK,
-INLINE, NORMAL, VISUAL, VISUAL BLOCK, or ACTION. Users who additionally enable
-**Vim HUD** get the same information in a larger bottom-right command display:
-recent handled keys, the active navigation granularity, the input method, and
-a contextual action description. The HUD uses the same component and styling
-for Markdown and raw HTML.
+as the active target. Without the optional HUD, BLOCK and INLINE use the
+existing Pinpoint wash, TEXT uses a caret, and VISUAL / VISUAL BLOCK use the
+browser selection. The compact status badge reports BLOCK, INLINE, NORMAL,
+VISUAL, VISUAL BLOCK, or ACTION. Users who additionally enable **Vim HUD** get
+the video treatment on the real document: a violet four-corner reticle and
+target label around the live semantic block, caret, or selection, plus the
+larger bottom-right command display with recent handled keys, active navigation
+granularity, input method, and contextual action description. The HUD's visible
+**Key map** control—or `?`—expands that same bottom-right panel into a complete
+legend grouped by Document, Text, Select, Annotate, and Control commands. The
+group matching the current navigation level is highlighted so a learner can
+tell when `j` / `k` move by blocks versus lines. Raw HTML mirrors the same
+target treatment inside its sandboxed iframe while using the shared parent key
+HUD and key map.
 
 Pointer Pinpoint and keyboard navigation resolve through the same canonical
 graph, which owns target identity, hierarchy, labels, annotation ranges, and
@@ -81,7 +87,7 @@ to the parent before block navigation resumes.
 - `t`: label.
 - `y`: copy.
 - `Escape`: cancel one layer.
-- `?`: show contextual help.
+- `?`: expand or collapse the contextual HUD key map.
 
 Annotation actions apply to BLOCK/INLINE targets or an active VISUAL range.
 In NORMAL text state, first create a range with `v`; a collapsed caret is not
