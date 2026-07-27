@@ -346,6 +346,8 @@ starts characterwise Visual selection and
 semantic target graph drives pointer Pinpoint and keyboard navigation. Press
 `?` in the document for the contextual key reference. Inputs, dialogs,
 editors, `Tab`, and all pointer interactions retain their native behavior.
+The document takes focus automatically when the page is otherwise neutral;
+press `Escape` from app chrome to return to it without clicking.
 An additional default-off **Vim HUD** toggle appears beneath Vim controls. It
 uses the product-demo HUD styling to show recent handled keys, the current
 block/line/word/Visual phase, and the command meaning without capturing text

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useVimDocumentFocus } from "../../hooks/useVimDocumentFocus";
 import {
   isVimSelectionActionId,
   type VimSelectionHudContext,
@@ -278,6 +279,25 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       setIframeFocused(false);
     }, []);
 
+    const focusVimDocument = useCallback((): boolean => {
+      const iframe = iframeRef.current;
+      if (!vimModeEnabled || !iframe) return false;
+      if (document.activeElement === iframe) return false;
+      iframe.focus({ preventScroll: true });
+      if (document.activeElement !== iframe) return false;
+      iframe.contentWindow?.postMessage(
+        { type: `${PREFIX}focus-vim` },
+        "*",
+      );
+      return true;
+    }, [vimModeEnabled]);
+
+    useVimDocumentFocus({
+      enabled: vimModeEnabled,
+      blocked: !!hook.toolbarState || !!hook.commentPopover || !!hook.quickLabelPicker,
+      focusDocument: focusVimDocument,
+    });
+
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
       if (annotations.length > 0) {
@@ -297,7 +317,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
 
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
-      iframeRef.current?.contentWindow?.postMessage(
+      const iframe = iframeRef.current;
+      iframe?.contentWindow?.postMessage(
         {
           type: `${PREFIX}set-vim-mode`,
           enabled: vimModeEnabled,
@@ -306,6 +327,15 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         },
         "*",
       );
+      if (vimModeEnabled && iframe === document.activeElement) {
+        // The initial parent focus can land before the sandbox bridge is ready.
+        // Reassert it after configuration so raw HTML enters BLOCK immediately,
+        // matching the Markdown surface instead of waiting for the first key.
+        iframe.contentWindow?.postMessage(
+          { type: `${PREFIX}focus-vim` },
+          "*",
+        );
+      }
     }, [iframeReadyVersion, mode, vimHudEnabled, vimModeEnabled]);
 
     const vimOverlayWasOpenRef = useRef(false);

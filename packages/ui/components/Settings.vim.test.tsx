@@ -86,4 +86,20 @@ describe('Settings Vim panel', () => {
       document.querySelector('button[role="switch"][aria-label="Vim controls"]'),
     ).not.toBeNull();
   });
+
+  test.skipIf(!hasDom)('exposes modal semantics and closes on Escape', async () => {
+    await mountSettings('plan');
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]');
+    expect(dialog?.getAttribute('aria-labelledby')).toBe('plannotator-settings-title');
+
+    await act(async () => {
+      dialog?.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }));
+    });
+
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
 });

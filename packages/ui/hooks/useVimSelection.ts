@@ -46,6 +46,7 @@ import {
   type VimVisualBlockState,
   type VimVisualState,
 } from '../utils/vimNavigation';
+import { useVimDocumentFocus } from './useVimDocumentFocus';
 
 /** Inputs required by the Markdown semantic Vim controller. */
 export interface UseVimSelectionOptions {
@@ -990,6 +991,21 @@ export function useVimSelection({
     if (containerRef.current === document.activeElement) return;
     setFocused(false);
   }, [containerRef]);
+
+  const focusDocument = useCallback((): boolean => {
+    const container = containerRef.current;
+    if (!enabled || !container) return false;
+    if (document.activeElement === container) return false;
+    restoringFocusRef.current = stateRef.current.phase !== 'inactive';
+    container.focus({ preventScroll: true });
+    return document.activeElement === container;
+  }, [containerRef, enabled]);
+
+  useVimDocumentFocus({
+    enabled,
+    blocked,
+    focusDocument,
+  });
 
   const onMouseDown = useCallback((event: ReactMouseEvent<HTMLElement>) => {
     if (!enabled || isDocumentKeyboardControl(event.target)) return;

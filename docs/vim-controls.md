@@ -43,6 +43,9 @@ annotation in the plan and annotate applications.
 
 - Activating Vim controls enters **BLOCK** at the semantic block nearest the
   viewport: a paragraph, heading, list item, code block, table, and so on.
+- When the page is otherwise neutral, the enabled document takes keyboard
+  focus automatically. From app chrome, `Escape` returns focus to the document;
+  editors and open dialogs retain first ownership of the key.
 - `j` / `k`: next or previous block; after refining, next or previous
   semantic sibling (for example, another table row, cell, or inline target).
 - `gg` / `G`: first or last block.

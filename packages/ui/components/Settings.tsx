@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { Origin } from '@plannotator/core/agents';
 import type { DiffLineBgIntensity } from '@plannotator/core/config-types';
@@ -70,6 +70,7 @@ import {
   saveFileBrowserSettings,
   type FileBrowserSettings,
 } from '../utils/fileBrowser';
+import { requestVimDocumentFocus } from '../hooks/useVimDocumentFocus';
 
 type SettingsTab = 'general' | 'theme' | 'git' | 'display' | 'saving' | 'labels' | 'vim' | 'shortcuts' | 'ai' | 'files' | 'obsidian' | 'bear' | 'octarine' | 'comments' | 'hooks';
 
@@ -255,10 +256,11 @@ function VimSettingsTab({
           <div>
             <div className="text-xs font-semibold">Learn while you navigate</div>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Focus the document, then use <span className="font-mono text-foreground">j</span> and{' '}
-              <span className="font-mono text-foreground">k</span> to move by block. With the HUD
-              enabled, press <span className="font-mono text-foreground">?</span> for the complete
-              contextual key map.
+              Vim takes focus automatically when the page is ready. From other app controls, press{' '}
+              <span className="font-mono text-foreground">Esc</span> to return to the document, then
+              use <span className="font-mono text-foreground">j</span> and{' '}
+              <span className="font-mono text-foreground">k</span> to move by block. Press{' '}
+              <span className="font-mono text-foreground">?</span> for the complete key map.
             </p>
           </div>
         </div>
@@ -721,7 +723,22 @@ const CommentsTab: React.FC = () => {
 
 export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange, onIdentityChange, origin, mode = 'plan', onUIPreferencesChange, externalOpen, onExternalClose, aiProviders = [], gitUser, sinceBaseUnavailable, onDetectObsidianVaults }) => {
   const [showDialog, setShowDialog] = useState(false);
+  const settingsWasOpenRef = useRef(false);
   const [themePreview, setThemePreview] = useState(false);
+
+  useEffect(() => {
+    const wasOpen = settingsWasOpenRef.current;
+    settingsWasOpenRef.current = showDialog;
+    if (
+      wasOpen
+      && !showDialog
+      && !themePreview
+      && mode !== 'review'
+      && configStore.get('vimModeEnabled')
+    ) {
+      requestVimDocumentFocus();
+    }
+  }, [mode, showDialog, themePreview]);
 
   useEffect(() => {
     if (!themePreview) return;
@@ -987,12 +1004,23 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
         >
           <div
             className="bg-card border border-border rounded-xl w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl relative overflow-hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="plannotator-settings-title"
             onClick={e => e.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape' || event.defaultPrevented) return;
+              event.preventDefault();
+              event.stopPropagation();
+              setShowDialog(false);
+            }}
           >
             {taterMode && <TaterSpritePullup />}
             <div className="flex items-center justify-between p-4 border-b border-border">
-              <h3 className="font-semibold text-sm">Settings</h3>
+              <h3 id="plannotator-settings-title" className="font-semibold text-sm">Settings</h3>
               <button
+                type="button"
+                aria-label="Close settings"
                 onClick={() => setShowDialog(false)}
                 className="p-1.5 rounded-md bg-muted hover:bg-muted/80 text-foreground transition-colors"
               >
@@ -1728,7 +1756,11 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                                       saveQuickLabels(updated);
                                       setEditingTipIndex(null);
                                     }
-                                    if (e.key === 'Escape') setEditingTipIndex(null);
+                                    if (e.key === 'Escape') {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      setEditingTipIndex(null);
+                                    }
                                   }}
                                   placeholder="AI instruction tip..."
                                   className="flex-1 px-2 py-1 bg-background/60 rounded text-[10px] text-muted-foreground placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-primary/50"
