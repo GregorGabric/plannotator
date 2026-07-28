@@ -158,6 +158,7 @@ import {
   createAnnotateOutcomeEmitter,
   supportsAnnotateApprovalNotes,
 } from "./annotate-output";
+import { createServerShutdownCoordinator } from "./server-shutdown";
 
 // Embed the built HTML at compile time
 // @ts-ignore - Bun import attribute for text
@@ -286,16 +287,30 @@ if (isInteractiveNoArgInvocation(args, process.stdin.isTTY)) {
   process.exit(0);
 }
 
-// Ensure session cleanup on exit
+// Ensure session cleanup on every explicit exit, including both graceful and
+// force-exit signal paths.
 process.on("exit", () => unregisterSession());
 
-// Route fatal signals through process.exit() so "exit" handlers run — by
-// default a SIGINT/SIGTERM death skips them, leaking background-warmup
-// children and stale `git worktree` registrations (the --local PR checkout
-// cleanup below is registered on "exit"). `once` keeps a second Ctrl-C as a
-// force-quit escape hatch if cleanup ever hangs.
-process.once("SIGINT", () => process.exit(130));
-process.once("SIGTERM", () => process.exit(143));
+const serverShutdown = createServerShutdownCoordinator({
+  exit: (code) => process.exit(code),
+  onStopError: (error) => {
+    console.error(
+      `[plannotator] Failed to stop server during shutdown: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  },
+});
+
+// The first signal waits for the current server's idempotent stop routine,
+// including external presenter dismissal. A second signal force-exits if
+// cleanup hangs. process.exit() still runs the unregisterSession handler above.
+process.on("SIGINT", () => {
+  void serverShutdown.handleSignal("SIGINT");
+});
+process.on("SIGTERM", () => {
+  void serverShutdown.handleSignal("SIGTERM");
+});
 
 // Check if URL sharing is enabled (default: true)
 const sharingEnabled = resolveSharingEnabled(loadConfig());
@@ -495,14 +510,13 @@ if (args[0] === "sessions") {
 
   const goalProject = (await detectProjectName()) ?? "_unknown";
 
-  const server = await startGoalSetupServer({
+  const server = await serverShutdown.trackServerStart(startGoalSetupServer({
     bundle,
     origin: detectedOrigin,
     htmlContent: planHtmlContent,
-    onReady: (url, isRemote, port) => {
-      handleGoalSetupServerReady(url, isRemote, port);
-    },
-  });
+    onReady: (url, isRemote, port) =>
+      handleGoalSetupServerReady(url, isRemote, port),
+  }));
 
   registerSession({
     pid: process.pid,
@@ -516,7 +530,7 @@ if (args[0] === "sessions") {
 
   const result = await server.waitForDecision();
   await Bun.sleep(800);
-  server.stop();
+  await server.stop();
 
   if (result.exit) {
     console.log(JSON.stringify({ decision: "dismissed", stage: bundle.stage }));
@@ -833,7 +847,7 @@ if (args[0] === "sessions") {
   const reviewProject = (await detectProjectName()) ?? "_unknown";
 
   // Start review server (even if empty - user can switch diff types in local mode)
-  const server = await startReviewServer({
+  const server = await serverShutdown.trackServerStart(startReviewServer({
     rawPatch,
     gitRef,
     error: diffError,
@@ -851,13 +865,13 @@ if (args[0] === "sessions") {
     htmlContent: reviewHtmlContent,
     onCleanup: worktreeCleanup,
     onReady: async (url, isRemote, port) => {
-      handleReviewServerReady(url, isRemote, port);
+      await handleReviewServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled && rawPatch) {
         await writeRemoteShareLink(rawPatch, shareBaseUrl, "review changes", "diff only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -876,7 +890,7 @@ if (args[0] === "sessions") {
   await Bun.sleep(1500);
 
   // Cleanup
-  server.stop();
+  await server.stop();
 
   // Output feedback (captured by slash command)
   if (result.exit) {
@@ -1050,7 +1064,7 @@ if (args[0] === "sessions") {
   const annotateProject = (await detectProjectName()) ?? "_unknown";
 
   // Start the annotate server (reuses plan editor HTML)
-  const server = await startAnnotateServer({
+  const server = await serverShutdown.trackServerStart(startAnnotateServer({
     markdown,
     filePath: absolutePath,
     origin: detectedOrigin,
@@ -1074,7 +1088,7 @@ if (args[0] === "sessions") {
     project: annotateProject,
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {
-      handleAnnotateServerReady(url, isRemote, port);
+      await handleAnnotateServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled) {
         if (rawHtml) {
@@ -1087,7 +1101,7 @@ if (args[0] === "sessions") {
         }
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1257,7 +1271,7 @@ if (args[0] === "sessions") {
     ? recentMessages.map((m) => ({ messageId: m.messageId, text: m.text, timestamp: m.timestamp }))
     : undefined;
 
-  const server = await startAnnotateServer({
+  const server = await serverShutdown.trackServerStart(startAnnotateServer({
     markdown: annotatedMessage.text,
     filePath: "last-message",
     origin: detectedOrigin,
@@ -1274,13 +1288,13 @@ if (args[0] === "sessions") {
     htmlContent: planHtmlContent,
     recentMessages: pickerMessages,
     onReady: async (url, isRemote, port) => {
-      handleAnnotateServerReady(url, isRemote, port);
+      await handleAnnotateServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled) {
         await writeRemoteShareLink(annotatedMessage.text, shareBaseUrl, "annotate", "message only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1296,7 +1310,7 @@ if (args[0] === "sessions") {
 
   await Bun.sleep(1500);
 
-  server.stop();
+  await server.stop();
 
   emitAnnotateOutcome(result);
   process.exit(0);
@@ -1308,17 +1322,16 @@ if (args[0] === "sessions") {
 
   const archiveProject = (await detectProjectName()) ?? "_unknown";
 
-  const server = await startPlannotatorServer({
+  const server = await serverShutdown.trackServerStart(startPlannotatorServer({
     plan: "",
     origin: detectedOrigin,
     mode: "archive",
     sharingEnabled,
     shareBaseUrl,
     htmlContent: planHtmlContent,
-    onReady: (url, isRemote, port) => {
-      handleServerReady(url, isRemote, port);
-    },
-  });
+    onReady: (url, isRemote, port) =>
+      handleServerReady(url, isRemote, port, { kind: "archive" }),
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1333,7 +1346,7 @@ if (args[0] === "sessions") {
   await server.waitForDone!();
 
   await Bun.sleep(500);
-  server.stop();
+  await server.stop();
   process.exit(0);
 
 } else if (args[0] === "opencode-plan") {
@@ -1366,7 +1379,7 @@ if (args[0] === "sessions") {
   const bridgeSharingEnabled = getBridgeSharingEnabled(input);
   const bridgeShareBaseUrl = getBridgeShareBaseUrl(input);
   const bridgePasteApiUrl = getBridgePasteApiUrl(input);
-  const server = await startPlannotatorServer({
+  const server = await serverShutdown.trackServerStart(startPlannotatorServer({
     plan: planContent,
     origin: "opencode",
     sharingEnabled: bridgeSharingEnabled,
@@ -1381,7 +1394,7 @@ if (args[0] === "sessions") {
         await writeRemoteShareLink(planContent, bridgeShareBaseUrl, "review the plan", "plan only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1513,7 +1526,7 @@ if (args[0] === "sessions") {
   const bridgeShareBaseUrl = getBridgeShareBaseUrl(input);
   const reviewProject = (await detectProjectName()) ?? "_unknown";
 
-  const server = await startReviewServer({
+  const server = await serverShutdown.trackServerStart(startReviewServer({
     rawPatch,
     gitRef,
     error: diffError,
@@ -1529,10 +1542,9 @@ if (args[0] === "sessions") {
     shareBaseUrl: bridgeShareBaseUrl,
     htmlContent: reviewHtmlContent,
     opencodeClient: makeOpenCodeBridgeClient(input.agents),
-    onReady: (url, isRemote, port) => {
-      handleReviewServerReady(url, isRemote, port);
-    },
-  });
+    onReady: (url, isRemote, port) =>
+      handleReviewServerReady(url, isRemote, port),
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1548,7 +1560,7 @@ if (args[0] === "sessions") {
 
   const result = await server.waitForDecision();
   await Bun.sleep(1500);
-  server.stop();
+  await server.stop();
 
   console.log(JSON.stringify({
     decision: result.exit
@@ -1605,7 +1617,7 @@ if (args[0] === "sessions") {
   const annotateProject = (await detectProjectName()) ?? "_unknown";
   const pickerMessages = recentMessages.length > 1 ? recentMessages : undefined;
 
-  const server = await startAnnotateServer({
+  const server = await serverShutdown.trackServerStart(startAnnotateServer({
     markdown: lastMessage.text,
     filePath: "last-message",
     origin: "opencode",
@@ -1617,10 +1629,9 @@ if (args[0] === "sessions") {
     gate: input.gate === true,
     approvalNotesSupported: input.gate === true,
     htmlContent: planHtmlContent,
-    onReady: (url, isRemote, port) => {
-      handleAnnotateServerReady(url, isRemote, port);
-    },
-  });
+    onReady: (url, isRemote, port) =>
+      handleAnnotateServerReady(url, isRemote, port),
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1634,7 +1645,7 @@ if (args[0] === "sessions") {
 
   const result = await server.waitForDecision();
   await Bun.sleep(1500);
-  server.stop();
+  await server.stop();
 
   emitOpenCodeAnnotateOutcome(result);
   process.exit(0);
@@ -1673,7 +1684,7 @@ if (args[0] === "sessions") {
 
   const planProject = (await detectProjectName()) ?? "_unknown";
 
-  const server = await startPlannotatorServer({
+  const server = await serverShutdown.trackServerStart(startPlannotatorServer({
     plan: planContent,
     origin: "copilot-cli",
     sharingEnabled,
@@ -1681,13 +1692,13 @@ if (args[0] === "sessions") {
     pasteApiUrl,
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {
-      handleServerReady(url, isRemote, port);
+      await handleServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled) {
         await writeRemoteShareLink(planContent, shareBaseUrl, "review the plan", "plan only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1701,7 +1712,7 @@ if (args[0] === "sessions") {
 
   const result = await server.waitForDecision();
   await Bun.sleep(1500);
-  server.stop();
+  await server.stop();
 
   // Output Copilot CLI permission decision format
   if (result.approved) {
@@ -1758,7 +1769,7 @@ if (args[0] === "sessions") {
   const annotateProject = (await detectProjectName()) ?? "_unknown";
   const pickerMessages = recent.length > 1 ? recent : undefined;
 
-  const server = await startAnnotateServer({
+  const server = await serverShutdown.trackServerStart(startAnnotateServer({
     markdown: msg.text,
     filePath: "last-message",
     origin: "copilot-cli",
@@ -1774,13 +1785,13 @@ if (args[0] === "sessions") {
     }),
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {
-      handleAnnotateServerReady(url, isRemote, port);
+      await handleAnnotateServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled) {
         await writeRemoteShareLink(msg.text, shareBaseUrl, "annotate", "message only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1794,7 +1805,7 @@ if (args[0] === "sessions") {
 
   const result = await server.waitForDecision();
   await Bun.sleep(1500);
-  server.stop();
+  await server.stop();
 
   emitAnnotateOutcome(result);
   process.exit(0);
@@ -1870,7 +1881,7 @@ if (args[0] === "sessions") {
     }
 
     const planProject = (await detectProjectName()) ?? "_unknown";
-    const server = await startPlannotatorServer({
+    const server = await serverShutdown.trackServerStart(startPlannotatorServer({
       plan: latestPlan.text,
       origin: "codex",
       sharingEnabled,
@@ -1878,13 +1889,13 @@ if (args[0] === "sessions") {
       pasteApiUrl,
       htmlContent: planHtmlContent,
       onReady: async (url, isRemote, port) => {
-        handleServerReady(url, isRemote, port);
+        await handleServerReady(url, isRemote, port);
 
         if (isRemote && sharingEnabled) {
           await writeRemoteShareLink(latestPlan.text, shareBaseUrl, "review the plan", "plan only").catch(() => {});
         }
       },
-    });
+    }));
 
     registerSession({
       pid: process.pid,
@@ -1898,7 +1909,7 @@ if (args[0] === "sessions") {
 
     const result = await server.waitForDecision();
     await Bun.sleep(1500);
-    server.stop();
+    await server.stop();
 
     if (result.approved) {
       console.log("{}");
@@ -1948,7 +1959,7 @@ if (args[0] === "sessions") {
   const planProject = (await detectProjectName()) ?? "_unknown";
 
   // Start the plan review server
-  const server = await startPlannotatorServer({
+  const server = await serverShutdown.trackServerStart(startPlannotatorServer({
     plan: planContent,
     origin: isGemini ? "gemini-cli" : detectedOrigin,
     permissionMode,
@@ -1957,13 +1968,13 @@ if (args[0] === "sessions") {
     pasteApiUrl,
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {
-      handleServerReady(url, isRemote, port);
+      await handleServerReady(url, isRemote, port);
 
       if (isRemote && sharingEnabled) {
         await writeRemoteShareLink(planContent, shareBaseUrl, "review the plan", "plan only").catch(() => {});
       }
     },
-  });
+  }));
 
   registerSession({
     pid: process.pid,
@@ -1982,7 +1993,7 @@ if (args[0] === "sessions") {
   await Bun.sleep(1500);
 
   // Cleanup
-  server.stop();
+  await server.stop();
 
   // Output decision in the appropriate format for the harness
   if (isGemini) {

@@ -45,6 +45,8 @@ import {
 	PLANNOTATOR_PLAN_APPROVED_CHANNEL,
 	type PlannotatorPlanApprovedEvent,
 	registerPlannotatorEventListeners,
+	resumePlannotatorBrowserSessions,
+	stopActivePlannotatorBrowserSessions,
 } from "./plannotator-events.ts";
 import { resolveTodoProvider, type TodoProvider } from "./todo-providers/index.ts";
 import {
@@ -269,12 +271,17 @@ export default function plannotator(pi: ExtensionAPI): void {
 	/** Latch: no provider found, or one sync failed. Cleared on return to idle. */
 	let todoProviderDisabled = false;
 
-	pi.on("session_start", (_event, ctx) => {
+	pi.on("session_start", async (_event, ctx) => {
+		await resumePlannotatorBrowserSessions();
 		currentPiSession.update(ctx);
 	});
 
-	pi.on("session_shutdown", () => {
-		currentPiSession.clear();
+	pi.on("session_shutdown", async () => {
+		try {
+			await stopActivePlannotatorBrowserSessions();
+		} finally {
+			currentPiSession.clear();
+		}
 	});
 
 	// ── Flags ────────────────────────────────────────────────────────────
@@ -743,13 +750,15 @@ export default function plannotator(pi: ExtensionAPI): void {
 					absolutePath,
 					markdown,
 					mode ?? "annotate",
-					folderPath,
-					sourceInfo,
-					sourceConverted,
-					gate,
-					rawHtml,
-					!!rawHtml,
-					renderMarkdownFlag,
+					{
+						folderPath,
+						sourceInfo,
+						sourceConverted,
+						gate,
+						rawHtml,
+						renderHtml: !!rawHtml,
+						convertHtml: renderMarkdownFlag,
+					},
 				);
 				ctx.ui.notify(sessionOpenedMessage("Annotation opened", session.url), "info");
 				void session

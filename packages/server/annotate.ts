@@ -14,7 +14,7 @@
 import { isRemoteSession, getServerHostname, startBunServerOnAvailablePort } from "./remote";
 import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
-import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, handleSaveNotes, readDraftGenerationFromBody, readDraftGenerationFromUrl } from "./shared-handlers";
+import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, handleSaveNotes, readDraftGenerationFromBody, readDraftGenerationFromUrl, type ServerReadyOptions } from "./shared-handlers";
 import { handleDoc, handleDocExists, handleFileBrowserFiles, handleObsidianVaults, handleObsidianFiles, handleObsidianDoc, resolveAllowedDocPath, type FolderAnnotateHistory } from "./reference-handlers";
 import { handleFileBrowserFilesStream } from "./reference-watch";
 import { resolveUserPath, warmFileListCache } from "@plannotator/shared/resolve-file";
@@ -45,11 +45,22 @@ import { isAIEndpointPath, type AIEndpoints } from "@plannotator/ai";
 import { createHtmlAssetRegistry } from "./html-assets";
 import { createBunAgentTerminalBridge } from "./agent-terminal";
 import { isAgentTerminalWsRoute, supportsAnnotateAgentTerminalMode } from "@plannotator/shared/agent-terminal";
+import { takePresentation } from "@plannotator/shared/presenter";
 
 // Re-export utilities
 export { isRemoteSession, getServerPort } from "./remote";
 export { openBrowser } from "./browser";
-export { handleServerReady as handleAnnotateServerReady } from "./shared-handlers";
+export function handleAnnotateServerReady(
+  url: string,
+  isRemote: boolean,
+  port: number,
+  options: ServerReadyOptions = {},
+): Promise<void> {
+  return handleServerReady(url, isRemote, port, {
+    ...options,
+    kind: "annotate",
+  });
+}
 
 // --- Types ---
 
@@ -100,7 +111,7 @@ export interface AnnotateServerOptions {
   /** Project name for keying per-file version history (powers the annotate version diff). */
   project?: string;
   /** Called when server starts with the URL, remote status, and port */
-  onReady?: (url: string, isRemote: boolean, port: number) => void;
+  onReady?: (url: string, isRemote: boolean, port: number) => void | Promise<void>;
 }
 
 export interface AnnotateServerResult {
@@ -120,7 +131,7 @@ export interface AnnotateServerResult {
     feedbackScope?: "message" | "messages";
   }>;
   /** Stop the server */
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 // --- Server Implementation ---
@@ -810,6 +821,27 @@ export async function startAnnotateServer(
 
   const port = server.port!;
   const serverUrl = `http://localhost:${port}`;
+  let stopPromise: Promise<void> | undefined;
+  const stop = () => {
+    if (stopPromise) return stopPromise;
+    const presentation = takePresentation(serverUrl);
+    stopPromise = (async () => {
+      try {
+        try {
+          aiRuntime?.dispose();
+        } finally {
+          agentTerminal.dispose();
+        }
+      } finally {
+        try {
+          await server.stop(true);
+        } finally {
+          await presentation?.dismiss();
+        }
+      }
+    })();
+    return stopPromise;
+  };
 
   // The cache warm must never gate the listening socket. Its async filesystem
   // walk yields between directories while requests remain serviceable.
@@ -817,7 +849,12 @@ export async function startAnnotateServer(
 
   // Notify caller that server is ready
   if (onReady) {
-    onReady(serverUrl, isRemote, port);
+    try {
+      await onReady(serverUrl, isRemote, port);
+    } catch (error) {
+      await stop();
+      throw error;
+    }
   }
 
   return {
@@ -825,10 +862,6 @@ export async function startAnnotateServer(
     url: serverUrl,
     isRemote,
     waitForDecision: () => decisionPromise,
-    stop: () => {
-      aiRuntime?.dispose();
-      agentTerminal.dispose();
-      server.stop();
-    },
+    stop,
   };
 }
