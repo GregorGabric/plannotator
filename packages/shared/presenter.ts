@@ -8,9 +8,10 @@ import { spawn } from "node:child_process";
 import { loadConfig, type PlannotatorConfig } from "./config";
 
 export const PRESENTER_PROTOCOL_VERSION = 1;
-// Leave enough time for runtime discovery, Browser startup, and failed-startup
-// pane cleanup before the outer process gives up.
-export const PRESENTER_TIMEOUT_MS = 60_000;
+/** Maximum time allowed for an external presenter to accept a URL. */
+export const PRESENTER_PRESENT_TIMEOUT_MS = 15_000;
+/** Maximum time allowed for an external presenter to dismiss its presentation. */
+export const PRESENTER_DISMISS_TIMEOUT_MS = 5_000;
 export const PRESENTER_MAX_OUTPUT_BYTES = 64 * 1024;
 const PRESENTER_TERMINATION_GRACE_MS = 10_500;
 
@@ -147,7 +148,11 @@ export async function invokePresenterCommand(
   request: PresenterRequest,
   options: PresenterCommandOptions = {},
 ): Promise<PresenterCommandResult> {
-  const timeoutMs = options.timeoutMs ?? PRESENTER_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? (
+    request.action === "present"
+      ? PRESENTER_PRESENT_TIMEOUT_MS
+      : PRESENTER_DISMISS_TIMEOUT_MS
+  );
   const maxOutputBytes =
     options.maxOutputBytes ?? PRESENTER_MAX_OUTPUT_BYTES;
 
@@ -311,6 +316,7 @@ export async function presentUrl(
   }, {
     signal: options.signal,
     env,
+    timeoutMs: PRESENTER_PRESENT_TIMEOUT_MS,
   });
   if (!result.ok) {
     return { attempted: true, opened: false, error: result.error };
@@ -340,6 +346,7 @@ export async function presentUrl(
           handle,
         }, {
           env,
+          timeoutMs: PRESENTER_DISMISS_TIMEOUT_MS,
         });
         const result = dismissed.ok
           ? { ok: true }

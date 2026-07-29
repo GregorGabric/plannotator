@@ -13,8 +13,12 @@ export interface ServerShutdownCoordinator {
 
 export interface ServerShutdownCoordinatorOptions {
   exit: (code: number) => void;
+  waitForServerCleanup: boolean;
+  cleanupTimeoutMs?: number;
   onStopError?: (error: unknown) => void;
 }
+
+const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
 
 function exitCodeForSignal(signal: FatalSignal): number {
   return signal === "SIGINT" ? 130 : 143;
@@ -23,12 +27,14 @@ function exitCodeForSignal(signal: FatalSignal): number {
 /**
  * Coordinates process signals with the one server owned by the hook CLI.
  *
- * The first signal waits for the active server's idempotent stop routine so
- * external presenters are dismissed before process exit. A second signal is
- * deliberately treated as a force-exit escape hatch when cleanup is stuck.
+ * When presenter cleanup is enabled, the first signal gives the active server
+ * a bounded window to stop. Without a presenter, the first signal preserves
+ * the CLI's immediate-exit behavior. A second signal always force-exits.
  */
 export function createServerShutdownCoordinator({
   exit,
+  waitForServerCleanup,
+  cleanupTimeoutMs = DEFAULT_CLEANUP_TIMEOUT_MS,
   onStopError = () => {},
 }: ServerShutdownCoordinatorOptions): ServerShutdownCoordinator {
   let activeServer: Promise<StoppableServer> | undefined;
@@ -56,14 +62,41 @@ export function createServerShutdownCoordinator({
       }
 
       shutdownStarted = true;
+      if (!waitForServerCleanup) {
+        exit(exitCode);
+        return;
+      }
+
       const server = activeServer;
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
       try {
-        const startedServer = await server;
-        await startedServer?.stop();
-      } catch (error) {
-        onStopError(error);
+        const cleanup = (async () => {
+          const startedServer = await server;
+          await startedServer?.stop();
+        })();
+        const outcome = await Promise.race([
+          cleanup.then(
+            () => ({ status: "completed" as const }),
+            (error: unknown) => ({ status: "failed" as const, error }),
+          ),
+          new Promise<{ status: "timed-out" }>((resolve) => {
+            cleanupTimer = setTimeout(
+              () => resolve({ status: "timed-out" }),
+              cleanupTimeoutMs,
+            );
+          }),
+        ]);
+
+        if (outcome.status === "failed") {
+          onStopError(outcome.error);
+        } else if (outcome.status === "timed-out") {
+          onStopError(
+            new Error(`server cleanup timed out after ${cleanupTimeoutMs}ms`),
+          );
+        }
       } finally {
+        if (cleanupTimer) clearTimeout(cleanupTimer);
         // With a real process, the force-exit call above never returns. The
         // guard also keeps injected test exits from producing a second exit.
         if (!forceExited) {

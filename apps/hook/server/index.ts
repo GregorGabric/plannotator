@@ -85,6 +85,7 @@ import {
 } from "@plannotator/server/goal-setup";
 import { type DiffType, detectManagedVcs, prepareLocalReviewDiff, gitRuntime } from "@plannotator/server/vcs";
 import { loadConfig, resolveDefaultDiffType, resolveUseJina, resolveSharingEnabled } from "@plannotator/shared/config";
+import { resolvePresenterCommand } from "@plannotator/shared/presenter";
 import { parseReviewArgs } from "@plannotator/shared/review-args";
 import {
   normalizeGoalSetupBundle,
@@ -291,8 +292,10 @@ if (isInteractiveNoArgInvocation(args, process.stdin.isTTY)) {
 // force-exit signal paths.
 process.on("exit", () => unregisterSession());
 
+const startupConfig = loadConfig();
 const serverShutdown = createServerShutdownCoordinator({
   exit: (code) => process.exit(code),
+  waitForServerCleanup: resolvePresenterCommand(startupConfig) !== undefined,
   onStopError: (error) => {
     console.error(
       `[plannotator] Failed to stop server during shutdown: ${
@@ -313,7 +316,7 @@ process.on("SIGTERM", () => {
 });
 
 // Check if URL sharing is enabled (default: true)
-const sharingEnabled = resolveSharingEnabled(loadConfig());
+const sharingEnabled = resolveSharingEnabled(startupConfig);
 
 // Custom share portal URL for self-hosting
 const shareBaseUrl = process.env.PLANNOTATOR_SHARE_URL || undefined;

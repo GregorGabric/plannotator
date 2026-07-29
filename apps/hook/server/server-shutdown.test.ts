@@ -20,6 +20,7 @@ describe("createServerShutdownCoordinator", () => {
       exit: (code) => {
         events.push(`exit:${code}`);
       },
+      waitForServerCleanup: true,
     });
 
     void coordinator.trackServerStart(Promise.resolve({
@@ -45,6 +46,7 @@ describe("createServerShutdownCoordinator", () => {
       exit: (code) => {
         events.push(`exit:${code}`);
       },
+      waitForServerCleanup: true,
       onStopError: (error) => {
         events.push(`error:${error instanceof Error ? error.message : error}`);
       },
@@ -72,6 +74,7 @@ describe("createServerShutdownCoordinator", () => {
       exit: (code) => {
         events.push(`exit:${code}`);
       },
+      waitForServerCleanup: true,
     });
 
     const serverStart = start.promise.then(() => ({
@@ -97,6 +100,7 @@ describe("createServerShutdownCoordinator", () => {
       exit: (code) => {
         events.push(`exit:${code}`);
       },
+      waitForServerCleanup: true,
     });
 
     void coordinator.trackServerStart(Promise.resolve({
@@ -116,5 +120,48 @@ describe("createServerShutdownCoordinator", () => {
     stop.resolve();
     await gracefulShutdown;
     expect(events).toEqual(["stop:start", "exit:143", "stop:done"]);
+  });
+
+  test("exits immediately when no presenter cleanup is needed", async () => {
+    const events: string[] = [];
+    const start = createDeferred();
+    const coordinator = createServerShutdownCoordinator({
+      exit: (code) => {
+        events.push(`exit:${code}`);
+      },
+      waitForServerCleanup: false,
+    });
+
+    void coordinator.trackServerStart(start.promise.then(() => ({
+      stop: () => {
+        events.push("stop");
+      },
+    })));
+
+    await coordinator.handleSignal("SIGINT");
+    expect(events).toEqual(["exit:130"]);
+    start.resolve();
+  });
+
+  test("forces exit when graceful cleanup reaches its deadline", async () => {
+    const events: string[] = [];
+    const coordinator = createServerShutdownCoordinator({
+      exit: (code) => {
+        events.push(`exit:${code}`);
+      },
+      waitForServerCleanup: true,
+      cleanupTimeoutMs: 10,
+      onStopError: (error) => {
+        events.push(`error:${error instanceof Error ? error.message : error}`);
+      },
+    });
+
+    void coordinator.trackServerStart(new Promise(() => {}));
+    await coordinator.handleSignal("SIGTERM");
+
+    expect(events).toEqual([
+      "error:server cleanup timed out after 10ms",
+      "exit:143",
+    ]);
   });
 });

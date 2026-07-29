@@ -7,6 +7,7 @@ import {
 	startMarkdownAnnotationSession,
 	startPlanReviewBrowserSession,
 	stopActiveBrowserDecisionSessions,
+	trackBrowserDecisionSessionStart,
 	shouldUseLocalPrCheckout,
 } from "./plannotator-browser.ts";
 import { loadPlannotatorBrowser } from "./plannotator-browser-runtime.ts";
@@ -322,26 +323,33 @@ describe.skipIf(process.platform === "win32")("Pi presenter lifecycle", () => {
 	}, 10_000);
 
 	test("shutdown waits for a pending server start and rejects its late session", async () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "plannotator-pi-pending-start-"));
-		const logPath = join(tempDir, "requests.jsonl");
-		const originalPresenter = process.env.PLANNOTATOR_PRESENTER;
-		const originalLog = process.env.PLANNOTATOR_TEST_PRESENTER_LOG;
-		const originalDataDir = process.env.PLANNOTATOR_DATA_DIR;
-		process.env.PLANNOTATOR_PRESENTER = presenterFixture;
-		process.env.PLANNOTATOR_TEST_PRESENTER_LOG = logPath;
-		process.env.PLANNOTATOR_DATA_DIR = join(tempDir, "data");
-
+		let releaseStart!: () => void;
+		const startReleased = new Promise<void>((resolve) => {
+			releaseStart = resolve;
+		});
+		let serverStops = 0;
 		const ctx = {
-			cwd: tempDir,
-			hasUI: true,
 			ui: {
 				notify: () => undefined,
 			},
-		} as unknown as Parameters<typeof startPlanReviewBrowserSession>[0];
+		} as unknown as Parameters<typeof startBrowserDecisionSession>[1];
 
 		try {
 			await resumePlannotatorBrowserSessions();
-			const startup = startPlanReviewBrowserSession(ctx, "# Pending shutdown proof");
+			const startup = trackBrowserDecisionSessionStart(async () => {
+				await startReleased;
+				return startBrowserDecisionSession(
+					{
+						url: "http://localhost:45683",
+						stop: () => {
+							serverStops += 1;
+						},
+					},
+					ctx,
+					() => new Promise<never>(() => {}),
+					"plan",
+				);
+			});
 			let startupSettled = false;
 			const observedStartup = startup
 				.then(
@@ -353,7 +361,9 @@ describe.skipIf(process.platform === "win32")("Pi presenter lifecycle", () => {
 					return outcome;
 				});
 
-			await stopActivePlannotatorBrowserSessions();
+			const shutdown = stopActiveBrowserDecisionSessions();
+			releaseStart();
+			await shutdown;
 			expect(startupSettled).toBe(true);
 			const outcome = await observedStartup;
 
@@ -364,28 +374,13 @@ describe.skipIf(process.platform === "win32")("Pi presenter lifecycle", () => {
 				}
 				expect(outcome.error.message).toContain("shutting down");
 			}
-			expect(existsSync(logPath)).toBe(false);
+			expect(serverStops).toBe(1);
 		} finally {
+			releaseStart();
 			await stopActiveBrowserDecisionSessions().catch(() => undefined);
 			await resumePlannotatorBrowserSessions();
-			if (originalPresenter === undefined) {
-				delete process.env.PLANNOTATOR_PRESENTER;
-			} else {
-				process.env.PLANNOTATOR_PRESENTER = originalPresenter;
-			}
-			if (originalLog === undefined) {
-				delete process.env.PLANNOTATOR_TEST_PRESENTER_LOG;
-			} else {
-				process.env.PLANNOTATOR_TEST_PRESENTER_LOG = originalLog;
-			}
-			if (originalDataDir === undefined) {
-				delete process.env.PLANNOTATOR_DATA_DIR;
-			} else {
-				process.env.PLANNOTATOR_DATA_DIR = originalDataDir;
-			}
-			rmSync(tempDir, { recursive: true, force: true });
 		}
-	}, 10_000);
+	});
 
 	test("the shutdown latch rejects every entrypoint and closes direct late registrations", async () => {
 		const ctx = {

@@ -192,7 +192,11 @@ function createBrowserSessionsShuttingDownError(): Error {
 	return new Error(BROWSER_SESSIONS_SHUTTING_DOWN_MESSAGE);
 }
 
-function trackBrowserDecisionSessionStart<T>(start: () => Promise<T>): Promise<T> {
+/**
+ * Track a pending browser-session start so shutdown waits for it and rejects
+ * any session that finishes starting after shutdown has begun.
+ */
+export function trackBrowserDecisionSessionStart<T>(start: () => Promise<T>): Promise<T> {
 	if (!browserDecisionSessionStartsAllowed) {
 		return Promise.reject(createBrowserSessionsShuttingDownError());
 	}

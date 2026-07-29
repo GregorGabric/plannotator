@@ -9,7 +9,7 @@ import {
 export interface CompleteAnnotateCommandOptions {
   waitForDecision: () => Promise<AnnotateOutcome>;
   settleAfterDecision: () => Promise<void>;
-  stopServer: () => void;
+  stopServer: () => void | Promise<void>;
   requireApproval: boolean;
   resultFile?: string;
   writeResultFile?: (
@@ -45,7 +45,7 @@ export async function completeAnnotateCommand({
 }: CompleteAnnotateCommandOptions): Promise<void> {
   const result = await waitForDecision();
   await settleAfterDecision();
-  stopServer();
+  await stopServer();
 
   if (requireApproval || resultFile) {
     const serialized = serializeStrictAnnotateResult(result);

@@ -59,11 +59,13 @@ describe("resolvePresenterCommand", () => {
 describe("presentUrl", () => {
   test("sends the exact protocol and dismisses the returned handle once", async () => {
     const requests: PresenterRequest[] = [];
+    const timeouts: Array<number | undefined> = [];
     const result = await presentUrl("http://localhost:3210", "review", {
       config: {},
       env: { PLANNOTATOR_PRESENTER: "/presenter" },
-      invoke: async (_command, request) => {
+      invoke: async (_command, request, options) => {
         requests.push(request);
+        timeouts.push(options.timeoutMs);
         return request.action === "present"
           ? {
               ok: true,
@@ -94,6 +96,7 @@ describe("presentUrl", () => {
         handle: { paneId: "pane-1" },
       },
     ]);
+    expect(timeouts).toEqual([15_000, 5_000]);
   });
 
   test("returns presenter failures as fallback-friendly values", async () => {

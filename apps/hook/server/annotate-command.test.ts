@@ -61,6 +61,55 @@ async function runCompletion(
 }
 
 describe("completeAnnotateCommand", () => {
+  test("waits for server cleanup before publishing or exiting", async () => {
+    const events: string[] = [];
+    let finishCleanup!: () => void;
+    const cleanupFinished = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    let confirmCleanupStarted!: () => void;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      confirmCleanupStarted = resolve;
+    });
+
+    const completion = completeAnnotateCommand({
+      waitForDecision: async () => {
+        events.push("decision");
+        return { approved: true, feedback: "" };
+      },
+      settleAfterDecision: async () => {
+        events.push("settle");
+      },
+      stopServer: async () => {
+        events.push("stop:start");
+        confirmCleanupStarted();
+        await cleanupFinished;
+        events.push("stop:done");
+      },
+      requireApproval: false,
+      emitLegacyOutcome: () => {
+        events.push("legacy");
+      },
+      exit: (code) => {
+        events.push(`exit:${code}`);
+      },
+    });
+
+    await cleanupStarted;
+    expect(events).toEqual(["decision", "settle", "stop:start"]);
+
+    finishCleanup();
+    await completion;
+    expect(events).toEqual([
+      "decision",
+      "settle",
+      "stop:start",
+      "stop:done",
+      "legacy",
+      "exit:0",
+    ]);
+  });
+
   test("publishes approved feedback to matching stdout and result bytes", async () => {
     const result = await runCompletion(
       {
