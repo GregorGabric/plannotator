@@ -1,3 +1,5 @@
+import { PRESENTER_DISMISS_TIMEOUT_MS } from "@plannotator/shared/presenter";
+
 export type FatalSignal = "SIGINT" | "SIGTERM";
 
 export interface StoppableServer {
@@ -18,7 +20,14 @@ export interface ServerShutdownCoordinatorOptions {
   onStopError?: (error: unknown) => void;
 }
 
-const DEFAULT_CLEANUP_TIMEOUT_MS = 5_000;
+/**
+ * Server cleanup ends with a presenter dismiss that is itself bounded by
+ * PRESENTER_DISMISS_TIMEOUT_MS. The budget must exceed that bound, or a
+ * dismiss that times out races the coordinator's force-exit instead of
+ * resolving inside it — the 2s headroom covers the rest of the stop routine
+ * (lease flush, socket teardown) around the worst-case dismiss.
+ */
+const DEFAULT_CLEANUP_TIMEOUT_MS = PRESENTER_DISMISS_TIMEOUT_MS + 2_000;
 
 function exitCodeForSignal(signal: FatalSignal): number {
   return signal === "SIGINT" ? 130 : 143;

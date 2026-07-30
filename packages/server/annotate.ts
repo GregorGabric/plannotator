@@ -918,6 +918,7 @@ export async function startAnnotateServer(
     if (stopPromise) return stopPromise;
     const presentation = takePresentation(serverUrl);
     stopPromise = (async () => {
+      const hadLeaseStreams = clientLease.activeCount() > 0;
       try {
         try {
           clientLease.cancel();
@@ -931,6 +932,18 @@ export async function startAnnotateServer(
         }
       } finally {
         try {
+          // The force-stop below is required: this server runs with
+          // idleTimeout 0 and a connected UI holds heartbeat SSE streams
+          // (e.g. /api/external-annotations/stream), so a graceful
+          // `server.stop()` would pend until the client disconnects — but
+          // presenter hosts only close their client pane after the dismiss
+          // that runs AFTER this stop resolves. Bun also ignores a later
+          // `stop(true)` once a graceful stop has begun, so graceful-then-
+          // force is not an option. The brief flush delay lets the lease
+          // close frames written by `closeSessions()` reach their sockets
+          // before the force-stop resets whatever is left, so lease
+          // clients observe a clean end-of-stream, not ECONNRESET.
+          if (hadLeaseStreams) await Bun.sleep(25);
           await server.stop(true);
         } finally {
           await presentation?.dismiss();

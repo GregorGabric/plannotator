@@ -290,6 +290,15 @@ export default function plannotator(pi: ExtensionAPI): void {
 		sessionAlive = false;
 		try {
 			await stopActivePlannotatorBrowserSessions();
+		} catch (error) {
+			// Session stops can reject (individually or as an AggregateError) —
+			// log and swallow so shutdown never surfaces an unhandled rejection
+			// in pi's host process.
+			console.error(
+				`Plannotator: failed to stop active browser sessions during shutdown: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
 		} finally {
 			currentPiSession.clear();
 		}

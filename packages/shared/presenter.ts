@@ -13,7 +13,43 @@ export const PRESENTER_PRESENT_TIMEOUT_MS = 15_000;
 /** Maximum time allowed for an external presenter to dismiss its presentation. */
 export const PRESENTER_DISMISS_TIMEOUT_MS = 5_000;
 export const PRESENTER_MAX_OUTPUT_BYTES = 64 * 1024;
-const PRESENTER_TERMINATION_GRACE_MS = 10_500;
+/**
+ * SIGTERM→SIGKILL escalation delay for a presenter that outlives its
+ * operation. Short enough to fit inside the hook CLI's shutdown budget
+ * (dismiss timeout + headroom) so the escalation is actually reachable
+ * before the coordinator force-exits; the synchronous exit-time kill below
+ * covers the window where the process exits before this timer fires.
+ */
+const PRESENTER_TERMINATION_GRACE_MS = 2_000;
+
+/**
+ * Presenter children that have not yet exited. On process exit, any child
+ * still alive is SIGKILLed synchronously: the escalation timers above are
+ * unref'd so they never hold the event loop open, which also means a
+ * force-exit can beat them — without this handler a hung presenter child
+ * would be orphaned.
+ */
+const livePresenterChildren = new Set<ReturnType<typeof spawn>>();
+let presenterExitKillInstalled = false;
+
+function trackPresenterChild(child: ReturnType<typeof spawn>): void {
+  if (!presenterExitKillInstalled) {
+    presenterExitKillInstalled = true;
+    process.on("exit", () => {
+      for (const live of livePresenterChildren) {
+        try {
+          live.kill("SIGKILL");
+        } catch {
+          // The child may have exited between the check and the kill.
+        }
+      }
+    });
+  }
+  livePresenterChildren.add(child);
+  child.once("exit", () => {
+    livePresenterChildren.delete(child);
+  });
+}
 
 export type PresentationKind =
   | "plan"
@@ -179,6 +215,7 @@ export async function invokePresenterCommand(
       });
       return;
     }
+    trackPresenterChild(child);
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
