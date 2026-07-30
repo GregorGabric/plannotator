@@ -39,6 +39,7 @@ import { getAgentSwitchSettings, getEffectiveAgentName } from '@plannotator/ui/u
 import { getPlanSaveSettings } from '@plannotator/ui/utils/planSave';
 import { type AIProviderOption } from '@plannotator/ui/utils/aiProvider';
 import { useAIProviderConfig } from '@plannotator/ui/hooks/useAIProviderConfig';
+import { useAIProviderActivation } from '@plannotator/ui/hooks/useAIProviderActivation';
 import { markPlanAIAnnouncementSeen, needsPlanAIAnnouncement } from '@plannotator/ui/utils/planAIAnnouncement';
 import { markLookAndFeelAnnouncementSeen, needsLookAndFeelAnnouncement } from '@plannotator/ui/utils/lookAndFeelAnnouncement';
 import { markVimModeAnnouncementSeen, needsVimModeAnnouncement } from '@plannotator/ui/utils/vimModeAnnouncement';
@@ -146,6 +147,11 @@ import {
   buildCompleteAnnotateFeedback,
   getAnnotateApprovalPolicy,
 } from './annotateSubmission';
+import {
+  openAnnotateClientLeaseStream,
+  shouldConnectAnnotateClientLease,
+  type AnnotateClientLeaseConfig,
+} from './annotateClientLease';
 import {
   editableDocumentKey,
   useEditableDocuments,
@@ -398,6 +404,7 @@ const App: React.FC = () => {
   const [annotateMode, setAnnotateMode] = useState(false);
   const [gate, setGate] = useState(false);
   const [approvalNotesSupported, setApprovalNotesSupported] = useState(false);
+  const [clientLease, setClientLease] = useState<AnnotateClientLeaseConfig | null>(null);
   const [annotateSource, setAnnotateSource] = useState<'file' | 'message' | 'folder' | null>(null);
   const [recentMessages, setRecentMessages] = useState<PickerMessage[]>([]);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
@@ -475,6 +482,16 @@ const App: React.FC = () => {
     defaultProvider: aiDefaultProvider,
     available: aiAvailable,
     origin,
+  });
+  // Explicit provider activation: runs deferred (Codex) model discovery on a
+  // user gesture and merges the refreshed metadata, so the model picker and
+  // reasoning-effort control populate past the static fallback. Never called
+  // on load — that would reintroduce the eager `codex app-server` spawn.
+  const activateAIProvider = useAIProviderActivation({
+    onCapabilities: (providers, defaultProvider) => {
+      setAiProviders(providers);
+      setAiDefaultProvider(defaultProvider);
+    },
   });
   const [showPlanAIAnnouncement, setShowPlanAIAnnouncement] = useState(needsPlanAIAnnouncement);
   const [showLookAndFeelAnnouncement, setShowLookAndFeelAnnouncement] = useState(needsLookAndFeelAnnouncement);
@@ -2346,7 +2363,7 @@ const App: React.FC = () => {
         if (!res.ok) throw new Error('Not in API mode');
         return res.json();
       })
-      .then((data: { plan: string; origin?: Origin; mode?: 'annotate' | 'annotate-last' | 'annotate-folder' | 'archive' | 'goal-setup'; goalSetup?: GoalSetupBundle; filePath?: string; sourceInfo?: string; sourceConverted?: boolean; sourceSave?: SourceSaveCapability; gate?: boolean; approvalNotesSupported?: boolean; renderAs?: 'html' | 'markdown'; rawHtml?: string; shareHtml?: string; diffHtml?: string; convertHtml?: boolean; sharingEnabled?: boolean; shareBaseUrl?: string; pasteApiUrl?: string; repoInfo?: { display: string; branch?: string; host?: string }; previousPlan?: string | null; versionInfo?: { version: number; totalVersions: number; project: string }; archivePlans?: ArchivedPlan[]; projectRoot?: string; isWSL?: boolean; serverConfig?: { displayName?: string; gitUser?: string }; recentMessages?: PickerMessage[]; agentTerminal?: AgentTerminalCapability; feedbackTemplates?: AnnotateFeedbackTemplates }) => {
+      .then((data: { plan: string; origin?: Origin; mode?: 'annotate' | 'annotate-last' | 'annotate-folder' | 'archive' | 'goal-setup'; goalSetup?: GoalSetupBundle; filePath?: string; sourceInfo?: string; sourceConverted?: boolean; sourceSave?: SourceSaveCapability; gate?: boolean; approvalNotesSupported?: boolean; clientLease?: AnnotateClientLeaseConfig; renderAs?: 'html' | 'markdown'; rawHtml?: string; shareHtml?: string; diffHtml?: string; convertHtml?: boolean; sharingEnabled?: boolean; shareBaseUrl?: string; pasteApiUrl?: string; repoInfo?: { display: string; branch?: string; host?: string }; previousPlan?: string | null; versionInfo?: { version: number; totalVersions: number; project: string }; archivePlans?: ArchivedPlan[]; projectRoot?: string; isWSL?: boolean; serverConfig?: { displayName?: string; gitUser?: string }; recentMessages?: PickerMessage[]; agentTerminal?: AgentTerminalCapability; feedbackTemplates?: AnnotateFeedbackTemplates }) => {
         // Initialize config store with server-provided values (config file > cookie > default)
         configStore.init(data.serverConfig);
         // Session-level force-markdown preference (--markdown); threaded into folder/linked
@@ -2391,6 +2408,7 @@ const App: React.FC = () => {
           setAnnotateMode(true);
           setGate(data.gate ?? false);
           setApprovalNotesSupported(data.approvalNotesSupported ?? false);
+          setClientLease(data.clientLease ?? null);
         }
         if (data.mode === 'annotate-folder') {
           sidebar.open('files');
@@ -2464,6 +2482,21 @@ const App: React.FC = () => {
       })
       .finally(() => setIsLoading(false));
   }, [isLoadingShared, isSharedSession]);
+
+  // Client-lease: while a local direct structured annotate gate is open, keep
+  // exactly one EventSource open so the server can detect this tab going away
+  // and auto-dismiss the gate after its grace period instead of hanging the
+  // CLI/hook caller forever. Grace only starts once the transport reports a
+  // disconnect; abrupt/half-open connection loss is best-effort and not
+  // bounded by the grace period. Only ever a presence signal — no message
+  // payload is read from the stream.
+  useEffect(() => {
+    if (typeof EventSource === 'undefined') return;
+    if (!shouldConnectAnnotateClientLease({ annotateMode, isSharedSession, submitted, clientLease })) return;
+
+    const stream = openAnnotateClientLeaseStream(EventSource);
+    return () => stream.close();
+  }, [annotateMode, isSharedSession, submitted, clientLease]);
 
   useEffect(() => {
     if (!aiSessionEnabled || !isApiMode || isSharedSession) {
@@ -3421,9 +3454,20 @@ const App: React.FC = () => {
   // per-model reasoning effort); the app only composes the session reset (the
   // hook can't own it — see the cycle note in useAIProviderConfig).
   const handleAIConfigChange = useCallback((config: { providerId?: string | null; model?: string | null; reasoningEffort?: string | null }) => {
+    // Switching the picker to a provider is an explicit gesture — activate it
+    // so its deferred model discovery (Codex) refreshes the advertised list.
+    if (config.providerId) activateAIProvider(config.providerId);
     applyConfigChange(config);
     resetAISession();
-  }, [applyConfigChange, resetAISession]);
+  }, [activateAIProvider, applyConfigChange, resetAISession]);
+
+  // Opening the Ask AI surface with a provider selected is the other explicit
+  // gesture that should surface the provider's real model list.
+  const aiSurfaceOpen = isPanelOpen && rightSidebarTab === 'ai';
+  useEffect(() => {
+    if (!aiAvailable || !aiSurfaceOpen) return;
+    activateAIProvider(aiConfig.providerId);
+  }, [aiAvailable, aiSurfaceOpen, aiConfig.providerId, activateAIProvider]);
 
   const openAIChat = useCallback(() => {
     if (wideModeType !== null) {

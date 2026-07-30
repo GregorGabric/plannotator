@@ -19,6 +19,7 @@ import { configStore, useConfigValue, setReviewPanelView } from '@plannotator/ui
 import { loadDiffFont } from '@plannotator/ui/utils/diffFonts';
 import { getAgentSwitchSettings, getEffectiveAgentName } from '@plannotator/ui/utils/agentSwitch';
 import { useAIProviderConfig } from '@plannotator/ui/hooks/useAIProviderConfig';
+import { useAIProviderActivation } from '@plannotator/ui/hooks/useAIProviderActivation';
 import { LookAndFeelAnnouncementDialog } from '@plannotator/ui/components/LookAndFeelAnnouncementDialog';
 import {
   markLookAndFeelAnnouncementSeen,
@@ -34,7 +35,12 @@ import { useAIChat } from './hooks/useAIChat';
 import { toast, Toaster } from 'sonner';
 import { useCodeNav, type CodeNavRequest } from './hooks/useCodeNav';
 import { extractLinesFromPatch } from './utils/patchParser';
-import { isTypingTarget, useReviewSearch, type ReviewSearchMatch } from './hooks/useReviewSearch';
+import {
+  shouldHandleReviewSearchShortcut,
+  isTypingTarget,
+  useReviewSearch,
+  type ReviewSearchMatch,
+} from './hooks/useReviewSearch';
 import { useEditorAnnotations } from '@plannotator/ui/hooks/useEditorAnnotations';
 import { useExternalAnnotations } from '@plannotator/ui/hooks/useExternalAnnotations';
 import { useAgentJobs, jobMatchesReviewContext } from '@plannotator/ui/hooks/useAgentJobs';
@@ -609,6 +615,16 @@ const ReviewApp: React.FC = () => {
     available: aiAvailable,
     origin,
   });
+  // Explicit provider activation: runs deferred (Codex) model discovery on a
+  // user gesture and merges the refreshed metadata, so the model picker and
+  // reasoning-effort control populate past the static fallback. Never called
+  // on load — that would reintroduce the eager `codex app-server` spawn.
+  const activateAIProvider = useAIProviderActivation({
+    onCapabilities: (providers, defaultProvider) => {
+      setAiProviders(providers);
+      setAiDefaultProvider(defaultProvider);
+    },
+  });
   // The 0.20.0 release / look-and-feel announcement also runs in code review.
   // Seen-state is a shared cookie (host-scoped), so dismissing it in either app
   // suppresses it in the other — it appears once across both.
@@ -730,9 +746,20 @@ const ReviewApp: React.FC = () => {
   // app only composes the session reset (the hook can't own it — see the cycle
   // note in useAIProviderConfig).
   const handleAIConfigChange = useCallback((config: { providerId?: string | null; model?: string | null; reasoningEffort?: string | null }) => {
+    // Switching the picker to a provider is an explicit gesture — activate it
+    // so its deferred model discovery (Codex) refreshes the advertised list.
+    if (config.providerId) activateAIProvider(config.providerId);
     applyConfigChange(config);
     resetAISession();
-  }, [applyConfigChange, resetAISession]);
+  }, [activateAIProvider, applyConfigChange, resetAISession]);
+
+  // Opening the Ask AI sidebar tab with a provider selected is the other
+  // explicit gesture that should surface the provider's real model list.
+  const aiSurfaceOpen = reviewSidebar.isOpen && reviewSidebar.activeTab === 'ai';
+  useEffect(() => {
+    if (!aiAvailable || !aiSurfaceOpen) return;
+    activateAIProvider(aiConfig.providerId);
+  }, [aiAvailable, aiSurfaceOpen, aiConfig.providerId, activateAIProvider]);
 
   // File-aware Ask AI: the all-files surface resolves the owning file itself
   // (its toolbar selection lives in a file the single-file panel may never
@@ -1193,7 +1220,13 @@ const ReviewApp: React.FC = () => {
       // Bail while the guide takeover is open (file tree isn't rendered) and
       // don't intercept in the Commits view (its rail has no search input) —
       // in both cases capturing the key would mutate hidden state or no-op.
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f' && !isTypingTarget(e.target)) {
+      // Let the same shortcut reselect the current query when search already
+      // has focus, while preserving native shortcuts in every other input.
+      if (
+        (e.metaKey || e.ctrlKey)
+        && e.key.toLowerCase() === 'f'
+        && shouldHandleReviewSearchShortcut(e.target, searchInputRef.current)
+      ) {
         if (guideOpen) return;
         if (hasSearchableFiles && !showCommitsPanel) {
           e.preventDefault();

@@ -78,6 +78,7 @@ import {
 import {
   startAnnotateServer,
   handleAnnotateServerReady,
+  isRemoteSession,
 } from "@plannotator/server/annotate";
 import {
   startGoalSetupServer,
@@ -133,7 +134,7 @@ import {
   type RenderedMessage,
 } from "./session-log";
 import { findCodexRolloutByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
-import { findCopilotPlanContent, findCopilotSessionForCwd, getRecentCopilotMessages } from "./copilot-session";
+import { findCopilotPlanContent, findCopilotSessionByAncestorPids, findCopilotSessionForCwd, getRecentCopilotMessages } from "./copilot-session";
 import {
   formatInteractiveNoArgClarification,
   formatSubcommandHelp,
@@ -158,6 +159,7 @@ import { buildLocalWorkspaceReview, type WorkspaceDiffType } from "@plannotator/
 import {
   createAnnotateOutcomeEmitter,
   supportsAnnotateApprovalNotes,
+  supportsAnnotateClientLease,
 } from "./annotate-output";
 import { createServerShutdownCoordinator } from "./server-shutdown";
 
@@ -1084,6 +1086,12 @@ if (args[0] === "sessions") {
       json: jsonFlag,
       hook: hookFlag,
     }),
+    clientLeaseSupported: supportsAnnotateClientLease({
+      gate: gateFlag,
+      json: jsonFlag,
+      hook: hookFlag,
+      isRemote: isRemoteSession(),
+    }),
     rawHtml,
     renderHtml: !!rawHtml,
     convertHtml: renderMarkdownFlag,
@@ -1139,6 +1147,7 @@ if (args[0] === "sessions") {
   const codexThreadId = process.env.CODEX_THREAD_ID;
   const isCodex = !!codexThreadId;
   const isDroid = detectedOrigin === "droid";
+  const isCopilot = detectedOrigin === "copilot-cli";
 
   // Collect up to N recent assistant messages so the user can pick the right
   // one — defaults to the same selection as the legacy "last message"
@@ -1149,6 +1158,18 @@ if (args[0] === "sessions") {
   const RECENT_MESSAGES_LIMIT = 25;
   let lastMessage: RenderedMessage | null = null;
   let recentMessages: RenderedMessage[] = [];
+
+  // Copilot CLI sets no env fingerprint, so detection matches ancestor pids
+  // against session-state inuse locks (spawns ps). Only attempted when no
+  // earlier branch claims the invocation.
+  let copilotLockSessionDir: string | null = null;
+  let copilotSessionDir: string | null = null;
+  if (!stdinFlag && !isCodex && !isDroid) {
+    copilotLockSessionDir = findCopilotSessionByAncestorPids();
+    copilotSessionDir = copilotLockSessionDir ??
+      (isCopilot ? findCopilotSessionForCwd(projectRoot) : null);
+  }
+  const copilotDetected = isCopilot || copilotSessionDir !== null;
 
   if (stdinFlag) {
     const text = (await Bun.stdin.text()).trim();
@@ -1200,6 +1221,20 @@ if (args[0] === "sessions") {
       recentMessages = getRecentRenderedMessages(droidLog, RECENT_MESSAGES_LIMIT);
       lastMessage = recentMessages[0] ?? null;
     }
+  } else if (copilotDetected) {
+    // Copilot path: prefer the session whose inuse lock an ancestor copilot
+    // process holds; with the origin override and no lock match, fall back
+    // to the cwd heuristic.
+    if (process.env.PLANNOTATOR_DEBUG) {
+      console.error(`[DEBUG] Copilot detected, project root: ${projectRoot}`);
+      console.error(`[DEBUG] Copilot ancestor lock session: ${copilotLockSessionDir ?? "(none)"}`);
+      console.error(`[DEBUG] Copilot selected session: ${copilotSessionDir ?? "(none)"}`);
+    }
+    if (copilotSessionDir) {
+      recentMessages = getRecentCopilotMessages(copilotSessionDir, RECENT_MESSAGES_LIMIT)
+        .map((m) => ({ messageId: m.messageId, text: m.text, lineNumbers: [], timestamp: m.timestamp }));
+      lastMessage = recentMessages[0] ?? null;
+    }
   } else {
     // Claude Code path: resolve session log
     //
@@ -1230,7 +1265,12 @@ if (args[0] === "sessions") {
         console.error(`[DEBUG] ${label}: ${paths.length ? paths.join(", ") : "(none)"}`);
       }
       for (const logPath of paths) {
-        const recent = getRecentRenderedMessages(logPath, RECENT_MESSAGES_LIMIT);
+        // Claude Code transcripts are trees: `/rewind` re-parents the next
+        // message rather than truncating, so a file-order read returns
+        // orphaned messages. Follow the id chain instead.
+        const recent = getRecentRenderedMessages(logPath, RECENT_MESSAGES_LIMIT, {
+          activeBranchOnly: true,
+        });
         if (recent.length > 0) {
           recentMessages = recent;
           lastMessage = recent[0];
@@ -1277,7 +1317,7 @@ if (args[0] === "sessions") {
   const server = await serverShutdown.trackServerStart(startAnnotateServer({
     markdown: annotatedMessage.text,
     filePath: "last-message",
-    origin: detectedOrigin,
+    origin: copilotDetected ? "copilot-cli" : detectedOrigin,
     mode: "annotate-last",
     sharingEnabled,
     shareBaseUrl,
@@ -1287,6 +1327,12 @@ if (args[0] === "sessions") {
       gate: gateFlag,
       json: jsonFlag,
       hook: hookFlag,
+    }),
+    clientLeaseSupported: supportsAnnotateClientLease({
+      gate: gateFlag,
+      json: jsonFlag,
+      hook: hookFlag,
+      isRemote: isRemoteSession(),
     }),
     htmlContent: planHtmlContent,
     recentMessages: pickerMessages,
@@ -1744,10 +1790,17 @@ if (args[0] === "sessions") {
   const projectRoot = process.env.PLANNOTATOR_CWD || process.cwd();
 
   if (process.env.PLANNOTATOR_DEBUG) {
-    console.error(`[DEBUG] Copilot CLI detected, finding session for CWD: ${projectRoot}`);
+    console.error(`[DEBUG] Copilot CLI detected, project root: ${projectRoot}`);
   }
 
-  const sessionDir = findCopilotSessionForCwd(projectRoot);
+  // Prefer the session locked by an ancestor copilot process; the cwd
+  // heuristic can pick a stale session when several exist for one repo.
+  const lockSessionDir = findCopilotSessionByAncestorPids();
+  if (process.env.PLANNOTATOR_DEBUG) {
+    console.error(`[DEBUG] Ancestor lock session: ${lockSessionDir ?? "(none)"}`);
+  }
+
+  const sessionDir = lockSessionDir ?? findCopilotSessionForCwd(projectRoot);
 
   if (!sessionDir) {
     console.error("No Copilot CLI session found.");
@@ -1785,6 +1838,12 @@ if (args[0] === "sessions") {
       gate: gateFlag,
       json: jsonFlag,
       hook: hookFlag,
+    }),
+    clientLeaseSupported: supportsAnnotateClientLease({
+      gate: gateFlag,
+      json: jsonFlag,
+      hook: hookFlag,
+      isRemote: isRemoteSession(),
     }),
     htmlContent: planHtmlContent,
     onReady: async (url, isRemote, port) => {

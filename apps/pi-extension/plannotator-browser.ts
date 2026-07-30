@@ -298,7 +298,12 @@ export function startBrowserDecisionSession<T>(
 		ctx,
 		kind,
 		presentationAbort.signal,
-	).catch(() => undefined);
+	).catch((err: unknown) => {
+		console.error(
+			`Plannotator: could not announce the browser URL ${server.url}: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		return undefined;
+	});
 	let stopped = false;
 	let stopReject: ((err: Error) => void) | undefined;
 	let decisionPromise: Promise<T> | undefined;
@@ -783,6 +788,7 @@ async function createMarkdownAnnotationSession(
 		sourceConverted,
 		gate,
 		approvalNotesSupported: true,
+		clientLeaseSupported: gate === true && !isRemoteSession(),
 		rawHtml,
 		renderHtml,
 		convertHtml,
