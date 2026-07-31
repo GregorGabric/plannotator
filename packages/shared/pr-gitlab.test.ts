@@ -503,6 +503,10 @@ describe("submitGlMRReview", () => {
 
   function makeSubmissionRuntime(
     discussionFailures: ReadonlySet<string>,
+    options: {
+      diffRefsReject?: boolean;
+      approvalReject?: boolean;
+    } = {},
   ): { runtime: PRRuntime; postedBodies: string[] } {
     const postedBodies: string[] = [];
     return {
@@ -511,6 +515,9 @@ describe("submitGlMRReview", () => {
         async runCommand(_command, args) {
           const endpoint = args[1] ?? "";
           if (endpoint === "projects/g%2Fp/merge_requests/1") {
+            if (options.diffRefsReject) {
+              throw new Error("spawn glab ENOENT");
+            }
             return {
               stdout: JSON.stringify({
                 diff_refs: {
@@ -536,6 +543,9 @@ describe("submitGlMRReview", () => {
             return discussionFailures.has(payload.body ?? "")
               ? { stdout: "", stderr: `rejected ${payload.body}`, exitCode: 1 }
               : { stdout: "{}", stderr: "", exitCode: 0 };
+          }
+          if (endpoint.endsWith("/approve") && options.approvalReject) {
+            throw new Error("spawn glab ENOENT");
           }
           return { stdout: "", stderr: `unexpected endpoint: ${endpoint}`, exitCode: 1 };
         },
@@ -644,6 +654,42 @@ describe("submitGlMRReview", () => {
     });
   });
 
+  test("turns a diff-ref spawn rejection after posting the body into a safe partial retry", async () => {
+    await withFailedCommentDataDir(async () => {
+      const { runtime } = makeSubmissionRuntime(new Set(), { diffRefsReject: true });
+
+      const result = await submitGlMRReview(
+        runtime,
+        REF,
+        "head",
+        "comment",
+        "Already posted body",
+        comments,
+      );
+
+      expect(result).toMatchObject({
+        status: "partial",
+        postedFileCommentCount: 0,
+        reviewBodyPosted: true,
+        failedFileComments: [
+          { comment: comments[0], error: expect.stringContaining("spawn glab ENOENT") },
+          { comment: comments[1], error: expect.stringContaining("spawn glab ENOENT") },
+        ],
+        retry: { action: "comment", fileComments: comments },
+      });
+    });
+  });
+
+  test("keeps a diff-ref spawn rejection retryable when no mutation occurred", async () => {
+    await withFailedCommentDataDir(async () => {
+      const { runtime } = makeSubmissionRuntime(new Set(), { diffRefsReject: true });
+
+      await expect(
+        submitGlMRReview(runtime, REF, "head", "comment", "", comments),
+      ).rejects.toThrow("Failed to post inline comments");
+    });
+  });
+
   test("reports a failed approval as partial after inline comments have posted", async () => {
     const { runtime } = makeSubmissionRuntime(new Set());
 
@@ -668,5 +714,38 @@ describe("submitGlMRReview", () => {
         fileComments: [],
       },
     });
+  });
+
+  test("reports repeated approval-only spawn failures consistently as partial", async () => {
+    const { runtime } = makeSubmissionRuntime(new Set(), { approvalReject: true });
+
+    const first = await submitGlMRReview(
+      runtime,
+      REF,
+      "head",
+      "approve",
+      "",
+      [],
+    );
+    const retry = await submitGlMRReview(
+      runtime,
+      REF,
+      "head",
+      "approve",
+      "",
+      [],
+    );
+
+    const expected = {
+      status: "partial",
+      postedFileCommentCount: 0,
+      failedFileComments: [],
+      reviewBodyPosted: false,
+      approval: "failed",
+      approvalError: "Failed to approve MR: spawn glab ENOENT",
+      retry: { action: "approve", fileComments: [] },
+    };
+    expect(first).toEqual(expected);
+    expect(retry).toEqual(expected);
   });
 });

@@ -93,7 +93,8 @@ function sameFileComment(
   );
 }
 
-function parsePartialSubmission(
+/** Parse one server-issued partial submission and its exact retry contract. */
+export function parsePRReviewSubmissionPartial(
   value: Record<string, unknown>,
 ): PRReviewSubmissionPartial | null {
   if (
@@ -165,7 +166,7 @@ export function parsePRActionSuccess(value: unknown): PRActionSuccess | null {
   if (value.submission.status === 'complete') {
     submission = { status: 'complete' };
   } else if (value.submission.status === 'partial') {
-    const partial = parsePartialSubmission(value.submission);
+    const partial = parsePRReviewSubmissionPartial(value.submission);
     if (!partial) return null;
     submission = partial;
   } else {

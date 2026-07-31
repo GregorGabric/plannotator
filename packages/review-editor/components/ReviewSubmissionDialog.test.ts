@@ -67,7 +67,7 @@ describe('buildPRActionRequest', () => {
   test('uses only the server-authorized retry after a partial submission', () => {
     const partialTarget: SubmissionTarget = {
       ...target,
-      status: 'failed',
+      status: 'partial',
       partial: {
         status: 'partial',
         postedFileCommentCount: 1,
@@ -90,5 +90,12 @@ describe('buildPRActionRequest', () => {
       fileComments: [inlineComment],
       targetPrUrl: target.prUrl,
     });
+  });
+
+  test('refuses a partial target without a server-authorized retry', () => {
+    expect(() => buildPRActionRequest('comment', 'Do not post', {
+      ...target,
+      status: 'partial',
+    })).toThrow('missing its server-authorized retry');
   });
 });

@@ -31,7 +31,10 @@ const baseTarget: SubmissionTarget = {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
-async function renderSubmission(submission: ReviewSubmission): Promise<void> {
+async function renderSubmission(
+  submission: ReviewSubmission,
+  generalComment = '',
+): Promise<void> {
   host = document.createElement('div');
   document.body.appendChild(host);
   await act(async () => {
@@ -41,13 +44,14 @@ async function renderSubmission(submission: ReviewSubmission): Promise<void> {
         isOpen
         action="comment"
         submission={submission}
-        generalComment=""
+        generalComment={generalComment}
         onGeneralCommentChange={() => {}}
         platformOpenPR={false}
         onPlatformOpenPRChange={() => {}}
         onConfirm={() => {}}
         onCancel={() => {}}
         isSubmitting={false}
+        recoveryPersistsRefresh
         mrLabel="MR"
         platformLabel="GitLab"
       />,
@@ -121,14 +125,20 @@ describe('ReviewSubmissionDialog submission outcomes', () => {
         },
       }],
       orphans: [],
-    });
+    }, 'Edited general comment');
 
     const content = document.body.textContent ?? '';
     expect(content).toContain('Review partially posted');
+    expect(content).toContain('This attempt posted 1 inline comment and the general comment');
     expect(content).toContain('src/failing.ts:19');
     expect(content).toContain('Handle this failure.');
     expect(content).toContain('Retry sends only the 1 unposted inline comment');
     expect(content).toContain('/tmp/plannotator/failed-comments/review.json');
+    expect(content).toContain('General comment locked because it may already be posted');
+    expect(content).toContain('refresh this tab');
+    const textarea = document.querySelector('textarea');
+    expect(textarea?.disabled).toBe(true);
+    expect(textarea?.value).toBe('Edited general comment');
     expect(actionButton()?.textContent).toContain('Retry Unposted');
     expect(actionButton()?.disabled).toBe(false);
   });

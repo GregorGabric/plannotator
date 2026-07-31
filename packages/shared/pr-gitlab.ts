@@ -585,6 +585,7 @@ export async function submitGlMRReview(
   if (!runtime.runCommandWithInput) {
     throw new Error("Runtime does not support stdin input; cannot submit MR review");
   }
+  const runCommandWithInput = runtime.runCommandWithInput.bind(runtime);
 
   const encoded = encodeProject(ref.projectPath);
   const mrEndpoint = `projects/${encoded}/merge_requests/${ref.iid}`;
@@ -599,7 +600,7 @@ export async function submitGlMRReview(
   // 1. Post general body as a note (if non-empty)
   if (body && body.trim()) {
     const notePayload = JSON.stringify({ body: body.trim() });
-    const noteResult = await runtime.runCommandWithInput(
+    const noteResult = await runCommandWithInput(
       "glab",
       apiArgs(ref.host, `${mrEndpoint}/notes`, ["--method", "POST", "--input", "-", "-H", "Content-Type:application/json"]),
       notePayload,
@@ -614,81 +615,93 @@ export async function submitGlMRReview(
   // 2. Post inline file comments as discussions with position
   if (fileComments.length > 0) {
     // We need the MR's diff_refs for the position SHAs.
-    const mrResult = await runtime.runCommand(
-      "glab",
-      apiArgs(ref.host, mrEndpoint),
-    );
     let baseSha = headSha; // fallback
     let startSha = headSha;
-    if (mrResult.exitCode === 0 && mrResult.stdout.trim()) {
-      try {
-        const mrData = JSON.parse(mrResult.stdout) as { diff_refs?: { base_sha: string; start_sha: string; head_sha: string } };
-        if (mrData.diff_refs) {
-          baseSha = mrData.diff_refs.base_sha;
-          startSha = mrData.diff_refs.start_sha;
+    let diffRefsError: string | undefined;
+    try {
+      const mrResult = await runtime.runCommand(
+        "glab",
+        apiArgs(ref.host, mrEndpoint),
+      );
+      if (mrResult.exitCode === 0 && mrResult.stdout.trim()) {
+        try {
+          const mrData = JSON.parse(mrResult.stdout) as { diff_refs?: { base_sha: string; start_sha: string; head_sha: string } };
+          if (mrData.diff_refs) {
+            baseSha = mrData.diff_refs.base_sha;
+            startSha = mrData.diff_refs.start_sha;
+          }
+        } catch {
+          // Use fallbacks
         }
-      } catch {
-        // Use fallbacks
       }
+    } catch (error) {
+      diffRefsError = error instanceof Error ? error.message : String(error);
     }
 
-    // Submit comments in parallel
-    const results = await Promise.allSettled(
-      fileComments.map(async (comment) => {
-        const isOldSide = comment.side === "LEFT";
-        const position: Record<string, unknown> = {
-          position_type: "text",
-          base_sha: baseSha,
-          head_sha: headSha,
-          start_sha: startSha,
-          new_path: comment.path,
-          old_path: comment.path,
-        };
+    if (diffRefsError) {
+      failedFileComments = fileComments.map((comment) => ({
+        comment,
+        error: `${comment.path}:${comment.line}: Failed to prepare inline comment: ${diffRefsError}`,
+      }));
+    } else {
+      // Submit comments in parallel
+      const results = await Promise.allSettled(
+        fileComments.map(async (comment) => {
+          const isOldSide = comment.side === "LEFT";
+          const position: Record<string, unknown> = {
+            position_type: "text",
+            base_sha: baseSha,
+            head_sha: headSha,
+            start_sha: startSha,
+            new_path: comment.path,
+            old_path: comment.path,
+          };
 
-        if (isOldSide) {
-          position.old_line = comment.line;
-        } else {
-          position.new_line = comment.line;
-        }
+          if (isOldSide) {
+            position.old_line = comment.line;
+          } else {
+            position.new_line = comment.line;
+          }
 
-        // Multi-line range support
-        if (comment.start_line != null && comment.start_line !== comment.line) {
-          const startIsOld = (comment.start_side ?? comment.side) === "LEFT";
-          const startEntry: Record<string, unknown> = { type: startIsOld ? "old" : "new" };
-          if (startIsOld) startEntry.old_line = comment.start_line;
-          else startEntry.new_line = comment.start_line;
+          // Multi-line range support
+          if (comment.start_line != null && comment.start_line !== comment.line) {
+            const startIsOld = (comment.start_side ?? comment.side) === "LEFT";
+            const startEntry: Record<string, unknown> = { type: startIsOld ? "old" : "new" };
+            if (startIsOld) startEntry.old_line = comment.start_line;
+            else startEntry.new_line = comment.start_line;
 
-          const endEntry: Record<string, unknown> = { type: isOldSide ? "old" : "new" };
-          if (isOldSide) endEntry.old_line = comment.line;
-          else endEntry.new_line = comment.line;
+            const endEntry: Record<string, unknown> = { type: isOldSide ? "old" : "new" };
+            if (isOldSide) endEntry.old_line = comment.line;
+            else endEntry.new_line = comment.line;
 
-          position.line_range = { start: startEntry, end: endEntry };
-        }
+            position.line_range = { start: startEntry, end: endEntry };
+          }
 
-        const payload = JSON.stringify({ body: comment.body, position });
-        const res = await runtime.runCommandWithInput!(
-          "glab",
-          apiArgs(ref.host, `${mrEndpoint}/discussions`, ["--method", "POST", "--input", "-", "-H", "Content-Type:application/json"]),
-          payload,
-        );
+          const payload = JSON.stringify({ body: comment.body, position });
+          const res = await runCommandWithInput(
+            "glab",
+            apiArgs(ref.host, `${mrEndpoint}/discussions`, ["--method", "POST", "--input", "-", "-H", "Content-Type:application/json"]),
+            payload,
+          );
 
-        if (res.exitCode !== 0) {
-          const msg = res.stderr.trim() || res.stdout.trim() || `exit code ${res.exitCode}`;
-          throw new Error(`${comment.path}:${comment.line}: ${msg}`);
-        }
-      }),
-    );
+          if (res.exitCode !== 0) {
+            const msg = res.stderr.trim() || res.stdout.trim() || `exit code ${res.exitCode}`;
+            throw new Error(`${comment.path}:${comment.line}: ${msg}`);
+          }
+        }),
+      );
 
-    failedFileComments = results.flatMap((result, index) =>
-      result.status === "rejected"
-        ? [{
-            comment: fileComments[index],
-            error: result.reason instanceof Error
-              ? result.reason.message
-              : String(result.reason),
-          }]
-        : [],
-    );
+      failedFileComments = results.flatMap((result, index) =>
+        result.status === "rejected"
+          ? [{
+              comment: fileComments[index],
+              error: result.reason instanceof Error
+                ? result.reason.message
+                : String(result.reason),
+            }]
+          : [],
+      );
+    }
     const errors = failedFileComments.map((failure) => failure.error);
 
     if (errors.length > 0) {
@@ -731,23 +744,23 @@ export async function submitGlMRReview(
   let approval: "not-requested" | "succeeded" | "failed" = "not-requested";
   let approvalError: string | undefined;
   if (action === "approve") {
-    const approveResult = await runtime.runCommandWithInput(
-      "glab",
-      apiArgs(ref.host, `${mrEndpoint}/approve`, ["--method", "POST", "--input", "-", "-H", "Content-Type:application/json"]),
-      "{}",
-    );
-    if (approveResult.exitCode !== 0) {
-      const msg = approveResult.stderr.trim() || approveResult.stdout.trim() || `exit code ${approveResult.exitCode}`;
-      approval = "failed";
-      approvalError = `Failed to approve MR: ${msg}`;
-      const reviewAlreadyPosted =
-        reviewBodyPosted ||
-        fileComments.length - failedFileComments.length > 0;
-      if (!reviewAlreadyPosted) {
-        throw new Error(approvalError);
+    try {
+      const approveResult = await runCommandWithInput(
+        "glab",
+        apiArgs(ref.host, `${mrEndpoint}/approve`, ["--method", "POST", "--input", "-", "-H", "Content-Type:application/json"]),
+        "{}",
+      );
+      if (approveResult.exitCode !== 0) {
+        const msg = approveResult.stderr.trim() || approveResult.stdout.trim() || `exit code ${approveResult.exitCode}`;
+        approval = "failed";
+        approvalError = `Failed to approve MR: ${msg}`;
+      } else {
+        approval = "succeeded";
       }
-    } else {
-      approval = "succeeded";
+    } catch (error) {
+      approval = "failed";
+      const message = error instanceof Error ? error.message : String(error);
+      approvalError = `Failed to approve MR: ${message}`;
     }
   }
 

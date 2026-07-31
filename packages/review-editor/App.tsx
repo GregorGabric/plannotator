@@ -68,7 +68,6 @@ import { exportReviewFeedback, buildProseFeedback, commitShaFromMode } from './u
 import { parseDiffToFiles } from './utils/diffParser';
 import {
   ReviewSubmissionDialog,
-  buildPRActionRequest,
   buildPlatformReviewBody,
   buildReviewSubmission,
   type ReviewSubmission,
@@ -113,9 +112,26 @@ import { DEMO_TOUR_ID } from './demoTour';
 import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
-import { parsePRActionSuccess, readPRActionError } from './utils/prActionResponse';
+import {
+  submitPlatformReviewTargets,
+} from './utils/platformReviewSubmission';
+import {
+  loadReviewSubmissionRecovery,
+  restoreReviewSubmission,
+  saveReviewSubmissionRecovery,
+  type ReviewSubmissionRecovery,
+  type ReviewRecoveryStorage,
+} from './utils/reviewSubmissionRecovery';
 
 declare const __APP_VERSION__: string;
+
+function getReviewRecoveryStorage(): ReviewRecoveryStorage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
 
 interface DiffData {
   files: DiffFile[];
@@ -385,6 +401,11 @@ const ReviewApp: React.FC = () => {
   const [platformUser, setPlatformUser] = useState<string | null>(null);
   const [platformCommentDialog, setPlatformCommentDialog] = useState<{ action: 'approve' | 'comment'; plan: ReviewSubmission } | null>(null);
   const [platformGeneralComment, setPlatformGeneralComment] = useState('');
+  const [platformReviewRecovery, setPlatformReviewRecovery] = useState<{
+    rootPrUrl: string;
+    recovery: ReviewSubmissionRecovery;
+  } | null>(null);
+  const [platformRecoveryPersistsRefresh, setPlatformRecoveryPersistsRefresh] = useState(false);
   const [platformOpenPR, setPlatformOpenPR] = useState(() => {
     const platformSetting = storage.getItem('plannotator-platform-open-pr');
     if (platformSetting !== null) return platformSetting !== 'false';
@@ -2598,6 +2619,9 @@ const ReviewApp: React.FC = () => {
 
     try {
       if (!prMetadata) throw new Error('PR metadata unavailable');
+      if (plan.targets.some(target => target.status === 'blocked')) {
+        throw new Error(`Automatic retry is blocked until the ${mrLabel} is inspected.`);
+      }
 
       const bodyForTarget = (target: SubmissionTarget) => buildPlatformReviewBody(
         action,
@@ -2621,58 +2645,28 @@ const ReviewApp: React.FC = () => {
         }];
       }
 
-      const openUrls: string[] = [];
-      const results = await Promise.allSettled(
-        targets.map(async (target): Promise<SubmissionTarget> => {
-          if (target.status === 'success') return target;
-          try {
-            const prRes = await fetch('/api/pr-action', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(buildPRActionRequest(
-                action,
-                bodyForTarget(target),
-                target,
-              )),
-            });
-            const rawResponse: unknown = await prRes.json();
-            if (!prRes.ok) {
-              return {
-                ...target,
-                status: 'failed',
-                error: readPRActionError(rawResponse) ?? 'Failed to submit',
-              };
-            }
-            const prData = parsePRActionSuccess(rawResponse);
-            if (!prData) {
-              return {
-                ...target,
-                status: 'failed',
-                error: 'Invalid response from review server',
-              };
-            }
-            if (prData.submission.status === 'partial') {
-              return {
-                ...target,
-                status: 'partial',
-                error: undefined,
-                partial: prData.submission,
-              };
-            }
-            if (prData.prUrl) openUrls.push(prData.prUrl);
-            return {
-              ...target,
-              status: 'success',
-              error: undefined,
-              partial: undefined,
-            };
-          } catch (err) {
-            return { ...target, status: 'failed', error: err instanceof Error ? err.message : 'Network error' };
-          }
-        }),
-      );
-      const updatedTargets = results.map((r, i) => r.status === 'fulfilled' ? r.value : { ...targets[i], status: 'failed' as const, error: 'Unexpected error' });
-      const allOk = updatedTargets.every(t => t.status === 'success');
+      const attempt = await submitPlatformReviewTargets({
+        targets,
+        action,
+        generalComment: generalComment ?? '',
+        bodyForTarget,
+      });
+      const updatedTargets = attempt.targets;
+      const allOk = attempt.allComplete;
+      const recovery = attempt.recovery;
+      const openUrls = attempt.openUrls;
+      setPlatformReviewRecovery(recovery
+        ? { rootPrUrl: prMetadata.url, recovery }
+        : null);
+      const recoveryStorage = getReviewRecoveryStorage();
+      const persistsRefresh = recoveryStorage
+        ? saveReviewSubmissionRecovery(
+          recoveryStorage,
+          prMetadata.url,
+          recovery,
+        )
+        : false;
+      setPlatformRecoveryPersistsRefresh(recovery !== null && persistsRefresh);
 
       if (!allOk) {
         setPlatformCommentDialog(prev => prev ? {
@@ -2725,9 +2719,35 @@ const ReviewApp: React.FC = () => {
     // inline review comments — seed them into the review body instead (quoted),
     // where the user can edit before submitting. Also means a review with only
     // prose notes still has something to post.
-    setPlatformGeneralComment(buildProseFeedback(visibleDescriptionAnnotations, visibleCommentAnnotations, prContext?.body));
+    const seededGeneralComment = buildProseFeedback(
+      visibleDescriptionAnnotations,
+      visibleCommentAnnotations,
+      prContext?.body,
+    );
+    const rootPrUrl = prMetadata?.url;
+    const inMemoryRecovery = rootPrUrl && platformReviewRecovery?.rootPrUrl === rootPrUrl
+      ? platformReviewRecovery.recovery
+      : null;
+    const recoveryStorage = getReviewRecoveryStorage();
+    const storedRecovery = rootPrUrl && recoveryStorage
+      ? loadReviewSubmissionRecovery(recoveryStorage, rootPrUrl)
+      : null;
+    const recovery = inMemoryRecovery ?? storedRecovery;
+    if (recovery) {
+      setPlatformReviewRecovery({ rootPrUrl: rootPrUrl ?? '', recovery });
+      if (storedRecovery) {
+        setPlatformRecoveryPersistsRefresh(true);
+      }
+      setPlatformGeneralComment(recovery.generalComment);
+      setPlatformCommentDialog({
+        action: recovery.action,
+        plan: restoreReviewSubmission(plan, recovery),
+      });
+      return;
+    }
+    setPlatformGeneralComment(seededGeneralComment);
     setPlatformCommentDialog({ action, plan });
-  }, [allAnnotations, visibleEditorAnnotations, files, prMetadata, visibleDescriptionAnnotations, visibleCommentAnnotations, prContext?.body]);
+  }, [allAnnotations, visibleEditorAnnotations, files, prMetadata, visibleDescriptionAnnotations, visibleCommentAnnotations, prContext?.body, platformReviewRecovery]);
 
   // Double-tap Option/Alt to toggle review destination (PR mode only)
   useEffect(() => {
@@ -2780,8 +2800,9 @@ const ReviewApp: React.FC = () => {
         if (submitted || isPlatformActioning) return;
         const isApproveAction = platformCommentDialog.action === 'approve';
         const hasTargets = platformCommentDialog.plan.targets.length > 0;
+        const retryBlocked = platformCommentDialog.plan.targets.some(target => target.status === 'blocked');
         const canSubmit = isApproveAction || hasTargets || platformGeneralComment.trim();
-        if (!canSubmit) return;
+        if (!canSubmit || retryBlocked) return;
         e.preventDefault();
         handlePlatformAction(platformCommentDialog.action, platformCommentDialog.plan, platformGeneralComment);
         return;
@@ -3844,6 +3865,7 @@ const ReviewApp: React.FC = () => {
           }}
           onCancel={() => setPlatformCommentDialog(null)}
           isSubmitting={isPlatformActioning}
+          recoveryPersistsRefresh={platformRecoveryPersistsRefresh}
           mrLabel={mrLabel}
           platformLabel={platformLabel}
         />

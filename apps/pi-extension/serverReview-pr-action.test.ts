@@ -56,7 +56,70 @@ afterEach(() => {
   }
 });
 
+async function withReviewServer(
+  submit: () => Promise<PRReviewSubmissionResult>,
+  run: (url: string) => Promise<void>,
+): Promise<void> {
+  process.env.PLANNOTATOR_AI = 'disabled';
+  process.env.PLANNOTATOR_DATA_DIR = makeTempDir('plannotator-pi-pr-action-data-');
+  process.env.PATH = makeTempDir('plannotator-pi-pr-action-path-');
+  delete process.env.PLANNOTATOR_PORT;
+  const server = await startReviewServer({
+    rawPatch: 'diff --git a/src/failing.ts b/src/failing.ts\n',
+    gitRef: 'MR !7',
+    htmlContent: '<!doctype html><html><body>review</body></html>',
+    prMetadata,
+    prReviewSubmitter: async () => submit(),
+  });
+  try {
+    await run(server.url);
+  } finally {
+    server.stop();
+  }
+}
+
+async function postReview(url: string): Promise<Response> {
+  return fetch(`${url}/api/pr-action`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'comment',
+      body: 'Overall review',
+      fileComments: [fileComment],
+    }),
+  });
+}
+
 describe('Pi /api/pr-action submission contract', () => {
+  test('returns complete success', async () => {
+    await withReviewServer(
+      async () => ({ status: 'complete' }),
+      async (url) => {
+        const response = await postReview(url);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ok: true,
+          submission: { status: 'complete' },
+        });
+      },
+    );
+  });
+
+  test('returns an all-failure as an error', async () => {
+    await withReviewServer(
+      async () => {
+        throw new Error('Failed to post inline comments');
+      },
+      async (url) => {
+        const response = await postReview(url);
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+          error: 'Failed to post inline comments',
+        });
+      },
+    );
+  });
+
   test('preserves the actionable mixed-outcome response', async () => {
     const partial: PRReviewSubmissionResult = {
       status: 'partial',
@@ -73,37 +136,17 @@ describe('Pi /api/pr-action submission contract', () => {
         fileComments: [fileComment],
       },
     };
-    process.env.PLANNOTATOR_AI = 'disabled';
-    process.env.PLANNOTATOR_DATA_DIR = makeTempDir('plannotator-pi-pr-action-data-');
-    process.env.PATH = makeTempDir('plannotator-pi-pr-action-path-');
-    delete process.env.PLANNOTATOR_PORT;
-
-    const server = await startReviewServer({
-      rawPatch: 'diff --git a/src/failing.ts b/src/failing.ts\n',
-      gitRef: 'MR !7',
-      htmlContent: '<!doctype html><html><body>review</body></html>',
-      prMetadata,
-      prReviewSubmitter: async () => partial,
-    });
-    try {
-      const response = await fetch(`${server.url}/api/pr-action`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'comment',
-          body: 'Overall review',
-          fileComments: [fileComment],
-        }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
-        ok: true,
-        prUrl: prMetadata.url,
-        submission: partial,
-      });
-    } finally {
-      server.stop();
-    }
+    await withReviewServer(
+      async () => partial,
+      async (url) => {
+        const response = await postReview(url);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          ok: true,
+          prUrl: prMetadata.url,
+          submission: partial,
+        });
+      },
+    );
   });
 });
