@@ -6,13 +6,13 @@ author: "backnotprop"
 tags: ["sharing", "collaboration", "privacy"]
 ---
 
-> **Status update, July 30, 2026:** Open source asynchronous link sharing remains available for compatibility but is moving to deprecated support. [Workspaces](/workspaces/) is the primary direction for team sharing. No removal date has been announced.
+> **Status update, July 31, 2026:** Open source asynchronous link sharing remains available for compatibility but is moving to deprecated support. [Workspaces](/workspaces/) is the primary direction for team sharing. No removal date has been announced.
 
 **Plannotator is an open-source plan review UI for AI coding agents.** It intercepts plan mode via hooks, opening a browser-based editor where you can annotate, approve, or reject plans before the agent acts. The sharing feature lets you send a plan, including annotations, to a teammate as a URL. They can review it, add their own feedback, and import it back. Small markdown shares put compressed content in the URL fragment. Larger markdown and raw HTML shares can use encrypted short links backed by a paste service.
 
 ## Watch the Demo
 
-<iframe width="100%" style="aspect-ratio: 16/9;" src="https://www.youtube.com/embed/a_AT7cEN_9I" title="Plannotator Demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+<iframe width="100%" style="aspect-ratio: 16/9;" src="https://www.youtube-nocookie.com/embed/a_AT7cEN_9I" title="Plannotator Demo" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
 
 ## The scenario
 

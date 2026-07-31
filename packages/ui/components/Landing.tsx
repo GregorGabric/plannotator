@@ -197,8 +197,8 @@ export const Landing: React.FC<LandingProps> = ({ onEnter, shareBaseUrl }) => {
               <div>
                 <h3 className="font-semibold mb-1">Runs locally.</h3>
                 <p className="text-muted-foreground text-sm">
-                  Reviews and saved data stay local by default. Plannotator
-                  checks GitHub for updates, but sends no plan or review content.
+                  Reviews and saved data stay local by default. Every load checks
+                  GitHub for updates, with no current opt-out, but sends no review content.
                 </p>
               </div>
             </div>

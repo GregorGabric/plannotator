@@ -23,7 +23,7 @@ Plannotator has three components. Only the hook is required.
 
 Small markdown shares put compressed, unencrypted content in the URL fragment. The share portal reads the fragment in the browser, and the fragment is not included in the portal's HTTP request. Anyone or any service with the complete URL can read the shared content.
 
-Large markdown shares and raw HTML do not fit the hash-only flow. When a user chooses short-link creation, the browser encrypts the payload with AES-256-GCM before sending ciphertext to the paste service. The decryption key is embedded in the URL fragment (`#key=...`) and is not included in HTTP requests to the paste service or portal. When someone opens the complete link, the portal fetches the ciphertext and decrypts it in the browser. Anyone with that link can do the same.
+Large markdown shares and raw HTML do not fit the hash-only flow. Markdown users confirm short-link creation in the Export modal. Local raw HTML can create a short link immediately through the header share action or a configured callback action, while remote raw HTML creates one automatically at session startup. In each case, the browser encrypts the payload with AES-256-GCM before sending ciphertext to the paste service. The decryption key is embedded in the URL fragment (`#key=...`) and is not included in HTTP requests to the paste service or portal. When someone opens the complete link, the portal fetches the ciphertext and decrypts it in the browser. Anyone with that link can do the same.
 
 **Without paste service:** Markdown sharing still works when the content fits in a URL fragment. No backend stores the shared payload, but the portal host receives normal request metadata and any service used to send the complete link can see its content. Raw HTML cannot be shared through this path.
 
@@ -35,7 +35,7 @@ See [Installation](/docs/getting-started/installation/) for hook setup instructi
 
 ## 2. Deploy the Share Portal
 
-The share portal is a static single-page application with no application database. It loads shared hash content in the browser, fetches ciphertext for short URLs, and performs Plannotator's GitHub release check. Rendered documents can also load remote assets that they reference.
+The share portal is a static single-page application with no application database. It loads shared hash content in the browser, fetches ciphertext for short URLs, and performs Plannotator's GitHub release check every time the app loads. There is currently no setting to disable that check. The built portal bundles its default Inter and Geist Mono fonts plus its Highlight.js library and theme, so those defaults do not require Google Fonts or cdnjs. Rendered documents can still load remote assets that they reference.
 
 ### Build
 

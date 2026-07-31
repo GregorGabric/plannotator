@@ -82,7 +82,7 @@ A session is created lazily on your first question. Until then, no resources are
 
 ## Permission requests
 
-When using Claude, the AI may request permission to use tools like Read, Glob, Grep, or WebSearch. When this happens, an approval card appears inline in the chat. You can approve or deny each request individually.
+Claude Ask AI allows Read, Glob, Grep, WebSearch, and scoped read-only Git commands by default. WebSearch queries are sent to Anthropic's search service and may return content from third-party websites without a separate Plannotator approval. Other tool requests appear as inline approval cards that you can approve or deny.
 
 Codex sessions run in a sandboxed read-only mode, so permission requests do not apply.
 

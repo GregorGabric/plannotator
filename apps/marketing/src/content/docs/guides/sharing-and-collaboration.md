@@ -70,7 +70,7 @@ When sharing is disabled:
 
 ## Short URLs for large plans
 
-When a plan is too large for a URL (~2KB+ compressed), messaging apps like Slack and WhatsApp may truncate it. Plannotator can create a short link by temporarily storing the compressed plan in a paste service.
+When a markdown plan is too large for a URL (~2KB+ compressed), messaging apps like Slack and WhatsApp may truncate it. Plannotator can create a short link by temporarily storing an encrypted payload in a paste service.
 
 ### How it works
 
@@ -82,15 +82,21 @@ When a plan is too large for a URL (~2KB+ compressed), messaging apps like Slack
 6. A short URL like `share.plannotator.ai/p/aBcDeFgH#key=...` is generated
 7. For markdown, both the short URL and the full hash URL are shown. Raw HTML requires the short-link path.
 
+Those confirmation steps describe markdown in the Export modal. Raw HTML cannot use the hash-only path. In a local raw-HTML session, choosing the header's **Copy Share Link** action or using an Approve or Send Feedback callback can create and upload the encrypted short link immediately. A remote raw-HTML session uploads an encrypted short link automatically when the session is created.
+
 ### Privacy & encryption
 
 - The browser encrypts the payload with AES-256-GCM before upload. The paste service receives ciphertext, not readable plan, annotation, or raw HTML content.
 - A fresh key is generated with the [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/SubtleCrypto/generateKey). It is placed in the URL fragment and is not included in HTTP requests to the paste service or share portal.
 - Anyone or any service with the complete link has the key and can decrypt the content. Treat the full URL as a secret.
-- In the interactive local flow, upload happens only after you click **Create short link**. Remote raw HTML sessions create an encrypted short link automatically so they can be opened from another machine.
+- Markdown upload from the Export modal happens after you click **Create short link**. Local raw HTML can upload from the header share action or a callback action without that markdown confirmation. Remote raw HTML uploads automatically at session creation.
 - Hosted ciphertext expires after 7 days. Self-hosted retention is configurable with `PASTE_TTL_DAYS`.
 - The paste service is open source and self-hostable. See the [self-hosting guide](/docs/guides/self-hosting/).
 - If the paste service is unavailable, markdown can still use the full hash URL. Raw HTML sharing is unavailable without the short-link path.
+
+### Callback-enabled links
+
+A link creator can configure an `http://` or `https://` callback endpoint and a token. When the recipient chooses **Approve** or **Send Feedback**, the browser posts the action, token, and annotated share URL to that endpoint. For a short link, `annotated_url` can include the complete fragment decryption key. Trust the link creator and callback endpoint with the shared content and key, and use HTTPS to protect the callback in transit.
 
 ## Self-hosting the share portal
 
@@ -100,7 +106,7 @@ By default, share URLs point to `https://share.plannotator.ai`. You can self-hos
 
 - Hash-only shares do not upload the shared content to the portal. The content is not encrypted and is visible to anyone or any service that receives the complete link.
 - The static portal receives normal request metadata such as IP address and user agent. It has no Plannotator usage analytics or product telemetry, but functional cookies can remember settings and update-dismissal state.
-- The portal performs the automatic GitHub release check. That request contains no plan, annotation, or raw HTML content.
-- Interactive short links are opt-in. They upload AES-256-GCM ciphertext and keep the decryption key in the URL fragment, similar to [PrivateBin](https://privatebin.info/).
-- Raw HTML uses the short-link path. Remote raw HTML creation is the automatic-upload exception to the interactive confirmation rule.
+- The portal performs the automatic GitHub release check every time the app loads. That request contains no plan, annotation, or raw HTML content, and there is currently no opt-out setting.
+- Markdown short links are opt-in. They upload AES-256-GCM ciphertext and keep the decryption key in the URL fragment, similar to [PrivateBin](https://privatebin.info/).
+- Raw HTML uses the short-link path and can upload through local header or callback actions, or automatically when a remote session is created.
 - Sending either kind of link transfers the full URL through your chosen email, chat, ticket, or other service. That service can retain the content or key embedded in the link.

@@ -140,7 +140,7 @@ Register the tool but manage prompts and permissions yourself:
 ## Features
 
 - **Visual annotations**: Select text, choose an action, see feedback in the sidebar
-- **Local by default**: Plans, annotations, drafts, history, and configuration stay local. The UI checks GitHub for updates without sending plan content; URL annotation, hosted PR review, AI, sharing, and Workspaces use the network when selected.
+- **Local by default**: Plans, annotations, drafts, history, and configuration stay local. Every app load checks GitHub for updates without sending plan content, and there is currently no opt-out setting; URL annotation, hosted PR review, AI, sharing, and Workspaces use the network when selected.
 - **Legacy link sharing**: Small markdown shares use compressed, unencrypted URL fragments. Larger and raw HTML shares can use client-encrypted short links. Workspaces is the primary direction for team sharing.
 - **Plan Diff**: See what changed when the agent revises a plan after feedback
 - **Annotate last message**: Run `/plannotator-last` to annotate the agent's most recent response
