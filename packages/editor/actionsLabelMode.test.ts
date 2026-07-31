@@ -10,14 +10,22 @@ class ControllableResizeObserver implements ResizeObserver {
   static latest: ControllableResizeObserver | null = null;
 
   readonly callback: ResizeObserverCallback;
+  observedTarget: Element | null = null;
+  observedOptions: ResizeObserverOptions | undefined;
+  disconnected = false;
 
   constructor(callback: ResizeObserverCallback) {
     this.callback = callback;
     ControllableResizeObserver.latest = this;
   }
 
-  disconnect(): void {}
-  observe(): void {}
+  disconnect(): void {
+    this.disconnected = true;
+  }
+  observe(target: Element, options?: ResizeObserverOptions): void {
+    this.observedTarget = target;
+    this.observedOptions = options;
+  }
   unobserve(): void {}
 }
 
@@ -50,9 +58,11 @@ describe("action-label responsive measurement", () => {
     );
     expect(modes).toEqual(["full"]);
 
-    borderBoxWidth = 679;
     const observer = ControllableResizeObserver.latest;
     if (!observer) throw new Error("ResizeObserver was not installed");
+    expect(observer.observedTarget).toBe(element as HTMLElement);
+    expect(observer.observedOptions).toEqual({ box: "border-box" });
+
     const contentBoxEntry: ResizeObserverEntry = {
       target: element as HTMLElement,
       contentRect: {
@@ -66,13 +76,19 @@ describe("action-label responsive measurement", () => {
         left: 0,
         toJSON: () => ({}),
       },
-      borderBoxSize: [],
+      borderBoxSize: [{ inlineSize: 679, blockSize: 0 }],
       contentBoxSize: [],
       devicePixelContentBoxSize: [],
     };
     observer.callback([contentBoxEntry], observer);
 
     expect(modes).toEqual(["full", "icon"]);
+
+    borderBoxWidth = 700;
+    observer.callback([{ ...contentBoxEntry, borderBoxSize: [] }], observer);
+    expect(modes).toEqual(["full", "icon", "short"]);
+
     disconnect();
+    expect(observer.disconnected).toBe(true);
   });
 });

@@ -3588,6 +3588,8 @@ const App: React.FC = () => {
   };
 
   const handleQuickSaveToNotes = async (target: 'obsidian' | 'bear' | 'octarine') => {
+    if (documentReadOnly) return;
+
     const body: { obsidian?: object; bear?: object; octarine?: object } = {};
     // Mid-edit saves describe the live buffer, matching handleApprove.
     const quickSaveMarkdown = isEditingMarkdown
@@ -3856,6 +3858,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleSaveShortcut = (e: KeyboardEvent) => {
       if (e.key !== 's' || !(e.metaKey || e.ctrlKey)) return;
+      if (documentReadOnly) return;
 
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -3898,7 +3901,7 @@ const App: React.FC = () => {
   }, [
     showExport, showFeedbackPrompt, showClaudeCodeWarning, showSourceFileEditWarning, showExitWarning, showApproveWithNotesConfirmation, showAgentWarning,
     showPermissionModeSetup, pendingPasteImage,
-    submitted, isApiMode, isEditingMarkdown, handleSaveEditedSourceFile, displayedMarkdown, annotationsOutput,
+    submitted, isApiMode, documentReadOnly, isEditingMarkdown, handleSaveEditedSourceFile, displayedMarkdown, annotationsOutput,
   ]);
 
   // Cmd/Ctrl+P keyboard shortcut — print plan
@@ -4824,7 +4827,7 @@ const App: React.FC = () => {
           taterSprite={taterMode ? <TaterSpritePullup /> : undefined}
           sharingEnabled={canShareCurrentSession}
           markdown={markdown}
-          isApiMode={isApiMode}
+          isApiMode={isApiMode && !documentReadOnly}
           initialTab={initialExportTab}
           wrapCopiedAnnotations={wrapCopiedFeedback}
         />

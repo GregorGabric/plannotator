@@ -38,6 +38,17 @@ const blocks: Block[] = [
   { id: 'b1', type: 'paragraph', content: 'hello world', order: 0, startLine: 1 },
 ];
 
+const fencedCodeBlocks: Block[] = [
+  {
+    id: 'code-1',
+    type: 'code',
+    content: 'const archived = true;',
+    language: 'typescript',
+    order: 0,
+    startLine: 1,
+  },
+];
+
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 
@@ -105,6 +116,61 @@ describe('Viewer consumer props', () => {
     expect(globalCommentButton()).toBeNull();
     expect(document.querySelector('button[title="Attachments"]')).toBeNull();
     expect(document.body.textContent).toContain('hello world');
+  });
+
+  test.skipIf(!hasDom)('readOnly fenced code never opens composers or mutates the rendered code', async () => {
+    const additions: unknown[] = [];
+    await mount(
+      <Viewer
+        {...viewerProps}
+        blocks={fencedCodeBlocks}
+        markdown={'```typescript\nconst archived = true;\n```'}
+        readOnly
+        onAddAnnotation={(annotation) => additions.push(annotation)}
+      />,
+    );
+
+    const codeBlock = document.querySelector<HTMLElement>('[data-block-id="code-1"]');
+    const code = codeBlock?.querySelector('code');
+    if (!codeBlock || !code) throw new Error('Fenced code block did not render');
+    const renderedCode = code.innerHTML;
+
+    await act(async () => {
+      codeBlock.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+      codeBlock.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(document.querySelector('.annotation-toolbar')).toBeNull();
+    expect(document.querySelector('textarea')).toBeNull();
+    expect(document.querySelector('[data-quick-label-picker]')).toBeNull();
+    expect(code.querySelector('mark')).toBeNull();
+    expect(code.innerHTML).toBe(renderedCode);
+    expect(additions).toEqual([]);
+
+    for (const mode of ['comment', 'redline', 'quickLabel'] as const) {
+      await act(async () => {
+        root?.render(
+          <Viewer
+            {...viewerProps}
+            blocks={fencedCodeBlocks}
+            markdown={'```typescript\nconst archived = true;\n```'}
+            inputMethod="pinpoint"
+            mode={mode}
+            readOnly
+            onAddAnnotation={(annotation) => additions.push(annotation)}
+          />,
+        );
+      });
+      await act(async () => {
+        codeBlock.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+
+      expect(document.querySelector('textarea')).toBeNull();
+      expect(document.querySelector('[data-quick-label-picker]')).toBeNull();
+      expect(code.querySelector('mark')).toBeNull();
+      expect(code.innerHTML).toBe(renderedCode);
+      expect(additions).toEqual([]);
+    }
   });
 });
 

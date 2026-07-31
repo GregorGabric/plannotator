@@ -10,6 +10,7 @@ if (hasDom) {
   document.cookie = "plannotator-plan-ai-announcement-seen=1; path=/";
 }
 
+const storageModule = hasDom ? await import("@plannotator/ui/utils/storage") : null;
 const appModule = hasDom ? await import("./App") : null;
 const App = appModule?.default as typeof import("./App")["default"];
 const originalFetch = globalThis.fetch;
@@ -59,6 +60,27 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let requestedRoutes: string[] = [];
 
+const noteSettings = new Map<string, string>();
+
+function configureNotesApps(): void {
+  storageModule?.setStorageBackend({
+    getItem: (key) => noteSettings.get(key) ?? null,
+    setItem: (key, value) => noteSettings.set(key, value),
+    removeItem: (key) => { noteSettings.delete(key); },
+  });
+  noteSettings.set("plannotator-obsidian-enabled", "true");
+  noteSettings.set("plannotator-obsidian-vault", "TestVault");
+  noteSettings.set("plannotator-bear-enabled", "true");
+  noteSettings.set("plannotator-octarine-enabled", "true");
+  noteSettings.set("plannotator-octarine-workspace", "TestWorkspace");
+  noteSettings.set("plannotator-default-notes-app", "obsidian");
+}
+
+function findButton(label: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll("button"))
+    .find((button) => button.textContent?.trim() === label);
+}
+
 function responseFor(planResponse: PlanResponse): typeof fetch {
   return async (input, init) => {
     const rawUrl = input instanceof Request ? input.url : String(input);
@@ -88,6 +110,15 @@ function responseFor(planResponse: PlanResponse): typeof fetch {
     if (url.pathname === "/api/draft") {
       return Response.json({ error: "Not found" }, { status: 404 });
     }
+    if (url.pathname === "/api/save-notes") {
+      return Response.json({
+        results: {
+          obsidian: { success: true },
+          bear: { success: true },
+          octarine: { success: true },
+        },
+      });
+    }
     return Response.json({});
   };
 }
@@ -105,7 +136,8 @@ async function mountApp(planResponse: PlanResponse): Promise<void> {
     root?.render(<App />);
   });
 
-  for (let attempt = 0; attempt < 20 && !document.body.textContent?.includes(planResponse.plan.slice(2)); attempt += 1) {
+  const expectedTitle = planResponse.plan.match(/^#\s+(.+)$/m)?.[1] ?? planResponse.plan;
+  for (let attempt = 0; attempt < 20 && !document.body.textContent?.includes(expectedTitle); attempt += 1) {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -119,13 +151,16 @@ afterEach(async () => {
   host = null;
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
+  noteSettings.clear();
+  storageModule?.resetStorageBackend();
   if (hasDom) document.body.replaceChildren();
 });
 
 describe.if(hasDom)("App document permissions", () => {
   test("standalone archive renders Markdown without mutation entry points", async () => {
+    configureNotesApps();
     await mountApp({
-      plan: "# Archived document",
+      plan: "# Archived document\n\n```typescript\nconst archived = true;\n```",
       origin: "codex",
       mode: "archive",
       archivePlans: [{
@@ -142,17 +177,60 @@ describe.if(hasDom)("App document permissions", () => {
     expect(document.querySelector('button[title="Add global comment"]')).toBeNull();
     expect(document.querySelector('button[title="Attachments"]')).toBeNull();
 
+    const codeBlock = document.querySelector<HTMLElement>('pre')?.closest<HTMLElement>('[data-block-id]');
+    const code = codeBlock?.querySelector('code');
+    if (!codeBlock || !code) throw new Error("Archived fenced code block did not render");
+    const renderedCode = code.innerHTML;
+    await act(async () => {
+      codeBlock.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      codeBlock.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(document.querySelector('.annotation-toolbar')).toBeNull();
+    expect(document.querySelector('textarea')).toBeNull();
+    expect(document.querySelector('[data-quick-label-picker]')).toBeNull();
+    expect(code.querySelector('mark')).toBeNull();
+    expect(code.innerHTML).toBe(renderedCode);
+
+    const optionsButton = document.querySelector<HTMLButtonElement>('button[title="Options"]');
+    if (!optionsButton) throw new Error("Options menu trigger did not render");
+    await act(async () => optionsButton.click());
+    expect(findButton("Save to Obsidian")).toBeUndefined();
+    expect(findButton("Save to Bear")).toBeUndefined();
+    expect(findButton("Save to Octarine")).toBeUndefined();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "s",
+        metaKey: true,
+      }));
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "s",
+        ctrlKey: true,
+      }));
+    });
+    expect(requestedRoutes).not.toContain("POST /api/save-notes");
+
     await act(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", {
         key: "Enter",
         metaKey: true,
       }));
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        ctrlKey: true,
+      }));
     });
     expect(requestedRoutes).not.toContain("POST /api/approve");
     expect(requestedRoutes).not.toContain("POST /api/deny");
+
+    const exportButton = findButton("Export");
+    if (!exportButton) throw new Error("Export menu item did not render");
+    await act(async () => exportButton.click());
+    expect(findButton("Notes")).toBeUndefined();
   });
 
   test("normal annotate remains writable", async () => {
+    configureNotesApps();
     await mountApp({
       plan: "# Writable document",
       origin: "codex",
@@ -165,5 +243,22 @@ describe.if(hasDom)("App document permissions", () => {
     expect(document.body.textContent).toContain("Writable document");
     expect(document.querySelector('button[title="Add global comment"]')).not.toBeNull();
     expect(document.querySelector('button[title="Attachments"]')).not.toBeNull();
+
+    const optionsButton = document.querySelector<HTMLButtonElement>('button[title="Options"]');
+    if (!optionsButton) throw new Error("Options menu trigger did not render");
+    await act(async () => optionsButton.click());
+    expect(findButton("Save to Obsidian")).not.toBeUndefined();
+    expect(findButton("Save to Bear")).not.toBeUndefined();
+    expect(findButton("Save to Octarine")).not.toBeUndefined();
+
+    requestedRoutes = [];
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "s",
+        metaKey: true,
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(requestedRoutes).toContain("POST /api/save-notes");
   });
 });
