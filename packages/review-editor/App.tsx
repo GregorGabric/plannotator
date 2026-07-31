@@ -68,6 +68,7 @@ import { exportReviewFeedback, buildProseFeedback, commitShaFromMode } from './u
 import { parseDiffToFiles } from './utils/diffParser';
 import {
   ReviewSubmissionDialog,
+  buildPRActionRequest,
   buildPlatformReviewBody,
   buildReviewSubmission,
   type ReviewSubmission,
@@ -112,6 +113,7 @@ import { DEMO_TOUR_ID } from './demoTour';
 import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
+import { parsePRActionSuccess, readPRActionError } from './utils/prActionResponse';
 
 declare const __APP_VERSION__: string;
 
@@ -2627,19 +2629,43 @@ const ReviewApp: React.FC = () => {
             const prRes = await fetch('/api/pr-action', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
+              body: JSON.stringify(buildPRActionRequest(
                 action,
-                body: bodyForTarget(target),
-                fileComments: target.fileComments,
-                targetPrUrl: target.prUrl || undefined,
-              }),
+                bodyForTarget(target),
+                target,
+              )),
             });
-            const prData = await prRes.json() as { ok?: boolean; prUrl?: string; error?: string };
-            if (!prRes.ok || prData.error) {
-              return { ...target, status: 'failed', error: prData.error ?? 'Failed to submit' };
+            const rawResponse: unknown = await prRes.json();
+            if (!prRes.ok) {
+              return {
+                ...target,
+                status: 'failed',
+                error: readPRActionError(rawResponse) ?? 'Failed to submit',
+              };
+            }
+            const prData = parsePRActionSuccess(rawResponse);
+            if (!prData) {
+              return {
+                ...target,
+                status: 'failed',
+                error: 'Invalid response from review server',
+              };
+            }
+            if (prData.submission.status === 'partial') {
+              return {
+                ...target,
+                status: 'partial',
+                error: undefined,
+                partial: prData.submission,
+              };
             }
             if (prData.prUrl) openUrls.push(prData.prUrl);
-            return { ...target, status: 'success' };
+            return {
+              ...target,
+              status: 'success',
+              error: undefined,
+              partial: undefined,
+            };
           } catch (err) {
             return { ...target, status: 'failed', error: err instanceof Error ? err.message : 'Network error' };
           }

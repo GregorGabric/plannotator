@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  buildPRActionRequest,
   buildPlatformReviewBody,
   type SubmissionTarget,
 } from './ReviewSubmissionDialog';
@@ -38,5 +39,56 @@ describe('buildPlatformReviewBody', () => {
       fileComments: [inlineComment],
       fileScopedBody: '',
     })).toBe('');
+  });
+});
+
+describe('buildPRActionRequest', () => {
+  const target: SubmissionTarget = {
+    prUrl: 'https://gitlab.example/acme/widgets/-/merge_requests/7',
+    prNumber: 7,
+    prTitle: 'Reliable comments',
+    prRepo: 'acme/widgets',
+    fileComments: [inlineComment, { ...inlineComment, path: 'src/posted.ts', line: 30 }],
+    fileScopedBody: '',
+    fileCount: 2,
+    annotationCount: 2,
+    status: 'pending',
+  };
+
+  test('uses the complete original payload before any platform mutation', () => {
+    expect(buildPRActionRequest('comment', 'Overall review', target)).toEqual({
+      action: 'comment',
+      body: 'Overall review',
+      fileComments: target.fileComments,
+      targetPrUrl: target.prUrl,
+    });
+  });
+
+  test('uses only the server-authorized retry after a partial submission', () => {
+    const partialTarget: SubmissionTarget = {
+      ...target,
+      status: 'failed',
+      partial: {
+        status: 'partial',
+        postedFileCommentCount: 1,
+        failedFileComments: [{
+          comment: inlineComment,
+          error: 'rejected',
+        }],
+        reviewBodyPosted: true,
+        approval: 'succeeded',
+        retry: {
+          action: 'comment',
+          fileComments: [inlineComment],
+        },
+      },
+    };
+
+    expect(buildPRActionRequest('approve', 'Do not repost this', partialTarget)).toEqual({
+      action: 'comment',
+      body: '',
+      fileComments: [inlineComment],
+      targetPrUrl: target.prUrl,
+    });
   });
 });

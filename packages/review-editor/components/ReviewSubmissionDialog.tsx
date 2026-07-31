@@ -1,5 +1,6 @@
 import React from 'react';
 import type { CodeAnnotation } from '@plannotator/ui/types';
+import type { PRReviewSubmissionPartial } from '@plannotator/shared/pr-types';
 import { CopyButton } from './CopyButton';
 import { exportReviewFeedback, formatConventionalPrefix } from '../utils/exportFeedback';
 
@@ -23,8 +24,9 @@ export interface SubmissionTarget {
   fileScopedBody: string;
   fileCount: number;
   annotationCount: number;
-  status: 'pending' | 'success' | 'failed';
+  status: 'pending' | 'success' | 'partial' | 'failed';
   error?: string;
+  partial?: PRReviewSubmissionPartial;
 }
 
 export interface OrphanedFindings {
@@ -36,6 +38,14 @@ export interface OrphanedFindings {
 export interface ReviewSubmission {
   targets: SubmissionTarget[];
   orphans: OrphanedFindings[];
+}
+
+/** Request body accepted by the review server's platform submission endpoint. */
+export interface PRActionRequest {
+  action: 'approve' | 'comment';
+  body: string;
+  fileComments: SubmissionTarget['fileComments'];
+  targetPrUrl?: string;
 }
 
 type ReviewPlatform = 'github' | 'gitlab';
@@ -96,6 +106,19 @@ function buildFileScopedBody(annotations: CodeAnnotation[]): string {
   return parts.join('\n\n');
 }
 
+function buildFailedCommentsMarkdown(
+  partial: PRReviewSubmissionPartial,
+): string {
+  return partial.failedFileComments
+    .map(({ comment, error }) => [
+      `### ${comment.path}:${comment.line}`,
+      comment.body,
+      '',
+      `Posting error: ${error}`,
+    ].join('\n'))
+    .join('\n\n');
+}
+
 /**
  * Build the top-level review body without adding product attribution.
  * GitHub requires a body for COMMENT reviews, so an inline-only review gets a
@@ -116,6 +139,24 @@ export function buildPlatformReviewBody(
     return 'See inline comments.';
   }
   return '';
+}
+
+/**
+ * Build either the original platform request or the exact retry-safe subset
+ * returned by the server after a partial GitLab submission.
+ */
+export function buildPRActionRequest(
+  action: 'approve' | 'comment',
+  body: string,
+  target: SubmissionTarget,
+): PRActionRequest {
+  const retry = target.partial?.retry;
+  return {
+    action: retry?.action ?? action,
+    body: retry ? '' : body,
+    fileComments: retry?.fileComments ?? target.fileComments,
+    ...(target.prUrl ? { targetPrUrl: target.prUrl } : {}),
+  };
 }
 
 export function buildReviewSubmission(
@@ -269,6 +310,7 @@ export function ReviewSubmissionDialog({
   const hasTargets = submission.targets.length > 0;
   const allSucceeded = hasTargets && submission.targets.every(t => t.status === 'success');
   const hasFailed = submission.targets.some(t => t.status === 'failed');
+  const hasPartial = submission.targets.some(t => t.partial !== undefined);
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
@@ -309,6 +351,10 @@ export function ReviewSubmissionDialog({
                       <svg className="w-4 h-4 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
+                    ) : target.status === 'partial' ? (
+                      <svg className="w-4 h-4 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.3 3.6l-7.4 13A2 2 0 004.7 19h14.6a2 2 0 001.8-2.4l-7.4-13a2 2 0 00-3.4 0z" />
+                      </svg>
                     ) : target.status === 'failed' ? (
                       <svg className="w-4 h-4 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -328,6 +374,50 @@ export function ReviewSubmissionDialog({
                     </div>
                     {target.status === 'failed' && target.error && (
                       <div className="text-xs text-destructive mt-0.5">{target.error}</div>
+                    )}
+                    {target.partial && (
+                      <div className="mt-2 rounded-md border border-warning/30 bg-warning/10 p-2 text-xs">
+                        <div className="font-medium text-warning">
+                          Review partially posted
+                        </div>
+                        {target.partial.failedFileComments.length > 0 && (
+                          <>
+                            <div className="mt-1 text-muted-foreground">
+                              {target.partial.failedFileComments.length} inline comment{target.partial.failedFileComments.length === 1 ? '' : 's'} failed:
+                            </div>
+                            <ul className="mt-1 space-y-1">
+                              {target.partial.failedFileComments.map(({ comment, error }) => (
+                                <li key={`${comment.path}:${comment.line}:${comment.body}`} className="min-w-0">
+                                  <div className="font-mono break-all">{comment.path}:{comment.line}</div>
+                                  <div className="truncate text-foreground" title={comment.body}>{comment.body}</div>
+                                  <div className="break-words text-destructive">{error}</div>
+                                </li>
+                              ))}
+                            </ul>
+                            <CopyButton
+                              text={buildFailedCommentsMarkdown(target.partial)}
+                              variant="inline"
+                              label="Copy failed comments"
+                              className="mt-1"
+                            />
+                          </>
+                        )}
+                        {target.partial.approval === 'failed' && (
+                          <div className="mt-1 text-destructive">
+                            {target.partial.approvalError ?? `Failed to approve ${mrLabel}.`}
+                          </div>
+                        )}
+                        <div className="mt-1 text-muted-foreground">
+                          {target.partial.retry.fileComments.length > 0
+                            ? `Retry sends only the ${target.partial.retry.fileComments.length} unposted inline comment${target.partial.retry.fileComments.length === 1 ? '' : 's'}; posted comments and the general note are not sent again.`
+                            : `Retry only repeats the ${mrLabel} approval; posted comments and the general note are not sent again.`}
+                        </div>
+                        {target.partial.recoveryFile && (
+                          <div className="mt-1 text-muted-foreground">
+                            Recovery copy: <code className="break-all text-foreground">{target.partial.recoveryFile}</code>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -397,11 +487,13 @@ export function ReviewSubmissionDialog({
           >
             {isSubmitting
               ? 'Posting...'
-              : hasFailed
-                ? 'Retry Failed'
-                : isApprove
-                  ? 'Approve'
-                  : 'Post Comments'}
+              : hasPartial
+                ? 'Retry Unposted'
+                : hasFailed
+                  ? 'Retry Failed'
+                  : isApprove
+                    ? 'Approve'
+                    : 'Post Comments'}
           </button>
         </div>
       </div>

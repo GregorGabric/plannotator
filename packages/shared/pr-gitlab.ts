@@ -7,7 +7,7 @@
 
 import { join } from "path";
 import { mkdirSync, writeFileSync } from "fs";
-import type { PRRuntime, PRMetadata, PRContext, PRReviewFileComment, CommandResult } from "./pr-types";
+import type { PRRuntime, PRMetadata, PRContext, PRReviewFileComment, PRReviewCommentFailure, PRReviewSubmissionResult, CommandResult } from "./pr-types";
 import { encodeApiFilePath } from "./pr-types";
 import { getPlannotatorDataDir } from "./data-dir";
 
@@ -567,6 +567,13 @@ export async function fetchGlFileContent(
 
 // --- Submit MR Review ---
 
+/**
+ * Submit a GitLab review across its separate note, discussion, and approval
+ * APIs.
+ *
+ * Returns a narrowed retry contract whenever GitLab accepts only part of the
+ * review. Throws only while replaying the original request is still safe.
+ */
 export async function submitGlMRReview(
   runtime: PRRuntime,
   ref: GlMRRef,
@@ -574,13 +581,16 @@ export async function submitGlMRReview(
   action: "approve" | "comment",
   body: string,
   fileComments: PRReviewFileComment[],
-): Promise<void> {
+): Promise<PRReviewSubmissionResult> {
   if (!runtime.runCommandWithInput) {
     throw new Error("Runtime does not support stdin input; cannot submit MR review");
   }
 
   const encoded = encodeProject(ref.projectPath);
   const mrEndpoint = `projects/${encoded}/merge_requests/${ref.iid}`;
+  let reviewBodyPosted = false;
+  let failedFileComments: PRReviewCommentFailure[] = [];
+  let recoveryFile: string | undefined;
 
   // Fetch base SHA for position context (needed for line comments)
   // We use the headSha passed in and derive baseSha from MR metadata
@@ -598,6 +608,7 @@ export async function submitGlMRReview(
       const msg = noteResult.stderr.trim() || noteResult.stdout.trim() || `exit code ${noteResult.exitCode}`;
       throw new Error(`Failed to post MR note: ${msg}`);
     }
+    reviewBodyPosted = true;
   }
 
   // 2. Post inline file comments as discussions with position
@@ -620,8 +631,6 @@ export async function submitGlMRReview(
         // Use fallbacks
       }
     }
-
-    const errors: string[] = [];
 
     // Submit comments in parallel
     const results = await Promise.allSettled(
@@ -670,22 +679,21 @@ export async function submitGlMRReview(
       }),
     );
 
-    for (const r of results) {
-      if (r.status === "rejected") {
-        errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
-      }
-    }
+    failedFileComments = results.flatMap((result, index) =>
+      result.status === "rejected"
+        ? [{
+            comment: fileComments[index],
+            error: result.reason instanceof Error
+              ? result.reason.message
+              : String(result.reason),
+          }]
+        : [],
+    );
+    const errors = failedFileComments.map((failure) => failure.error);
 
     if (errors.length > 0) {
       // Persist unposted bodies to disk so the work survives transient GitLab errors.
-      // We keep the original throw-vs-warn split intentionally:
-      //  - all-fail → throw (nothing was posted, caller retries from clean state)
-      //  - partial-fail → warn only (some discussions + the MR note are already on
-      //    the server; throwing would have the client re-submit the whole review
-      //    and create duplicates).
-      const failed = results
-        .map((r, i) => (r.status === "rejected" ? fileComments[i] : null))
-        .filter((c): c is PRReviewFileComment => c !== null);
+      const failed = failedFileComments.map((failure) => failure.comment);
       let savedTo: string | null = null;
       try {
         const dir = join(getPlannotatorDataDir(), "failed-comments");
@@ -699,16 +707,20 @@ export async function submitGlMRReview(
       } catch (writeErr) {
         console.error(`[plannotator] Failed to persist unposted comments: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`);
       }
+      recoveryFile = savedTo ?? undefined;
       const suffix = savedTo ? ` (unposted bodies saved to ${savedTo})` : "";
 
-      if (errors.length === fileComments.length) {
-        // All failed — safe to throw, nothing was posted.
+      if (errors.length === fileComments.length && !reviewBodyPosted) {
+        // All failed and there was no review body — safe to throw because the
+        // MR was not mutated. The client can replay the original request.
         throw new Error(
           `Failed to post inline comments${suffix}:\n${errors.join("\n")}`,
         );
       }
-      // Partial failure — some comments and the MR note are already posted.
-      // Don't throw, or the UI will resubmit the whole review and duplicate them.
+
+      // Some part of the review already exists on GitLab. Keep processing an
+      // approval request, then return the exact safe retry instead of making
+      // callers infer that replaying the original review is safe.
       console.error(
         `[plannotator] ${errors.length}/${fileComments.length} inline comments failed${suffix}:\n${errors.join("\n")}`,
       );
@@ -716,6 +728,8 @@ export async function submitGlMRReview(
   }
 
   // 3. Approve if requested
+  let approval: "not-requested" | "succeeded" | "failed" = "not-requested";
+  let approvalError: string | undefined;
   if (action === "approve") {
     const approveResult = await runtime.runCommandWithInput(
       "glab",
@@ -724,7 +738,34 @@ export async function submitGlMRReview(
     );
     if (approveResult.exitCode !== 0) {
       const msg = approveResult.stderr.trim() || approveResult.stdout.trim() || `exit code ${approveResult.exitCode}`;
-      throw new Error(`Failed to approve MR: ${msg}`);
+      approval = "failed";
+      approvalError = `Failed to approve MR: ${msg}`;
+      const reviewAlreadyPosted =
+        reviewBodyPosted ||
+        fileComments.length - failedFileComments.length > 0;
+      if (!reviewAlreadyPosted) {
+        throw new Error(approvalError);
+      }
+    } else {
+      approval = "succeeded";
     }
   }
+
+  if (failedFileComments.length > 0 || approval === "failed") {
+    return {
+      status: "partial",
+      postedFileCommentCount: fileComments.length - failedFileComments.length,
+      failedFileComments,
+      reviewBodyPosted,
+      approval,
+      ...(approvalError ? { approvalError } : {}),
+      ...(recoveryFile ? { recoveryFile } : {}),
+      retry: {
+        action: approval === "failed" ? "approve" : "comment",
+        fileComments: failedFileComments.map((failure) => failure.comment),
+      },
+    };
+  }
+
+  return { status: "complete" };
 }
