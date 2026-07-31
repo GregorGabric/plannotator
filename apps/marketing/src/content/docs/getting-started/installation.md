@@ -114,8 +114,11 @@ recognized removal set without changing anything.
 The purge removes only known Plannotator entries from the configured data
 directory. Unknown top-level files are preserved rather than guessed at, and
 custom external plan-save paths or project-local integrations are never
-deleted. If a host plugin manager is unavailable or a shared JSONC file cannot
-be edited safely, the command reports the manual follow-up.
+deleted. If a host plugin manager is unavailable or a shared config cannot be
+edited safely, the command reports the follow-up and preserves the CLI and its
+Windows PATH entry so you can fix the problem and retry. If Windows PATH
+restoration itself fails, the CLI remains on disk and the output gives its full
+path for retry and manual PATH repair.
 Purge also refuses broad targets (filesystem roots, the home directory, or the
 shared temporary directory), symlinked data directories, and non-directory
 paths. For a symlinked dedicated directory, set `PLANNOTATOR_DATA_DIR` to its

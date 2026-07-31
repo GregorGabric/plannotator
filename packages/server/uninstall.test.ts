@@ -60,7 +60,11 @@ function createFixture(
     which: () => null,
     runCommand: async (command, args, env) => {
       commandCalls.push({ command, args, env });
-      return { exitCode: 0, timedOut: false };
+      return {
+        exitCode: 0,
+        timedOut: false,
+        stdout: JSON.stringify("C:\\Tools;C:\\Users\\fixture\\AppData\\Local\\plannotator;C:\\Windows;;"),
+      };
     },
     scheduleWindowsSelfDelete: async (target, parent) => {
       scheduledDeletes.push({ target, parent });
@@ -130,11 +134,73 @@ describe("default uninstall", () => {
       join(homeDir, ".agents", "skills", "plannotator-archive", "SKILL.md"),
     );
     writeText(
+      join(homeDir, ".claude", "skills", "core", "plannotator-review", "SKILL.md"),
+    );
+    const customStaleLayoutEntry = join(
+      homeDir,
+      ".claude",
+      "skills",
+      "core",
+      "my-custom-skill",
+      "SKILL.md",
+    );
+    writeText(customStaleLayoutEntry, "custom");
+    writeText(
       join(homeDir, ".codex", "skills", "plannotator-archive", "SKILL.md"),
     );
     writeText(
       join(homeDir, ".kiro", "skills", "plannotator-setup-goal", "SKILL.md"),
     );
+    const openCodePackageCache = join(
+      homeDir,
+      ".cache",
+      "opencode",
+      "node_modules",
+      "@plannotator",
+      "opencode",
+      "package.json",
+    );
+    const unrelatedScopedCache = join(
+      homeDir,
+      ".cache",
+      "opencode",
+      "node_modules",
+      "@plannotator",
+      "ui",
+      "package.json",
+    );
+    const unrelatedBunCache = join(
+      homeDir,
+      ".bun",
+      "install",
+      "cache",
+      "@plannotator",
+      "ui",
+      "package.json",
+    );
+    const bunOpenCodeVersionCache = join(
+      homeDir,
+      ".bun",
+      "install",
+      "cache",
+      "@plannotator",
+      "opencode@0.25.1@@@1",
+      "package.json",
+    );
+    const bunOpenCodeAliasCache = join(
+      homeDir,
+      ".bun",
+      "install",
+      "cache",
+      "@plannotator",
+      "opencode",
+      "0.25.1@@@1",
+    );
+    writeText(openCodePackageCache);
+    writeText(unrelatedScopedCache);
+    writeText(unrelatedBunCache);
+    writeText(bunOpenCodeVersionCache);
+    writeText(bunOpenCodeAliasCache);
 
     const claudeSettings = join(homeDir, ".claude", "settings.json");
     writeJson(claudeSettings, {
@@ -251,6 +317,12 @@ describe("default uninstall", () => {
     expect(existsSync(join(homeDir, ".agents", "skills", "plannotator-compound"))).toBe(true);
     expect(existsSync(join(homeDir, ".agents", "skills", "plannotator-archive"))).toBe(false);
     expect(existsSync(join(homeDir, ".kiro", "skills", "plannotator-setup-goal"))).toBe(false);
+    expect(existsSync(customStaleLayoutEntry)).toBe(true);
+    expect(existsSync(openCodePackageCache)).toBe(false);
+    expect(existsSync(unrelatedScopedCache)).toBe(true);
+    expect(existsSync(unrelatedBunCache)).toBe(true);
+    expect(existsSync(bunOpenCodeVersionCache)).toBe(false);
+    expect(existsSync(bunOpenCodeAliasCache)).toBe(false);
 
     expect(existsSync(join(dataDir, "plans", "approved.md"))).toBe(true);
     expect(readJson(join(dataDir, "config.json"))).toEqual({ theme: "dark" });
@@ -352,7 +424,7 @@ describe("default uninstall", () => {
     expect(fixture.commandCalls).toEqual([]);
   });
 
-  test("preserves non-strict shared config rather than rewriting it", async () => {
+  test("removes OpenCode from JSONC while preserving comments and unrelated plugins", async () => {
     const fixture = createFixture();
     const configPath = join(
       fixture.homeDir,
@@ -360,7 +432,53 @@ describe("default uninstall", () => {
       "opencode",
       "opencode.jsonc",
     );
-    const contents = '{\n  // custom JSONC\n  "plugin": ["@plannotator/opencode"]\n}\n';
+    const contents = [
+      "{",
+      "  // custom JSONC",
+      '  "plugin": [',
+      '    "@plannotator/opencode", // managed',
+      "    // keep this plugin because it configures the user's workflow",
+      '    "keep-plugin",',
+      '    ["@plannotator/opencode@0.25.1", { "enabled": true }],',
+      "  ],",
+      '  "theme": "keep",',
+      "}",
+      "",
+    ].join("\n");
+    writeText(configPath, contents);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    const updated = readFileSync(configPath, "utf8");
+    expect(updated).toContain("// custom JSONC");
+    expect(updated).toContain(
+      "// keep this plugin because it configures the user's workflow",
+    );
+    expect(updated).toContain('"keep-plugin"');
+    expect(updated).toContain('"theme": "keep"');
+    expect(updated).not.toContain("@plannotator/opencode");
+    expect(result.errors).toEqual([]);
+  });
+
+  test("preserves invalid OpenCode config rather than guessing", async () => {
+    const fixture = createFixture();
+    const binary = join(
+      fixture.homeDir,
+      ".local",
+      "bin",
+      "plannotator",
+    );
+    writeText(binary);
+    const configPath = join(
+      fixture.homeDir,
+      ".config",
+      "opencode",
+      "opencode.jsonc",
+    );
+    const contents = '{ "plugin": ["@plannotator/opencode", } broken';
     writeText(configPath, contents);
 
     const result = await runPlannotatorUninstall(
@@ -369,8 +487,10 @@ describe("default uninstall", () => {
     );
 
     expect(readFileSync(configPath, "utf8")).toBe(contents);
-    expect(result.warnings).toContain(
-      `Preserved ${configPath}: it is not strict JSON, so managed entries could not be removed safely.`,
+    expect(existsSync(binary)).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      `Preserved ${configPath}: it is not valid JSON or JSONC, so the managed entry could not be removed safely.`,
     );
   });
 
@@ -451,12 +571,56 @@ describe("default uninstall", () => {
 });
 
 describe("purge uninstall", () => {
+  test("dry-run does not report a managed-only vendor directory as custom", async () => {
+    const fixture = createFixture();
+    writeText(join(fixture.dataDir, "vendor", "sem", "v0.8.0", "sem"));
+
+    const result = await runPlannotatorUninstall(
+      { purge: true, dryRun: true },
+      fixture.environment,
+    );
+
+    expect(result.planned).toContain(join(fixture.dataDir, "vendor"));
+    expect(result.preserved).not.toContain(
+      `${join(fixture.dataDir, "vendor")} (unrecognized custom entry)`,
+    );
+  });
+
+  test("preserves an empty vendor directory when no managed sidecar existed", async () => {
+    const fixture = createFixture();
+    const vendorDirectory = join(fixture.dataDir, "vendor");
+    mkdirSync(vendorDirectory, { recursive: true });
+
+    const preview = await runPlannotatorUninstall(
+      { purge: true, dryRun: true },
+      fixture.environment,
+    );
+    expect(preview.preserved).toContain(
+      `${vendorDirectory} (unrecognized custom entry)`,
+    );
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(vendorDirectory)).toBe(true);
+  });
+
   test("removes known local data while preserving unknown top-level entries", async () => {
     const fixture = createFixture();
     writeText(join(fixture.dataDir, "plans", "approved.md"));
     writeText(join(fixture.dataDir, "history", "repo", "001.md"));
     writeJson(join(fixture.dataDir, "config.json"), { theme: "dark" });
     writeText(join(fixture.dataDir, "vendor", "sem", "v0.8.0", "sem"));
+    const customVendorPath = join(
+      fixture.dataDir,
+      "vendor",
+      "other-tool",
+      "keep.txt",
+    );
+    writeText(customVendorPath, "not installer-owned");
     const customPath = join(fixture.dataDir, "my-notes", "keep.md");
     writeText(customPath, "not installer-owned");
 
@@ -469,7 +633,8 @@ describe("purge uninstall", () => {
     expect(existsSync(join(fixture.dataDir, "plans"))).toBe(false);
     expect(existsSync(join(fixture.dataDir, "history"))).toBe(false);
     expect(existsSync(join(fixture.dataDir, "config.json"))).toBe(false);
-    expect(existsSync(join(fixture.dataDir, "vendor"))).toBe(false);
+    expect(existsSync(join(fixture.dataDir, "vendor", "sem"))).toBe(false);
+    expect(existsSync(customVendorPath)).toBe(true);
     expect(existsSync(customPath)).toBe(true);
     expect(result.preserved).toContain(
       `${join(fixture.dataDir, "my-notes")} (unrecognized custom entry)`,
@@ -479,6 +644,8 @@ describe("purge uninstall", () => {
   test("removes the data directory when no custom entries remain", async () => {
     const fixture = createFixture();
     writeText(join(fixture.dataDir, "drafts", "draft.json"));
+    writeText(join(fixture.dataDir, "active", "session", "plan.md"));
+    writeText(join(fixture.dataDir, "vendor", "sem", "v0.8.0", "sem"));
 
     const result = await runPlannotatorUninstall(
       { purge: true, dryRun: false },
@@ -599,7 +766,61 @@ describe("host and platform integrations", () => {
       "Droid plugin plannotator@plannotator",
     );
     expect(result.errors[0]).toContain("was not removed");
-    expect(existsSync(binary)).toBe(false);
+    expect(existsSync(binary)).toBe(true);
+    expect(result.warnings).toContain(
+      "Preserved the Plannotator CLI and its Windows PATH entry so you can resolve the errors and retry uninstall.",
+    );
+  });
+
+  test("detects disabled Claude and Droid plugins from installation metadata", async () => {
+    const fixture = createFixture();
+    writeJson(
+      join(fixture.homeDir, ".claude", "plugins", "installed_plugins.json"),
+      {
+        plugins: {
+          "plannotator@plannotator": [
+            { installPath: "/fake/claude/plannotator" },
+          ],
+        },
+      },
+    );
+    writeJson(
+      join(fixture.homeDir, ".factory", "plugins", "installed_plugins.json"),
+      {
+        plugins: {
+          "plannotator@plannotator": [
+            { installPath: "/fake/droid/plannotator" },
+          ],
+        },
+      },
+    );
+
+    await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        which: (command) => `/fake/${command}`,
+      },
+    );
+
+    expect(fixture.commandCalls.map((call) => call.args)).toEqual([
+      [
+        "plugin",
+        "uninstall",
+        "plannotator@plannotator",
+        "--scope",
+        "user",
+        "--keep-data",
+        "--yes",
+      ],
+      [
+        "plugin",
+        "uninstall",
+        "plannotator@plannotator",
+        "--scope",
+        "user",
+      ],
+    ]);
   });
 
   test("uses host plugin managers and preserves Claude plugin data by default", async () => {
@@ -717,6 +938,114 @@ describe("host and platform integrations", () => {
     expect(fixture.commandCalls).toHaveLength(1);
     expect(fixture.commandCalls[0]?.env).toEqual({
       PLANNOTATOR_UNINSTALL_PATH: dirname(currentExe),
+    });
+  });
+
+  test("keeps the running Windows CLI when PATH cleanup fails", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        runCommand: async () => ({ exitCode: 1, timedOut: false }),
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      `Could not remove ${dirname(currentExe)} from the Windows user PATH.`,
+    );
+    expect(existsSync(currentExe)).toBe(true);
+    expect(fixture.scheduledDeletes).toEqual([]);
+  });
+
+  test("restores Windows PATH when scheduling self-delete fails", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        scheduleWindowsSelfDelete: async () => false,
+      },
+    );
+
+    const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+    expect(result.ok).toBe(false);
+    expect(existsSync(currentExe)).toBe(true);
+    expect(result.removed).not.toContain(pathLabel);
+    expect(result.preserved).toContain(`${pathLabel} (restored for retry)`);
+    expect(fixture.commandCalls).toHaveLength(2);
+    expect(fixture.commandCalls[1]?.env).toEqual({
+      PLANNOTATOR_UNINSTALL_ORIGINAL_PATH:
+        "C:\\Tools;C:\\Users\\fixture\\AppData\\Local\\plannotator;C:\\Windows;;",
+    });
+  });
+
+  test("reports the full CLI path when Windows PATH restoration also fails", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+    let commandCount = 0;
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        runCommand: async (command, args, env) => {
+          fixture.commandCalls.push({ command, args, env });
+          commandCount += 1;
+          return {
+            exitCode: commandCount === 1 ? 0 : 1,
+            timedOut: false,
+            stdout:
+              commandCount === 1
+                ? JSON.stringify(
+                    `C:\\Before;${dirname(currentExe)};C:\\After;;`,
+                  )
+                : undefined,
+          };
+        },
+        scheduleWindowsSelfDelete: async () => false,
+      },
+    );
+
+    const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+    expect(result.ok).toBe(false);
+    expect(existsSync(currentExe)).toBe(true);
+    expect(result.removed).toContain(pathLabel);
+    expect(result.errors).toContain(
+      `Could not restore ${dirname(currentExe)} to the Windows user PATH after self-delete scheduling failed.`,
+    );
+    expect(result.warnings).toContain(
+      `The Plannotator CLI remains at ${currentExe}, but its Windows PATH entry could not be restored. Run that full path to retry, then restore PATH manually if needed.`,
+    );
+    expect(result.warnings).not.toContain(
+      "Preserved the Plannotator CLI and its Windows PATH entry so you can resolve the errors and retry uninstall.",
+    );
+    expect(fixture.commandCalls[1]?.env).toEqual({
+      PLANNOTATOR_UNINSTALL_ORIGINAL_PATH:
+        `C:\\Before;${dirname(currentExe)};C:\\After;;`,
     });
   });
 });

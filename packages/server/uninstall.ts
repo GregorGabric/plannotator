@@ -25,11 +25,25 @@ import {
   resolve,
 } from "node:path";
 import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
+import {
+  applyEdits,
+  createScanner,
+  findNodeAtLocation,
+  parse as parseJsonc,
+  parseTree,
+  type ParseError,
+} from "jsonc-parser";
 
 const CORE_SKILLS = [
   "plannotator-review",
   "plannotator-annotate",
   "plannotator-last",
+] as const;
+
+const EXTRA_SKILLS = [
+  "plannotator-compound",
+  "plannotator-setup-goal",
+  "plannotator-visual-explainer",
 ] as const;
 
 const LEGACY_COMMAND_NAMES = [
@@ -60,13 +74,13 @@ const PURGE_OWNED_TOP_LEVEL = [
   "plans",
   "history",
   "drafts",
+  "active",
   "hooks",
   "compound",
   "sessions",
   "guides",
   "failed-comments",
   "semantic-diff",
-  "vendor",
   "migrations",
   "config.json",
   "install-prefs",
@@ -79,13 +93,21 @@ const PURGE_OWNED_TOP_LEVEL = [
 ] as const;
 
 const WINDOWS_PATH_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
   "$p=[Environment]::GetEnvironmentVariable('Path','User')",
   "if($null -eq $p){exit 3}",
   "$t=$env:PLANNOTATOR_UNINSTALL_PATH.Trim().TrimEnd('\\')",
-  "$kept=@($p -split ';' | Where-Object { $_ -and $_.Trim().TrimEnd('\\') -ine $t })",
+  "$kept=@($p -split ';' | Where-Object { $_.Trim().TrimEnd('\\') -ine $t })",
   "$n=$kept -join ';'",
   "if($n -eq $p){exit 3}",
   "[Environment]::SetEnvironmentVariable('Path',$n,'User')",
+  "Write-Output (ConvertTo-Json -Compress -InputObject $p)",
+].join("; ");
+
+const WINDOWS_PATH_RESTORE_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$original=$env:PLANNOTATOR_UNINSTALL_ORIGINAL_PATH",
+  "[Environment]::SetEnvironmentVariable('Path',$original,'User')",
 ].join("; ");
 
 const WINDOWS_SELF_DELETE_SCRIPT = [
@@ -105,6 +127,7 @@ type JsonRecord = Record<string, unknown>;
 export interface UninstallCommandResult {
   readonly exitCode: number;
   readonly timedOut: boolean;
+  readonly stdout?: string;
 }
 
 /**
@@ -249,8 +272,19 @@ export async function runPlannotatorUninstall(
     purgeLocalData(request, state);
   }
 
-  await removeWindowsPathEntry(request, environment, paths, state);
-  await removeBinaries(request, environment, paths, state);
+  if (state.errors.length === 0) {
+    await removeBinaries(request, environment, paths, state);
+  }
+  if (state.errors.length > 0) {
+    const hasSpecificRetryWarning = state.warnings.some((warning) =>
+      warning.startsWith("The Plannotator CLI remains at "),
+    );
+    if (!hasSpecificRetryWarning) {
+      state.warnings.push(
+        "Preserved the Plannotator CLI and its Windows PATH entry so you can resolve the errors and retry uninstall.",
+      );
+    }
+  }
 
   return {
     ...state,
@@ -347,6 +381,10 @@ async function removeHostPlugins(
         hasEnabledPlugin(
           join(paths.claudeDir, "settings.json"),
           "plannotator@plannotator",
+        ) ||
+        hasInstalledPlugin(
+          join(paths.claudeDir, "plugins", "installed_plugins.json"),
+          "plannotator@plannotator",
         ),
     },
     {
@@ -373,10 +411,15 @@ async function removeHostPlugins(
         "--scope",
         "user",
       ],
-      installed: hasEnabledPlugin(
-        join(paths.factoryDir, "settings.json"),
-        "plannotator@plannotator",
-      ),
+      installed:
+        hasEnabledPlugin(
+          join(paths.factoryDir, "settings.json"),
+          "plannotator@plannotator",
+        ) ||
+        hasInstalledPlugin(
+          join(paths.factoryDir, "plugins", "installed_plugins.json"),
+          "plannotator@plannotator",
+        ),
     },
     {
       label: "Pi extension npm:@plannotator/pi-extension",
@@ -509,13 +552,18 @@ function removeInstalledFiles(
     );
   }
 
-  for (const staleLayout of ["core", "extra"]) {
-    removePath(
-      join(paths.claudeDir, "skills", staleLayout),
-      request,
-      state,
-    );
-  }
+  cleanupStaleSkillLayout(
+    join(paths.claudeDir, "skills", "core"),
+    CORE_SKILLS,
+    request,
+    state,
+  );
+  cleanupStaleSkillLayout(
+    join(paths.claudeDir, "skills", "extra"),
+    EXTRA_SKILLS,
+    request,
+    state,
+  );
 
   for (const skill of STALE_CODEX_SKILLS) {
     removePath(join(paths.codexDir, "skills", skill), request, state);
@@ -576,14 +624,46 @@ function removeInstalledFiles(
   }
 
   for (const cachePath of [
-    join(paths.xdgCacheDir, "opencode", "node_modules", "@plannotator"),
-    join(paths.xdgCacheDir, "opencode", "packages", "@plannotator"),
-    join(environment.homeDir, ".cache", "opencode", "node_modules", "@plannotator"),
-    join(environment.homeDir, ".cache", "opencode", "packages", "@plannotator"),
-    join(environment.homeDir, ".bun", "install", "cache", "@plannotator"),
+    join(
+      paths.xdgCacheDir,
+      "opencode",
+      "node_modules",
+      "@plannotator",
+      "opencode",
+    ),
+    join(
+      paths.xdgCacheDir,
+      "opencode",
+      "packages",
+      "@plannotator",
+      "opencode",
+    ),
+    join(
+      environment.homeDir,
+      ".cache",
+      "opencode",
+      "node_modules",
+      "@plannotator",
+      "opencode",
+    ),
+    join(
+      environment.homeDir,
+      ".cache",
+      "opencode",
+      "packages",
+      "@plannotator",
+      "opencode",
+    ),
   ]) {
     removePath(cachePath, request, state);
   }
+
+  cleanupDirectoryEntriesWithPrefix(
+    join(environment.homeDir, ".bun", "install", "cache", "@plannotator"),
+    "opencode",
+    request,
+    state,
+  );
 }
 
 function removeInstallerData(
@@ -594,11 +674,21 @@ function removeInstallerData(
   // retained as local state in the default mode: the migration ledger is what
   // prevents a later reinstall from mistaking separately installed extras for
   // obsolete installer copies. Purge removes those files through its inventory.
-  for (const path of [
+  const sidecarPaths = [
     join(state.dataDir, "vendor", "sem"),
     join(state.dataDir, "vendor", "agent-terminal"),
-  ]) {
+  ];
+  const hadManagedSidecar = sidecarPaths.some(pathExists);
+  for (const path of sidecarPaths) {
     removePath(path, request, state);
+  }
+  if (hadManagedSidecar) {
+    removeEmptyOwnedParent(
+      join(state.dataDir, "vendor"),
+      ["sem", "agent-terminal"],
+      request,
+      state,
+    );
   }
 }
 
@@ -626,7 +716,17 @@ function purgeLocalData(
 
   if (request.dryRun) {
     const recognized = new Set<string>(PURGE_OWNED_TOP_LEVEL);
-    const customEntries = remaining.filter((name) => !recognized.has(name));
+    const customEntries = remaining.filter(
+      (name) =>
+        !recognized.has(name) &&
+        !(
+          name === "vendor" &&
+          directoryContainsOnly(
+            join(state.dataDir, "vendor"),
+            ["sem", "agent-terminal"],
+          )
+        ),
+    );
     if (customEntries.length === 0) {
       state.planned.push(state.dataDir);
       return;
@@ -664,23 +764,23 @@ async function removeWindowsPathEntry(
   environment: UninstallEnvironment,
   paths: ReturnType<typeof resolveOwnedPaths>,
   state: MutableUninstallResult,
-): Promise<void> {
-  if (environment.platform !== "win32") return;
+): Promise<string | null> {
+  if (environment.platform !== "win32") return null;
 
   const label = `Windows user PATH entry ${paths.windowsInstallDir}`;
   if (request.dryRun) {
     state.planned.push(label);
-    return;
+    return null;
   }
 
   const powershell =
     environment.which("powershell.exe") ||
     environment.which("pwsh.exe");
   if (!powershell) {
-    state.warnings.push(
+    state.errors.push(
       `Could not inspect the Windows user PATH; remove ${paths.windowsInstallDir} from PATH manually if present.`,
     );
-    return;
+    return null;
   }
 
   const result = await environment.runCommand(
@@ -690,11 +790,24 @@ async function removeWindowsPathEntry(
   );
   if (result.exitCode === 0) {
     state.removed.push(label);
+    try {
+      const originalPath: unknown = JSON.parse(result.stdout?.trim() ?? "");
+      if (typeof originalPath !== "string") throw new Error("not a string");
+      return originalPath;
+    } catch {
+      state.errors.push(
+        `Removed ${paths.windowsInstallDir} from the Windows user PATH but could not capture the original PATH for safe rollback.`,
+      );
+      state.warnings.push(
+        `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry was removed without a usable backup. Run that full path to retry, then restore PATH manually if needed.`,
+      );
+    }
   } else if (result.exitCode !== 3) {
-    state.warnings.push(
+    state.errors.push(
       `Could not remove ${paths.windowsInstallDir} from the Windows user PATH.`,
     );
   }
+  return null;
 }
 
 async function removeBinaries(
@@ -703,35 +816,92 @@ async function removeBinaries(
   paths: ReturnType<typeof resolveOwnedPaths>,
   state: MutableUninstallResult,
 ): Promise<void> {
-  for (const binaryPath of paths.binaryPaths) {
-    if (!pathExists(binaryPath)) continue;
+  const existingBinaryPaths = paths.binaryPaths.filter(pathExists);
+  const currentBinary = existingBinaryPaths.find((binaryPath) =>
+    samePath(binaryPath, environment.execPath, environment.platform),
+  );
+  const inactiveBinaries = existingBinaryPaths.filter(
+    (binaryPath) => binaryPath !== currentBinary,
+  );
 
+  for (const binaryPath of inactiveBinaries) {
     if (request.dryRun) {
       state.planned.push(binaryPath);
       continue;
     }
+    removePath(binaryPath, request, state);
+    if (state.errors.length > 0) return;
+  }
 
-    const isCurrentWindowsBinary =
-      environment.platform === "win32" &&
-      samePath(binaryPath, environment.execPath, "win32");
+  const originalWindowsPath = await removeWindowsPathEntry(
+    request,
+    environment,
+    paths,
+    state,
+  );
+  if (state.errors.length > 0 || !currentBinary) return;
 
-    if (isCurrentWindowsBinary) {
-      const scheduled = await environment.scheduleWindowsSelfDelete(
-        binaryPath,
-        dirname(binaryPath),
+  if (request.dryRun) {
+    state.planned.push(currentBinary);
+    return;
+  }
+
+  if (environment.platform === "win32") {
+    const scheduled = await environment.scheduleWindowsSelfDelete(
+      currentBinary,
+      dirname(currentBinary),
+    );
+    if (scheduled) {
+      state.removed.push(`${currentBinary} (scheduled after exit)`);
+    } else {
+      state.errors.push(
+        `Could not schedule removal of the running executable ${currentBinary}.`,
       );
-      if (scheduled) {
-        state.removed.push(`${binaryPath} (scheduled after exit)`);
-      } else {
-        state.errors.push(
-          `Could not schedule removal of the running executable ${binaryPath}.`,
+      if (originalWindowsPath !== null) {
+        await restoreWindowsPathEntry(
+          environment,
+          paths,
+          originalWindowsPath,
+          state,
         );
       }
-      continue;
     }
-
-    removePath(binaryPath, request, state);
+    return;
   }
+
+  removePath(currentBinary, request, state);
+}
+
+async function restoreWindowsPathEntry(
+  environment: UninstallEnvironment,
+  paths: ReturnType<typeof resolveOwnedPaths>,
+  originalPath: string,
+  state: MutableUninstallResult,
+): Promise<void> {
+  const powershell =
+    environment.which("powershell.exe") ||
+    environment.which("pwsh.exe");
+  if (!powershell) return;
+
+  const result = await environment.runCommand(
+    powershell,
+    ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PATH_RESTORE_SCRIPT],
+    { PLANNOTATOR_UNINSTALL_ORIGINAL_PATH: originalPath },
+  );
+  if (result.exitCode !== 0) {
+    state.errors.push(
+      `Could not restore ${paths.windowsInstallDir} to the Windows user PATH after self-delete scheduling failed.`,
+    );
+    state.warnings.push(
+      `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry could not be restored. Run that full path to retry, then restore PATH manually if needed.`,
+    );
+    return;
+  }
+
+  const label = `Windows user PATH entry ${paths.windowsInstallDir}`;
+  const removedIndex = state.removed.indexOf(label);
+  if (removedIndex >= 0) state.removed.splice(removedIndex, 1);
+  state.preserved.push(`${label} (restored for retry)`);
 }
 
 function cleanupHooksJson(
@@ -821,7 +991,7 @@ function cleanupCodexConfig(
   try {
     content = readFileSync(filePath, "utf8");
   } catch (error) {
-    state.warnings.push(`Could not inspect ${filePath}: ${formatError(error)}`);
+    state.errors.push(`Could not inspect ${filePath}: ${formatError(error)}`);
     return;
   }
 
@@ -908,21 +1078,113 @@ function cleanupOpenCodeConfig(
   request: UninstallRequest,
   state: MutableUninstallResult,
 ): void {
-  const parsed = readJsonRecord(filePath, state);
-  if (!parsed || !Array.isArray(parsed.plugin)) return;
+  if (!existsSync(filePath)) return;
 
-  const next = parsed.plugin.filter(
-    (entry) => !isPlannotatorOpenCodePlugin(entry),
-  );
-  if (next.length === parsed.plugin.length) return;
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch (error) {
+    state.errors.push(`Could not inspect ${filePath}: ${formatError(error)}`);
+    return;
+  }
+
+  const parseErrors: ParseError[] = [];
+  const parsedValue: unknown = parseJsonc(content, parseErrors, {
+    allowTrailingComma: true,
+    disallowComments: false,
+  });
+  const parsed = asRecord(parsedValue);
+  if (parseErrors.length > 0 || !parsed) {
+    state.errors.push(
+      `Preserved ${filePath}: it is not valid JSON or JSONC, so the managed entry could not be removed safely.`,
+    );
+    return;
+  }
+  if (!Array.isArray(parsed.plugin)) return;
+
+  const matchingIndexes = parsed.plugin
+    .map((entry, index) =>
+      isPlannotatorOpenCodePlugin(entry) ? index : -1,
+    )
+    .filter((index) => index >= 0)
+    .reverse();
+  if (matchingIndexes.length === 0) return;
 
   if (request.dryRun) {
     state.planned.push(`@plannotator/opencode entry in ${filePath}`);
     return;
   }
 
-  parsed.plugin = next;
-  writeJson(filePath, parsed, "@plannotator/opencode entry", state);
+  let updated = content;
+  for (const index of matchingIndexes) {
+    updated = removeJsoncArrayEntry(updated, ["plugin"], index);
+  }
+  writeTextUpdate(
+    filePath,
+    updated,
+    "@plannotator/opencode entry",
+    state,
+  );
+}
+
+function removeJsoncArrayEntry(
+  content: string,
+  path: (string | number)[],
+  index: number,
+): string {
+  const tree = parseTree(content, [], {
+    allowTrailingComma: true,
+    disallowComments: false,
+  });
+  const arrayNode = tree ? findNodeAtLocation(tree, path) : undefined;
+  const children = arrayNode?.type === "array" ? arrayNode.children : undefined;
+  const target = children?.[index];
+  if (!arrayNode || !children || !target) return content;
+
+  const targetEnd = target.offset + target.length;
+  const next = children[index + 1];
+  let commaOffset = findJsoncCommaOffset(
+    content,
+    targetEnd,
+    next?.offset ?? arrayNode.offset + arrayNode.length,
+  );
+  if (commaOffset === null && index > 0) {
+    const previous = children[index - 1];
+    if (previous) {
+      commaOffset = findJsoncCommaOffset(
+        content,
+        previous.offset + previous.length,
+        target.offset,
+      );
+    }
+  }
+
+  const edits = [
+    { offset: target.offset, length: target.length, content: "" },
+  ];
+  if (commaOffset !== null) {
+    edits.push({ offset: commaOffset, length: 1, content: "" });
+  }
+  return applyEdits(content, edits);
+}
+
+function findJsoncCommaOffset(
+  content: string,
+  start: number,
+  end: number,
+): number | null {
+  const segment = content.slice(start, end);
+  const scanner = createScanner(segment, false);
+  while (scanner.getPosition() < segment.length) {
+    scanner.scan();
+    if (
+      scanner.getTokenLength() === 1 &&
+      segment[scanner.getTokenOffset()] === ","
+    ) {
+      return start + scanner.getTokenOffset();
+    }
+  }
+  return null;
 }
 
 function cleanupRecognizableKiroAgent(
@@ -958,7 +1220,7 @@ function cleanupRecognizableAmpPlugin(
   try {
     content = readFileSync(filePath, "utf8");
   } catch (error) {
-    state.warnings.push(`Could not inspect ${filePath}: ${formatError(error)}`);
+    state.errors.push(`Could not inspect ${filePath}: ${formatError(error)}`);
     return;
   }
 
@@ -983,7 +1245,7 @@ function readJsonRecord(
   try {
     content = readFileSync(filePath, "utf8");
   } catch (error) {
-    state.warnings.push(`Could not inspect ${filePath}: ${formatError(error)}`);
+    state.errors.push(`Could not inspect ${filePath}: ${formatError(error)}`);
     return null;
   }
 
@@ -991,12 +1253,12 @@ function readJsonRecord(
     const parsed: unknown = JSON.parse(content);
     const record = asRecord(parsed);
     if (!record) {
-      state.warnings.push(`Preserved ${filePath}: expected a JSON object.`);
+      state.errors.push(`Preserved ${filePath}: expected a JSON object.`);
       return null;
     }
     return record;
   } catch {
-    state.warnings.push(
+    state.errors.push(
       `Preserved ${filePath}: it is not strict JSON, so managed entries could not be removed safely.`,
     );
     return null;
@@ -1015,6 +1277,128 @@ function writeJson(
   } catch (error) {
     state.errors.push(`Could not update ${filePath}: ${formatError(error)}`);
   }
+}
+
+function writeTextUpdate(
+  filePath: string,
+  content: string,
+  label: string,
+  state: MutableUninstallResult,
+): void {
+  try {
+    writeFileSync(filePath, content, "utf8");
+    state.removed.push(`${label} in ${filePath}`);
+  } catch (error) {
+    state.errors.push(`Could not update ${filePath}: ${formatError(error)}`);
+  }
+}
+
+function cleanupStaleSkillLayout(
+  directory: string,
+  managedSkills: readonly string[],
+  request: UninstallRequest,
+  state: MutableUninstallResult,
+): void {
+  let entries: string[];
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      state.preserved.push(`${directory} (custom or unrecognized skill layout)`);
+      return;
+    }
+    entries = readdirSync(directory);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    state.errors.push(`Could not inspect ${directory}: ${formatError(error)}`);
+    return;
+  }
+
+  const managed = new Set(managedSkills);
+  const managedEntries = entries.filter((entry) => managed.has(entry));
+  if (managedEntries.length === 0) return;
+
+  for (const entry of managedEntries) {
+    removePath(join(directory, entry), request, state);
+  }
+
+  const customEntries = entries.filter((entry) => !managed.has(entry));
+  for (const entry of customEntries) {
+    state.preserved.push(
+      `${join(directory, entry)} (custom or unrecognized skill layout entry)`,
+    );
+  }
+
+  if (customEntries.length === 0) {
+    removeEmptyOwnedParent(directory, managedSkills, request, state);
+  }
+}
+
+function cleanupDirectoryEntriesWithPrefix(
+  directory: string,
+  prefix: string,
+  request: UninstallRequest,
+  state: MutableUninstallResult,
+): void {
+  let entries: string[];
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    entries = readdirSync(directory);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    state.errors.push(`Could not inspect ${directory}: ${formatError(error)}`);
+    return;
+  }
+
+  for (const entry of entries) {
+    if (entry === prefix || entry.startsWith(`${prefix}@`)) {
+      removePath(join(directory, entry), request, state);
+    }
+  }
+}
+
+function directoryContainsOnly(
+  directory: string,
+  allowedEntries: readonly string[],
+): boolean {
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const allowed = new Set(allowedEntries);
+    const entries = readdirSync(directory);
+    return (
+      entries.length > 0 &&
+      entries.every((entry) => allowed.has(entry))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function removeEmptyOwnedParent(
+  directory: string,
+  plannedChildren: readonly string[],
+  request: UninstallRequest,
+  state: MutableUninstallResult,
+): void {
+  let entries: string[];
+  try {
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return;
+    entries = readdirSync(directory);
+  } catch (error) {
+    if (isMissingPathError(error)) return;
+    state.errors.push(`Could not inspect ${directory}: ${formatError(error)}`);
+    return;
+  }
+
+  if (request.dryRun) {
+    const planned = new Set(plannedChildren);
+    if (!entries.every((entry) => planned.has(entry))) return;
+  } else if (entries.length > 0) {
+    return;
+  }
+  removePath(directory, request, state);
 }
 
 function removePath(
@@ -1126,6 +1510,13 @@ function hasEnabledPlugin(filePath: string, pluginId: string): boolean {
   const parsed = tryReadJsonRecord(filePath);
   const enabled = parsed ? asRecord(parsed.enabledPlugins) : null;
   return enabled?.[pluginId] === true;
+}
+
+function hasInstalledPlugin(filePath: string, pluginId: string): boolean {
+  const parsed = tryReadJsonRecord(filePath);
+  const plugins = parsed ? asRecord(parsed.plugins) : null;
+  const installs = plugins?.[pluginId];
+  return Array.isArray(installs) && installs.length > 0;
 }
 
 function hasPiPackage(filePath: string): boolean {
@@ -1267,17 +1658,19 @@ async function defaultRunCommand(
   args: readonly string[],
   env?: Readonly<Record<string, string>>,
 ): Promise<UninstallCommandResult> {
-  let proc: Bun.Subprocess<"ignore", "ignore", "ignore">;
+  let proc: Bun.Subprocess<"ignore", "pipe", "ignore">;
   try {
     proc = Bun.spawn([command, ...args], {
       stdin: "ignore",
-      stdout: "ignore",
+      stdout: "pipe",
       stderr: "ignore",
       env: { ...process.env, ...env },
     });
   } catch {
     return { exitCode: 1, timedOut: false };
   }
+
+  const stdoutPromise = new Response(proc.stdout).text().catch(() => "");
 
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -1290,7 +1683,7 @@ async function defaultRunCommand(
   });
   const exitCode = await Promise.race([proc.exited, timeout]);
   if (timer) clearTimeout(timer);
-  return { exitCode, timedOut };
+  return { exitCode, timedOut, stdout: await stdoutPromise };
 }
 
 async function defaultScheduleWindowsSelfDelete(

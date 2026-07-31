@@ -244,10 +244,13 @@ The command covers the conventional macOS, Linux, WSL, and Windows binary
 locations; the managed `sem` sidecar and agent-terminal runtime; installer
 skills, commands, hooks, policies, caches, and recognizable Amp/Kiro files; and
 detected Claude Code, Copilot CLI, Droid, Pi, and VS Code installations through
-their host CLIs. Shared strict-JSON settings are edited surgically. Custom or
-unrecognized files, separately installed optional skills, project-local
-integrations, external plan-save locations, and non-strict JSON/JSONC configs
-are preserved (with a warning when manual cleanup may be needed).
+their host CLIs. Shared JSON and JSONC settings are edited surgically. Custom
+or unrecognized files, separately installed optional skills, project-local
+integrations, external plan-save locations, and invalid configs are preserved
+(with an error when manual cleanup is needed). If cleanup reports an error,
+the CLI remains available for a safe retry, and its Windows PATH entry is
+retained or restored when possible. If PATH restoration itself fails, the
+output gives the full CLI path for retry and asks for manual PATH repair.
 For safety, purge refuses filesystem roots, the home directory, the shared
 temporary directory, symlinked data directories, and non-directory data paths.
 If your dedicated data directory is symlinked, point `PLANNOTATOR_DATA_DIR` at
