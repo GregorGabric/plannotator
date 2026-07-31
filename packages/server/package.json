@@ -19,6 +19,7 @@
     "./repo": "./repo.ts",
     "./review-workspace": "./review-workspace.ts",
     "./agent-terminal-runtime": "./agent-terminal-runtime.ts",
+    "./uninstall": "./uninstall.ts",
     "./share-url": "./share-url.ts",
     "./sessions": "./sessions.ts",
     "./project": "./project.ts",

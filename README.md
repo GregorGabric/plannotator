@@ -217,6 +217,45 @@ Then finish the step for your agent:
 
 Full walkthroughs live in the [installation docs](https://docs.plannotator.ai/open-source/start/installation).
 
+### Uninstall
+
+The safe default removes recognized Plannotator-installed components and keeps
+your local plans, history, drafts, guides, and settings:
+
+```bash
+plannotator uninstall
+```
+
+Use `--purge` for a full removal of known local Plannotator data as well:
+
+```bash
+plannotator uninstall --purge
+```
+
+Purge requires typing `purge` at the prompt and explains that the data is
+local-only: it is not stored on a Plannotator server and cannot be recovered.
+For automation, pass `--yes` (or `-y`); non-interactive removal refuses to run
+without it. Use `--dry-run` to preview recognized work without making changes.
+These mechanics keep the ordinary confirmation default-negative, make the
+irreversible outcome require a stronger explicit word, and still give package
+managers and scripts a conventional non-interactive flag.
+
+The command covers the conventional macOS, Linux, WSL, and Windows binary
+locations; the managed `sem` sidecar and agent-terminal runtime; installer
+skills, commands, hooks, policies, caches, and recognizable Amp/Kiro files; and
+detected Claude Code, Copilot CLI, Droid, Pi, and VS Code installations through
+their host CLIs. Shared strict-JSON settings are edited surgically. Custom or
+unrecognized files, separately installed optional skills, project-local
+integrations, external plan-save locations, and non-strict JSON/JSONC configs
+are preserved (with a warning when manual cleanup may be needed).
+For safety, purge refuses filesystem roots, the home directory, the shared
+temporary directory, symlinked data directories, and non-directory data paths.
+If your dedicated data directory is symlinked, point `PLANNOTATOR_DATA_DIR` at
+its resolved target and retry.
+
+If you installed only the standalone Pi extension and do not have the
+`plannotator` CLI, use `pi remove npm:@plannotator/pi-extension`.
+
 <details>
 <summary>Claude Code: manual hook setup (without the plugin system)</summary>
 
