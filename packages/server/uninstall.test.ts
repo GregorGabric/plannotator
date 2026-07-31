@@ -14,6 +14,7 @@ import {
   formatPurgeWarning,
   runPlannotatorUninstall,
   type UninstallEnvironment,
+  WINDOWS_SELF_DELETE_SCRIPT,
 } from "./uninstall";
 
 type CommandCall = {
@@ -37,6 +38,15 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+describe("Windows self-delete worker", () => {
+  test("keeps PowerShell statements on separate lines", () => {
+    expect(WINDOWS_SELF_DELETE_SCRIPT).toContain(
+      "$target=$env:PLANNOTATOR_UNINSTALL_TARGET\nfor",
+    );
+    expect(WINDOWS_SELF_DELETE_SCRIPT).toContain("}\n$parent=");
+  });
 });
 
 function createFixture(

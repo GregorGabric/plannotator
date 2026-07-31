@@ -110,7 +110,8 @@ const WINDOWS_PATH_RESTORE_SCRIPT = [
   "[Environment]::SetEnvironmentVariable('Path',$original,'User')",
 ].join("; ");
 
-const WINDOWS_SELF_DELETE_SCRIPT = [
+/** @internal Exported only so the Windows worker syntax can be regression-tested. */
+export const WINDOWS_SELF_DELETE_SCRIPT = [
   "$target=$env:PLANNOTATOR_UNINSTALL_TARGET",
   "for($i=0;$i -lt 40;$i++){",
   "  Start-Sleep -Milliseconds 250",
@@ -119,7 +120,7 @@ const WINDOWS_SELF_DELETE_SCRIPT = [
   "}",
   "$parent=$env:PLANNOTATOR_UNINSTALL_PARENT",
   "Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue",
-].join(" ");
+].join("\n");
 
 const WINDOWS_SELF_DELETE_BOOTSTRAP_SCRIPT = [
   "$ErrorActionPreference='Stop'",
