@@ -65,7 +65,7 @@ Cleaned up when the session ends. Use `--no-local` to review in remote-only mode
 
 ## Transparency
 
-Agents are read-only. They cannot modify code, access the network, or post comments. All AI communication goes directly to your provider (Anthropic or OpenAI). No code passes through Plannotator servers. Prompts and commands are visible in the review UI.
+Plannotator launches review agents with read-only file permissions and does not give them a workflow for modifying code or posting comments. The review commands can make read-only network requests through `gh`, `glab`, or `git` to inspect PRs, issues, and remote refs. The selected AI provider receives the prompt and the repository or diff context needed for the review. No code is routed through a Plannotator-operated model server. Provider retention and account controls come from the CLI and provider you configured. Prompts and commands are visible in the review UI.
 
 Below are the exact prompts, commands, and schemas used.
 

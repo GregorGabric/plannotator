@@ -21,7 +21,7 @@ When Claude Code generates a plan, Plannotator opens an interactive review UI in
 - **Plan Review** — Intercepts `ExitPlanMode` and opens a rich annotation UI
 - **Code Review** — Run `/plannotator-review` to review uncommitted changes with a diff viewer
 - **Annotate** — Run `/plannotator-annotate` to annotate any markdown file
-- **Sharing** — Share plans and annotations via URL (no backend required)
+- **Legacy Link Sharing** — Small markdown shares use URL fragments; larger and raw HTML shares can use encrypted short links
 - **Obsidian Integration** — Auto-save reviewed plans to your Obsidian vault
 
 ## Getting Started

@@ -1,8 +1,15 @@
 # Self-Hosting the Plannotator Share Portal
 
-The share portal is a static single-page application. It has no backend,
-no database, and makes no network requests. All plan data is encoded in
-the URL hash.
+The share portal is a static single-page application with no application
+database. Small markdown shares keep compressed, unencrypted content in the
+URL fragment, which is not included in the request to the portal host. The
+portal still checks GitHub for Plannotator release metadata, and short URLs
+fetch encrypted ciphertext from the configured paste service. Rendered
+documents can also request remote assets that they reference.
+
+Open source asynchronous link sharing is moving to deprecated support.
+Workspaces is the primary direction for team sharing. No removal date has
+been announced.
 
 ## Build
 
