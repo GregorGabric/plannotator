@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import {
   formatPurgeWarning,
   runPlannotatorUninstall,
@@ -28,11 +33,27 @@ type Fixture = {
   homeDir: string;
   dataDir: string;
   commandCalls: CommandCall[];
-  scheduledDeletes: Array<{ target: string; parent: string }>;
+  scheduledDeletes: Array<{ target: string; parent: string | null }>;
   environment: UninstallEnvironment;
 };
 
 const temporaryRoots: string[] = [];
+
+const supportsCaseVariantPaths = (() => {
+  const root = mkdtempSync(join(tmpdir(), "plannotator-case-probe-"));
+  try {
+    const exact = join(root, "case-probe");
+    const variant = join(root, "CASE-PROBE");
+    mkdirSync(exact);
+    const exactStat = statSync(exact, { bigint: true });
+    const variantStat = statSync(variant, { bigint: true });
+    return exactStat.dev === variantStat.dev && exactStat.ino === variantStat.ino;
+  } catch {
+    return false;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
@@ -46,6 +67,7 @@ describe("Windows self-delete worker", () => {
       "$target=$env:PLANNOTATOR_UNINSTALL_TARGET\nfor",
     );
     expect(WINDOWS_SELF_DELETE_SCRIPT).toContain("}\n$parent=");
+    expect(WINDOWS_SELF_DELETE_SCRIPT).toContain("if($parent){Remove-Item");
   });
 });
 
@@ -59,7 +81,7 @@ function createFixture(
   mkdirSync(dataDir, { recursive: true });
 
   const commandCalls: CommandCall[] = [];
-  const scheduledDeletes: Array<{ target: string; parent: string }> = [];
+  const scheduledDeletes: Array<{ target: string; parent: string | null }> = [];
   const environment: UninstallEnvironment = {
     platform: "linux",
     homeDir,
@@ -104,6 +126,29 @@ function writeJson(filePath: string, value: unknown): void {
 
 function readJson(filePath: string): Record<string, unknown> {
   return JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
+}
+
+function snapshotTree(root: string): string[] {
+  const snapshot: string[] = [];
+  const visit = (path: string, relativePath: string): void => {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      snapshot.push(`link:${relativePath}:${readlinkSync(path)}`);
+      return;
+    }
+    if (stat.isDirectory()) {
+      snapshot.push(`dir:${relativePath}`);
+      for (const entry of readdirSync(path).sort()) {
+        visit(join(path, entry), join(relativePath, entry));
+      }
+      return;
+    }
+    snapshot.push(
+      `file:${relativePath}:${readFileSync(path).toString("base64")}`,
+    );
+  };
+  visit(root, ".");
+  return snapshot;
 }
 
 describe("default uninstall", () => {
@@ -416,6 +461,7 @@ describe("default uninstall", () => {
     writeJson(join(fixture.homeDir, ".claude", "settings.json"), {
       enabledPlugins: { "plannotator@plannotator": true },
     });
+    const before = snapshotTree(fixture.root);
 
     const result = await runPlannotatorUninstall(
       { purge: false, dryRun: true },
@@ -432,6 +478,7 @@ describe("default uninstall", () => {
     );
     expect(existsSync(binary)).toBe(true);
     expect(fixture.commandCalls).toEqual([]);
+    expect(snapshotTree(fixture.root)).toEqual(before);
   });
 
   test("removes OpenCode from JSONC while preserving comments and unrelated plugins", async () => {
@@ -500,7 +547,7 @@ describe("default uninstall", () => {
     expect(existsSync(binary)).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain(
-      `Preserved ${configPath}: it is not valid JSON or JSONC, so the managed entry could not be removed safely.`,
+      `Preserved ${configPath}: it is not valid JSON or JSONC, and it may contain a managed Plannotator entry. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
     );
   });
 
@@ -544,6 +591,151 @@ describe("default uninstall", () => {
       },
       experimental: { plan: true },
     });
+  });
+
+  test("preserves strict JSON indentation, line endings, and trailing newline", async () => {
+    const fixture = createFixture();
+    const settingsPath = join(
+      fixture.homeDir,
+      ".gemini",
+      "settings.json",
+    );
+    const contents = [
+      "{",
+      '    "theme": "custom",',
+      '    "hooks": {',
+      '        "BeforeTool": [',
+      "            {",
+      '                "matcher": "exit_plan_mode",',
+      '                "hooks": [{ "type": "command", "command": "plannotator" }]',
+      "            }",
+      "        ]",
+      "    }",
+      "}",
+      "",
+    ].join("\r\n");
+    writeText(settingsPath, contents);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(settingsPath, "utf8")).toBe(
+      ['{', '    "theme": "custom"', '}', ''].join("\r\n"),
+    );
+  });
+
+  test("removes a relocated Codex hook adopted by the installer", async () => {
+    const fixture = createFixture();
+    const hooksPath = join(fixture.homeDir, ".codex", "hooks.json");
+    writeJson(hooksPath, {
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: join(fixture.root, "relocated", "plannotator"),
+              },
+              {
+                type: "command",
+                command: join(fixture.root, "relocated", "plannotator-helper"),
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(readJson(hooksPath)).toEqual({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: join(fixture.root, "relocated", "plannotator-helper"),
+              },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  test("does not let unrelated malformed Gemini settings block binary removal", async () => {
+    const fixture = createFixture();
+    const binary = join(fixture.homeDir, ".local", "bin", "plannotator");
+    const settingsPath = join(
+      fixture.homeDir,
+      ".gemini",
+      "settings.json",
+    );
+    const contents = '{ "theme": "custom" // comments are not strict JSON\n}';
+    writeText(binary);
+    writeText(settingsPath, contents);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(binary)).toBe(false);
+    expect(readFileSync(settingsPath, "utf8")).toBe(contents);
+    expect(result.warnings).toContain(
+      `Preserved ${settingsPath}: it is not strict JSON. No recognizable Plannotator entry was found, so uninstall continued.`,
+    );
+  });
+
+  test("fails safe for possibly managed malformed config unless hosts are skipped", async () => {
+    const fixture = createFixture();
+    const binary = join(fixture.homeDir, ".local", "bin", "plannotator");
+    const settingsPath = join(
+      fixture.homeDir,
+      ".gemini",
+      "settings.json",
+    );
+    const kiroAgentPath = join(
+      fixture.homeDir,
+      ".kiro",
+      "agents",
+      "plannotator.json",
+    );
+    const contents = '{ "command": "plannotator" // malformed managed hook\n}';
+    const kiroContents = '{ "name": "plannotator" // malformed agent\n}';
+    writeText(binary);
+    writeText(settingsPath, contents);
+    writeText(kiroAgentPath, kiroContents);
+
+    const blocked = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(blocked.ok).toBe(false);
+    expect(existsSync(binary)).toBe(true);
+    expect(blocked.errors[0]).toContain("may contain a managed Plannotator entry");
+    expect(blocked.errors[0]).toContain("--skip-hosts");
+
+    const escaped = await runPlannotatorUninstall(
+      { purge: false, dryRun: false, skipHosts: true },
+      fixture.environment,
+    );
+
+    expect(escaped.ok).toBe(true);
+    expect(existsSync(binary)).toBe(false);
+    expect(readFileSync(settingsPath, "utf8")).toBe(contents);
+    expect(readFileSync(kiroAgentPath, "utf8")).toBe(kiroContents);
+    expect(escaped.warnings[0]).toContain("Skipped host plugin managers");
   });
 
   test("skips data-contained runtimes when the configured data root is broad", async () => {
@@ -698,6 +890,107 @@ describe("purge uninstall", () => {
     expect(existsSync(binary)).toBe(true);
   });
 
+  test.skipIf(!supportsCaseVariantPaths)(
+    "refuses a case-variant data-dir spelling that resolves to HOME",
+    async () => {
+      const fixture = createFixture();
+      const caseVariantHome = join(dirname(fixture.homeDir), "HOME");
+      const plan = join(fixture.homeDir, "plans", "must-survive.md");
+      const binary = join(
+        fixture.homeDir,
+        ".local",
+        "bin",
+        "plannotator",
+      );
+      writeText(plan, "local-only data");
+      writeText(binary);
+
+      const result = await runPlannotatorUninstall(
+        { purge: true, dryRun: false },
+        {
+          ...fixture.environment,
+          dataDir: caseVariantHome,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.errors[0]).toContain("home directory");
+      expect(readFileSync(plan, "utf8")).toBe("local-only data");
+      expect(existsSync(binary)).toBe(true);
+    },
+  );
+
+  test("refuses filesystem-root, home-ancestor, and shared-temp targets", async () => {
+    const cases = [
+      {
+        name: "filesystem root",
+        configure: (fixture: Fixture) => ({
+          dataDir: parse(fixture.homeDir).root,
+        }),
+        expected: "filesystem root",
+      },
+      {
+        name: "home ancestor",
+        configure: (fixture: Fixture) => ({ dataDir: fixture.root }),
+        expected: "contains the home directory",
+      },
+      {
+        name: "shared temp",
+        configure: (fixture: Fixture) => {
+          const sharedTemp = join(fixture.root, "shared-temp");
+          mkdirSync(sharedTemp);
+          return { dataDir: sharedTemp, tempDir: sharedTemp };
+        },
+        expected: "shared temporary directory",
+      },
+    ] as const;
+
+    for (const safetyCase of cases) {
+      const fixture = createFixture();
+      const binary = join(
+        fixture.homeDir,
+        ".local",
+        "bin",
+        "plannotator",
+      );
+      writeText(binary);
+
+      const result = await runPlannotatorUninstall(
+        { purge: true, dryRun: false },
+        {
+          ...fixture.environment,
+          ...safetyCase.configure(fixture),
+        },
+      );
+
+      expect(result.ok, safetyCase.name).toBe(false);
+      expect(result.errors[0], safetyCase.name).toContain(safetyCase.expected);
+      expect(existsSync(binary), safetyCase.name).toBe(true);
+    }
+  });
+
+  test("unlinks owned symlinks and hardlinks without touching their targets", async () => {
+    const fixture = createFixture();
+    const externalDirectory = join(fixture.root, "external-directory");
+    const externalDirectoryFile = join(externalDirectory, "keep.md");
+    const externalFile = join(fixture.root, "external-config.json");
+    writeText(externalDirectoryFile, "keep directory target");
+    writeText(externalFile, "keep hardlink target");
+    symlinkSync(externalDirectory, join(fixture.dataDir, "plans"), "dir");
+    linkSync(externalFile, join(fixture.dataDir, "config.json"));
+
+    const result = await runPlannotatorUninstall(
+      { purge: true, dryRun: false },
+      fixture.environment,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(readFileSync(externalDirectoryFile, "utf8")).toBe(
+      "keep directory target",
+    );
+    expect(readFileSync(externalFile, "utf8")).toBe("keep hardlink target");
+  });
+
   test("refuses a symlinked purge target before removing any component", async () => {
     const fixture = createFixture();
     const target = join(fixture.root, "real-data");
@@ -780,6 +1073,14 @@ describe("host and platform integrations", () => {
     expect(result.warnings).toContain(
       "Preserved the Plannotator CLI and its Windows PATH entry so you can resolve the errors and retry uninstall.",
     );
+
+    const escaped = await runPlannotatorUninstall(
+      { purge: false, dryRun: false, skipHosts: true },
+      fixture.environment,
+    );
+    expect(escaped.ok).toBe(true);
+    expect(existsSync(binary)).toBe(false);
+    expect(escaped.warnings[0]).toContain("Skipped host plugin managers");
   });
 
   test("detects disabled Claude and Droid plugins from installation metadata", async () => {
@@ -949,6 +1250,34 @@ describe("host and platform integrations", () => {
     expect(fixture.commandCalls[0]?.env).toEqual({
       PLANNOTATOR_UNINSTALL_PATH: dirname(currentExe),
     });
+  });
+
+  test("never schedules removal of a shared parent for a legacy Windows exe", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const sharedBin = join(fixture.homeDir, ".local", "bin");
+    const currentExe = join(sharedBin, "plannotator.exe");
+    const unrelatedFile = join(sharedBin, "unrelated-tool.exe");
+    writeText(currentExe);
+    writeText(unrelatedFile);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: (command) =>
+          command === "powershell.exe" ? "C:\\Windows\\powershell.exe" : null,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fixture.scheduledDeletes).toEqual([
+      { target: currentExe, parent: null },
+    ]);
+    expect(existsSync(unrelatedFile)).toBe(true);
   });
 
   test("keeps the running Windows CLI when PATH cleanup fails", async () => {

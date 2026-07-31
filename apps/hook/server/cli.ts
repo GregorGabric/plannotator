@@ -10,6 +10,7 @@ export interface ParsedUninstallOptions {
   purge: boolean;
   yes: boolean;
   dryRun: boolean;
+  skipHosts: boolean;
 }
 
 /**
@@ -21,6 +22,7 @@ export function parseUninstallOptions(
   let purge = false;
   let yes = false;
   let dryRun = false;
+  let skipHosts = false;
 
   for (const arg of args) {
     if (arg === "--purge") {
@@ -32,12 +34,15 @@ export function parseUninstallOptions(
     } else if (arg === "--dry-run") {
       if (dryRun) throw new Error("--dry-run may only be specified once");
       dryRun = true;
+    } else if (arg === "--skip-hosts") {
+      if (skipHosts) throw new Error("--skip-hosts may only be specified once");
+      skipHosts = true;
     } else {
       throw new Error(`Unknown uninstall option: ${arg}`);
     }
   }
 
-  return { purge, yes, dryRun };
+  return { purge, yes, dryRun, skipHosts };
 }
 
 /**
@@ -147,7 +152,7 @@ export function formatTopLevelHelp(): string {
     "  plannotator last",
     "  plannotator archive",
     "  plannotator sessions",
-    "  plannotator uninstall [--purge] [--yes] [--dry-run]",
+    "  plannotator uninstall [--purge] [--yes] [--dry-run] [--skip-hosts]",
     "  plannotator improve-context",
     "",
     "Run 'plannotator <command> --help' for command-specific usage.",
@@ -264,7 +269,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   ].join("\n"),
   uninstall: [
     "Usage:",
-    "  plannotator uninstall [--purge] [--yes | -y] [--dry-run]",
+    "  plannotator uninstall [--purge] [--yes | -y] [--dry-run] [--skip-hosts]",
     "",
     "Remove Plannotator-installed components. Local plans, history, drafts,",
     "settings, and other Plannotator data are preserved by default.",
@@ -273,6 +278,8 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "  --purge       Also permanently delete known local Plannotator data",
     "  --yes, -y     Skip the interactive confirmation (required without a TTY)",
     "  --dry-run     Preview recognized removal work without changing anything",
+    "  --skip-hosts   Leave host plugin managers and shared host config untouched",
+    "                 (for recovery when a host install or config is broken)",
     "",
     "Purge data is local-only: it is not stored on a Plannotator server and",
     "cannot be recovered after purge. Unrecognized custom files are preserved.",

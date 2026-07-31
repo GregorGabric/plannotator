@@ -12,10 +12,12 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import {
+  basename,
   dirname,
   isAbsolute,
   join,
@@ -119,7 +121,7 @@ export const WINDOWS_SELF_DELETE_SCRIPT = [
   "  if(-not (Test-Path -LiteralPath $target)){break}",
   "}",
   "$parent=$env:PLANNOTATOR_UNINSTALL_PARENT",
-  "Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue",
+  "if($parent){Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue}",
 ].join("\n");
 
 const WINDOWS_SELF_DELETE_BOOTSTRAP_SCRIPT = [
@@ -158,7 +160,7 @@ export interface UninstallEnvironment {
   ) => Promise<UninstallCommandResult>;
   readonly scheduleWindowsSelfDelete: (
     target: string,
-    parent: string,
+    parent: string | null,
   ) => Promise<boolean>;
 }
 
@@ -166,6 +168,8 @@ export interface UninstallEnvironment {
 export interface UninstallRequest {
   readonly purge: boolean;
   readonly dryRun: boolean;
+  /** Leave host plugin managers and shared host configuration untouched. */
+  readonly skipHosts?: boolean;
 }
 
 /** Caller-visible record of completed, planned, preserved, and failed work. */
@@ -193,6 +197,18 @@ type HookCleanupSpec = {
   readonly matcher?: string;
   readonly suffix: "" | "improve-context";
 };
+
+type PathIdentity = {
+  readonly device: bigint;
+  readonly inode: bigint;
+};
+
+type PathIdentityResult =
+  | { readonly kind: "found"; readonly identity: PathIdentity }
+  | { readonly kind: "missing" }
+  | { readonly kind: "error" };
+
+type PathRelation = "same" | "different" | "unknown";
 
 /**
  * Build the real process boundary used by `plannotator uninstall`.
@@ -264,8 +280,14 @@ export async function runPlannotatorUninstall(
 
   const paths = resolveOwnedPaths(environment);
 
-  await removeHostPlugins(request, environment, paths, state);
-  removeHostConfigEntries(request, environment, paths, state);
+  if (request.skipHosts) {
+    state.warnings.push(
+      "Skipped host plugin managers and shared host configuration (--skip-hosts); remove any remaining host integrations manually.",
+    );
+  } else {
+    await removeHostPlugins(request, environment, paths, state);
+    removeHostConfigEntries(request, environment, paths, state);
+  }
   removeInstalledFiles(request, environment, paths, state);
   if (dataDirSafetyIssue) {
     state.warnings.push(
@@ -460,7 +482,7 @@ async function removeHostPlugins(
     const executable = environment.which(action.command);
     if (!executable) {
       state.errors.push(
-        `${action.label} was detected but ${action.command} is unavailable; it was not removed. Use the host's plugin manager manually.`,
+        `${action.label} was detected but ${action.command} is unavailable; it was not removed. Use the host's plugin manager manually, or re-run with --skip-hosts to leave host integrations for manual cleanup.`,
       );
       continue;
     }
@@ -470,7 +492,7 @@ async function removeHostPlugins(
       state.removed.push(action.label);
     } else {
       state.errors.push(
-        `${action.label} was not removed automatically (${result.timedOut ? "command timed out" : `exit ${result.exitCode}`}); use the host's plugin manager manually.`,
+        `${action.label} was not removed automatically (${result.timedOut ? "command timed out" : `exit ${result.exitCode}`}); use the host's plugin manager manually, or re-run with --skip-hosts to leave host integrations for manual cleanup.`,
       );
     }
   }
@@ -491,6 +513,7 @@ function removeHostConfigEntries(
     paths.binaryPaths,
     environment.platform,
     false,
+    false,
     "managed Claude Code hooks",
     request,
     state,
@@ -501,6 +524,7 @@ function removeHostConfigEntries(
     [{ event: "Stop", suffix: "" }],
     paths.binaryPaths,
     environment.platform,
+    true,
     true,
     "managed Codex Stop hook",
     request,
@@ -617,17 +641,19 @@ function removeInstalledFiles(
     state,
   );
 
-  cleanupRecognizableKiroAgent(
-    join(environment.homeDir, ".kiro", "agents", "plannotator.json"),
-    request,
-    state,
-  );
-  for (const configDir of paths.configDirs) {
-    cleanupRecognizableAmpPlugin(
-      join(configDir, "amp", "plugins", "plannotator.ts"),
+  if (!request.skipHosts) {
+    cleanupRecognizableKiroAgent(
+      join(environment.homeDir, ".kiro", "agents", "plannotator.json"),
       request,
       state,
     );
+    for (const configDir of paths.configDirs) {
+      cleanupRecognizableAmpPlugin(
+        join(configDir, "amp", "plugins", "plannotator.ts"),
+        request,
+        state,
+      );
+    }
   }
 
   for (const cachePath of [
@@ -825,7 +851,11 @@ async function removeBinaries(
 ): Promise<void> {
   const existingBinaryPaths = paths.binaryPaths.filter(pathExists);
   const currentBinary = existingBinaryPaths.find((binaryPath) =>
-    samePath(binaryPath, environment.execPath, environment.platform),
+    pathsReferToSameEntry(
+      binaryPath,
+      environment.execPath,
+      environment.platform,
+    ),
   );
   const inactiveBinaries = existingBinaryPaths.filter(
     (binaryPath) => binaryPath !== currentBinary,
@@ -856,7 +886,13 @@ async function removeBinaries(
   if (environment.platform === "win32") {
     const scheduled = await environment.scheduleWindowsSelfDelete(
       currentBinary,
-      dirname(currentBinary),
+      pathsReferToSameEntry(
+        dirname(currentBinary),
+        paths.windowsInstallDir,
+        environment.platform,
+      )
+        ? paths.windowsInstallDir
+        : null,
     );
     if (scheduled) {
       state.removed.push(`${currentBinary} (scheduled after exit)`);
@@ -916,6 +952,7 @@ function cleanupHooksJson(
   specs: readonly HookCleanupSpec[],
   binaryPaths: readonly string[],
   platform: NodeJS.Platform,
+  allowRelocatedBinary: boolean,
   removeWhenEmpty: boolean,
   label: string,
   request: UninstallRequest,
@@ -951,7 +988,14 @@ function cleanupHooksJson(
       }
 
       const nextHooks = hookEntries.filter(
-        (hook) => !isManagedHook(hook, binaryPaths, spec.suffix, platform),
+        (hook) =>
+          !isManagedHook(
+            hook,
+            binaryPaths,
+            spec.suffix,
+            platform,
+            allowRelocatedBinary,
+          ),
       );
       if (nextHooks.length === hookEntries.length) {
         nextEntries.push(value);
@@ -1102,8 +1146,11 @@ function cleanupOpenCodeConfig(
   });
   const parsed = asRecord(parsedValue);
   if (parseErrors.length > 0 || !parsed) {
-    state.errors.push(
-      `Preserved ${filePath}: it is not valid JSON or JSONC, so the managed entry could not be removed safely.`,
+    reportMalformedSharedConfig(
+      filePath,
+      content,
+      "it is not valid JSON or JSONC",
+      state,
     );
     return;
   }
@@ -1260,16 +1307,42 @@ function readJsonRecord(
     const parsed: unknown = JSON.parse(content);
     const record = asRecord(parsed);
     if (!record) {
-      state.errors.push(`Preserved ${filePath}: expected a JSON object.`);
+      reportMalformedSharedConfig(
+        filePath,
+        content,
+        "it is not a JSON object",
+        state,
+      );
       return null;
     }
     return record;
   } catch {
-    state.errors.push(
-      `Preserved ${filePath}: it is not strict JSON, so managed entries could not be removed safely.`,
+    reportMalformedSharedConfig(
+      filePath,
+      content,
+      "it is not strict JSON",
+      state,
     );
     return null;
   }
+}
+
+function reportMalformedSharedConfig(
+  filePath: string,
+  content: string,
+  reason: string,
+  state: MutableUninstallResult,
+): void {
+  const prefix = `Preserved ${filePath}: ${reason}`;
+  if (content.toLowerCase().includes("plannotator")) {
+    state.errors.push(
+      `${prefix}, and it may contain a managed Plannotator entry. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
+    );
+    return;
+  }
+  state.warnings.push(
+    `${prefix}. No recognizable Plannotator entry was found, so uninstall continued.`,
+  );
 }
 
 function writeJson(
@@ -1279,7 +1352,17 @@ function writeJson(
   state: MutableUninstallResult,
 ): void {
   try {
-    writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    const original = readFileSync(filePath, "utf8");
+    const lineEnding = original.includes("\r\n") ? "\r\n" : "\n";
+    const indentation = original.match(/\r?\n([\t ]+)\S/)?.[1];
+    const trailingNewline = /\r?\n$/.test(original);
+    const serialized = JSON.stringify(value, null, indentation)
+      .replace(/\n/g, lineEnding);
+    writeFileSync(
+      filePath,
+      `${serialized}${trailingNewline ? lineEnding : ""}`,
+      "utf8",
+    );
     state.removed.push(`${label} in ${filePath}`);
   } catch (error) {
     state.errors.push(`Could not update ${filePath}: ${formatError(error)}`);
@@ -1443,6 +1526,7 @@ function isManagedHook(
   binaryPaths: readonly string[],
   suffix: "" | "improve-context",
   platform: NodeJS.Platform,
+  allowRelocatedBinary = false,
 ): boolean {
   const hook = asRecord(value);
   if (!hook || hook.type !== "command" || typeof hook.command !== "string") {
@@ -1461,7 +1545,29 @@ function isManagedHook(
       return true;
     }
   }
-  return false;
+  return allowRelocatedBinary && isRelocatedPlannotatorCommand(command, suffix);
+}
+
+function isRelocatedPlannotatorCommand(
+  command: string,
+  suffix: "" | "improve-context",
+): boolean {
+  const commandSuffix = suffix ? ` ${suffix}` : "";
+  if (commandSuffix && !command.endsWith(commandSuffix)) return false;
+
+  const executable = commandSuffix
+    ? command.slice(0, -commandSuffix.length).trim()
+    : command;
+  const unquoted =
+    executable.length >= 2 &&
+      executable.startsWith('"') &&
+      executable.endsWith('"')
+      ? executable.slice(1, -1)
+      : executable;
+  if (!isAbsolute(unquoted)) return false;
+
+  const executableName = basename(unquoted).toLowerCase();
+  return executableName === "plannotator" || executableName === "plannotator.exe";
 }
 
 function isGeminiInstallerTemplate(
@@ -1590,7 +1696,7 @@ function sameCommand(
     : normalizedLeft === normalizedRight;
 }
 
-function samePath(
+function sameLexicalPath(
   left: string,
   right: string,
   platform: NodeJS.Platform,
@@ -1600,6 +1706,55 @@ function samePath(
   return platform === "win32"
     ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
     : normalizedLeft === normalizedRight;
+}
+
+function pathsReferToSameEntry(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform,
+): boolean {
+  return comparePathEntries(left, right, platform) === "same";
+}
+
+function comparePathEntries(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform,
+): PathRelation {
+  // The lexical check is the conservative fallback for missing paths and also
+  // preserves Windows path semantics in cross-platform tests. Existing aliases
+  // are compared by filesystem identity so case, links, and mounts cannot hide
+  // that two spellings refer to the same entry.
+  if (sameLexicalPath(left, right, platform)) return "same";
+
+  const leftIdentity = readPathIdentity(left);
+  const rightIdentity = readPathIdentity(right);
+  if (leftIdentity.kind === "error" || rightIdentity.kind === "error") {
+    return "unknown";
+  }
+  if (leftIdentity.kind !== "found" || rightIdentity.kind !== "found") {
+    return "different";
+  }
+  return sameIdentity(leftIdentity.identity, rightIdentity.identity)
+    ? "same"
+    : "different";
+}
+
+function readPathIdentity(path: string): PathIdentityResult {
+  try {
+    const stat = statSync(path, { bigint: true });
+    return {
+      kind: "found",
+      identity: { device: stat.dev, inode: stat.ino },
+    };
+  } catch (error) {
+    if (isMissingPathError(error)) return { kind: "missing" };
+    return { kind: "error" };
+  }
+}
+
+function sameIdentity(left: PathIdentity, right: PathIdentity): boolean {
+  return left.device === right.device && left.inode === right.inode;
 }
 
 function uniquePaths(paths: readonly string[]): string[] {
@@ -1616,17 +1771,40 @@ function getDataDirSafetyIssue(
     return "the data directory is not absolute";
   }
   const root = parse(dataDir).root;
-  if (samePath(dataDir, root, platform)) {
+  const rootRelation = comparePathEntries(dataDir, root, platform);
+  if (rootRelation === "same") {
     return "the data directory is a filesystem root";
   }
-  if (samePath(dataDir, homeDir, platform)) {
+  if (rootRelation === "unknown") {
+    return "the data directory identity relative to the filesystem root could not be verified";
+  }
+
+  const homeRelation = comparePathEntries(dataDir, homeDir, platform);
+  if (homeRelation === "same") {
     return "the data directory is the home directory; choose a dedicated PLANNOTATOR_DATA_DIR";
   }
-  if (isAncestorOrSame(dataDir, homeDir, platform)) {
+  if (homeRelation === "unknown") {
+    return "the data directory identity relative to the home directory could not be verified";
+  }
+
+  const ancestorRelation = compareAncestorRelation(
+    dataDir,
+    homeDir,
+    platform,
+  );
+  if (ancestorRelation === "same") {
     return `the data directory contains the home directory ${homeDir}`;
   }
-  if (samePath(dataDir, tempDir, platform)) {
+  if (ancestorRelation === "unknown") {
+    return "whether the data directory contains the home directory could not be verified";
+  }
+
+  const tempRelation = comparePathEntries(dataDir, tempDir, platform);
+  if (tempRelation === "same") {
     return "the data directory is the shared temporary directory";
+  }
+  if (tempRelation === "unknown") {
+    return "the data directory identity relative to the shared temporary directory could not be verified";
   }
   return null;
 }
@@ -1647,17 +1825,42 @@ function inspectDataDir(dataDir: string): string | null {
   return null;
 }
 
-function isAncestorOrSame(
+function compareAncestorRelation(
   parent: string,
   child: string,
   platform: NodeJS.Platform,
-): boolean {
+): PathRelation {
   const resolvedParent = resolve(parent);
   const resolvedChild = resolve(child);
   const rel = platform === "win32"
     ? relative(resolvedParent.toLowerCase(), resolvedChild.toLowerCase())
     : relative(resolvedParent, resolvedChild);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
+    return "same";
+  }
+
+  const parentIdentity = readPathIdentity(resolvedParent);
+  if (parentIdentity.kind === "error") return "unknown";
+  if (parentIdentity.kind === "missing") return "different";
+
+  // A string-relative check cannot recognize a case alias, bind mount, or
+  // symlinked parent. Walk the existing child's ancestors and compare their
+  // device/inode pairs with the proposed purge root instead.
+  let current = resolvedChild;
+  while (true) {
+    const currentIdentity = readPathIdentity(current);
+    if (currentIdentity.kind === "error") return "unknown";
+    if (
+      currentIdentity.kind === "found" &&
+      sameIdentity(parentIdentity.identity, currentIdentity.identity)
+    ) {
+      return "same";
+    }
+
+    const next = dirname(current);
+    if (next === current) return "different";
+    current = next;
+  }
 }
 
 async function defaultRunCommand(
@@ -1695,7 +1898,7 @@ async function defaultRunCommand(
 
 async function defaultScheduleWindowsSelfDelete(
   target: string,
-  parent: string,
+  parent: string | null,
 ): Promise<boolean> {
   const powershell = Bun.which("powershell.exe") || Bun.which("pwsh.exe");
   if (!powershell) return false;
@@ -1716,7 +1919,7 @@ async function defaultScheduleWindowsSelfDelete(
         env: {
           ...process.env,
           PLANNOTATOR_UNINSTALL_TARGET: target,
-          PLANNOTATOR_UNINSTALL_PARENT: parent,
+          PLANNOTATOR_UNINSTALL_PARENT: parent ?? "",
           PLANNOTATOR_UNINSTALL_DELETE_SCRIPT: Buffer.from(
             WINDOWS_SELF_DELETE_SCRIPT,
             "utf16le",

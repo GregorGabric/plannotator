@@ -35,6 +35,7 @@ describe("CLI top-level help", () => {
     expect(output).toContain("plannotator copilot-last [--gate] [--json] [--hook]");
     expect(output).toContain("plannotator setup-goal <interview|facts>");
     expect(output).toContain("plannotator uninstall [--purge] [--yes]");
+    expect(output).toContain("[--skip-hosts]");
     expect(output).toContain("Run 'plannotator <command> --help' for command-specific usage.");
     expect(output).toContain("running 'plannotator' without arguments is for hook integration");
   });
@@ -119,6 +120,7 @@ describe("CLI subcommand help", () => {
     expect(formatSubcommandHelp("uninstall")).toContain(
       "not stored on a Plannotator server",
     );
+    expect(formatSubcommandHelp("uninstall")).toContain("--skip-hosts");
     // unknown key falls back to top-level help
     expect(formatSubcommandHelp("nope")).toBe(formatTopLevelHelp());
   });
@@ -130,16 +132,18 @@ describe("uninstall CLI options", () => {
       purge: false,
       yes: false,
       dryRun: false,
+      skipHosts: false,
     });
   });
 
   test("parses purge, automation, and preview flags", () => {
     expect(
-      parseUninstallOptions(["--dry-run", "--purge", "-y"]),
+      parseUninstallOptions(["--dry-run", "--purge", "-y", "--skip-hosts"]),
     ).toEqual({
       purge: true,
       yes: true,
       dryRun: true,
+      skipHosts: true,
     });
   });
 
@@ -153,6 +157,9 @@ describe("uninstall CLI options", () => {
     expect(() => parseUninstallOptions(["--yes", "-y"])).toThrow(
       "--yes/-y may only be specified once",
     );
+    expect(() =>
+      parseUninstallOptions(["--skip-hosts", "--skip-hosts"]),
+    ).toThrow("--skip-hosts may only be specified once");
   });
 
   test("uses a stronger confirmation for purge", () => {

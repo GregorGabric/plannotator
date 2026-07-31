@@ -236,6 +236,10 @@ Purge requires typing `purge` at the prompt and explains that the data is
 local-only: it is not stored on a Plannotator server and cannot be recovered.
 For automation, pass `--yes` (or `-y`); non-interactive removal refuses to run
 without it. Use `--dry-run` to preview recognized work without making changes.
+If a broken or unavailable host blocks cleanup, `--skip-hosts` leaves host
+plugin managers and shared host configuration untouched so the remaining
+installer-owned components and binary can still be removed; clean up those
+host integrations manually afterward.
 These mechanics keep the ordinary confirmation default-negative, make the
 irreversible outcome require a stronger explicit word, and still give package
 managers and scripts a conventional non-interactive flag.
@@ -244,15 +248,20 @@ The command covers the conventional macOS, Linux, WSL, and Windows binary
 locations; the managed `sem` sidecar and agent-terminal runtime; installer
 skills, commands, hooks, policies, caches, and recognizable Amp/Kiro files; and
 detected Claude Code, Copilot CLI, Droid, Pi, and VS Code installations through
-their host CLIs. Shared JSON and JSONC settings are edited surgically. Custom
+their host CLIs. Shared JSONC settings are edited surgically, while strict JSON
+updates preserve the file's indentation, line endings, and trailing-newline
+style. Custom
 or unrecognized files, separately installed optional skills, project-local
 integrations, external plan-save locations, and invalid configs are preserved
-(with an error when manual cleanup is needed). If cleanup reports an error,
+(with an error only when the malformed content may contain a managed entry).
+If cleanup reports an error,
 the CLI remains available for a safe retry, and its Windows PATH entry is
 retained or restored when possible. If PATH restoration itself fails, the
 output gives the full CLI path for retry and asks for manual PATH repair.
 For safety, purge refuses filesystem roots, the home directory, the shared
 temporary directory, symlinked data directories, and non-directory data paths.
+Existing paths are compared by filesystem identity, so case aliases, symlinks,
+hardlinks, and bind mounts cannot bypass the root/home/ancestor checks.
 If your dedicated data directory is symlinked, point `PLANNOTATOR_DATA_DIR` at
 its resolved target and retry.
 

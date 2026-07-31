@@ -110,6 +110,10 @@ local-only: it is not stored on a Plannotator server and cannot be recovered
 after purge. `--yes` (or `-y`) skips confirmation for automation, and is
 required when no interactive terminal is available. `--dry-run` previews the
 recognized removal set without changing anything.
+If a broken or unavailable host blocks cleanup, `--skip-hosts` leaves host
+plugin managers and shared host configuration untouched while removing the
+remaining installer-owned components and binary. Remove the skipped host
+integrations manually afterward.
 
 The purge removes only known Plannotator entries from the configured data
 directory. Unknown top-level files are preserved rather than guessed at, and
@@ -121,7 +125,9 @@ restoration itself fails, the CLI remains on disk and the output gives its full
 path for retry and manual PATH repair.
 Purge also refuses broad targets (filesystem roots, the home directory, or the
 shared temporary directory), symlinked data directories, and non-directory
-paths. For a symlinked dedicated directory, set `PLANNOTATOR_DATA_DIR` to its
+paths. Existing targets are compared by filesystem identity, so case aliases,
+symlinks, hardlinks, and bind mounts cannot bypass the root/home/ancestor
+checks. For a symlinked dedicated directory, set `PLANNOTATOR_DATA_DIR` to its
 resolved target and retry.
 
 Pi-only installations that do not include the `plannotator` CLI should use:

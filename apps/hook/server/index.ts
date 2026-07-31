@@ -337,7 +337,11 @@ if (args[0] === "uninstall") {
   }
 
   const result = await runPlannotatorUninstall(
-    { purge: options.purge, dryRun: options.dryRun },
+    {
+      purge: options.purge,
+      dryRun: options.dryRun,
+      skipHosts: options.skipHosts,
+    },
     environment,
   );
   const formatted = formatUninstallResult(result);
