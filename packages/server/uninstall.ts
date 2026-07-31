@@ -121,6 +121,12 @@ const WINDOWS_SELF_DELETE_SCRIPT = [
   "Remove-Item -LiteralPath $parent -Force -ErrorAction SilentlyContinue",
 ].join(" ");
 
+const WINDOWS_SELF_DELETE_BOOTSTRAP_SCRIPT = [
+  "$ErrorActionPreference='Stop'",
+  "$self=(Get-Process -Id $PID).Path",
+  "Start-Process -FilePath $self -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$env:PLANNOTATOR_UNINSTALL_DELETE_SCRIPT) -WindowStyle Hidden",
+].join("; ");
+
 type JsonRecord = Record<string, unknown>;
 
 /** Result returned by a host CLI command invoked during uninstall. */
@@ -1700,22 +1706,24 @@ async function defaultScheduleWindowsSelfDelete(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        WINDOWS_SELF_DELETE_SCRIPT,
+        WINDOWS_SELF_DELETE_BOOTSTRAP_SCRIPT,
       ],
       {
         stdin: "ignore",
         stdout: "ignore",
         stderr: "ignore",
-        detached: true,
         env: {
           ...process.env,
           PLANNOTATOR_UNINSTALL_TARGET: target,
           PLANNOTATOR_UNINSTALL_PARENT: parent,
+          PLANNOTATOR_UNINSTALL_DELETE_SCRIPT: Buffer.from(
+            WINDOWS_SELF_DELETE_SCRIPT,
+            "utf16le",
+          ).toString("base64"),
         },
       },
     );
-    proc.unref();
-    return true;
+    return await proc.exited === 0;
   } catch {
     return false;
   }
