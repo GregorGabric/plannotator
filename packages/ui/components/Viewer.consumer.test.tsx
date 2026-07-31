@@ -30,6 +30,9 @@ const Viewer = viewerMod?.Viewer as typeof import('./Viewer')['Viewer'];
 const popoverMod = hasDom ? await import('./CommentPopover') : null;
 const CommentPopover =
   popoverMod?.CommentPopover as typeof import('./CommentPopover')['CommentPopover'];
+const htmlViewerMod = hasDom ? await import('./html-viewer/HtmlViewer') : null;
+const HtmlViewer =
+  htmlViewerMod?.HtmlViewer as typeof import('./html-viewer/HtmlViewer')['HtmlViewer'];
 
 const blocks: Block[] = [
   { id: 'b1', type: 'paragraph', content: 'hello world', order: 0, startLine: 1 },
@@ -102,6 +105,61 @@ describe('Viewer consumer props', () => {
     expect(globalCommentButton()).toBeNull();
     expect(document.querySelector('button[title="Attachments"]')).toBeNull();
     expect(document.body.textContent).toContain('hello world');
+  });
+});
+
+describe('HtmlViewer consumer props', () => {
+  const htmlViewerProps = {
+    rawHtml: '<html><body><p>raw document</p></body></html>',
+    annotations: [],
+    onAddAnnotation: () => {},
+    onSelectAnnotation: () => {},
+    selectedAnnotationId: null,
+    mode: 'comment' as const,
+    inputMethod: 'drag' as const,
+    onAddGlobalAttachment: () => {},
+    onRemoveGlobalAttachment: () => {},
+  };
+
+  function dispatchSelection(modeOverride?: 'redline'): void {
+    const iframe = document.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    window.dispatchEvent(new MessageEvent('message', {
+      source: iframe.contentWindow,
+      data: {
+        type: 'plannotator-bridge-selection',
+        text: 'raw document',
+        rect: { top: 10, left: 10, width: 100, height: 20 },
+        modeOverride,
+      },
+    }));
+  }
+
+  test.skipIf(!hasDom)('default remains writable for raw-HTML annotate surfaces', async () => {
+    await mount(<HtmlViewer {...htmlViewerProps} />);
+    expect(globalCommentButton()).not.toBeNull();
+    expect(document.querySelector('button[title="Attachments"]')).not.toBeNull();
+
+    await act(async () => dispatchSelection());
+    expect(document.querySelector('textarea')).not.toBeNull();
+  });
+
+  test.skipIf(!hasDom)('readOnly hides raw-HTML mutation controls and ignores selection composers', async () => {
+    const additions: unknown[] = [];
+    await mount(
+      <HtmlViewer
+        {...htmlViewerProps}
+        readOnly
+        onAddAnnotation={(annotation) => additions.push(annotation)}
+      />,
+    );
+    expect(globalCommentButton()).toBeNull();
+    expect(document.querySelector('button[title="Attachments"]')).toBeNull();
+
+    await act(async () => dispatchSelection());
+    expect(document.querySelector('textarea')).toBeNull();
+    await act(async () => dispatchSelection('redline'));
+    expect(additions).toEqual([]);
   });
 });
 
