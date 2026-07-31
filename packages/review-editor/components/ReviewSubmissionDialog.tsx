@@ -469,7 +469,7 @@ export function ReviewSubmissionDialog({
                         )}
                         <div className="mt-1 text-muted-foreground">
                           {recoveryPersistsRefresh
-                            ? 'Closing or refreshing this tab keeps the block in tab-scoped recovery storage.'
+                            ? 'Closing and reopening this dialog, or refreshing this tab, keeps the block in tab-scoped recovery storage.'
                             : 'Closing the dialog keeps this block on the current page. Keep the page open because tab-scoped refresh recovery is unavailable.'}
                         </div>
                       </div>
