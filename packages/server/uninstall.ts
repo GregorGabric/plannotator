@@ -13,6 +13,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -1521,10 +1522,13 @@ function removePath(
   }
 
   try {
-    rmSync(path, {
-      recursive: stat.isDirectory() && !stat.isSymbolicLink(),
-      force: true,
-    });
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      rmSync(path, { recursive: true, force: true });
+    } else {
+      // Never route a symlink through recursive removal. Unlinking the directory
+      // entry also gives hardlinked files the intended target-preserving behavior.
+      unlinkSync(path);
+    }
     state.removed.push(path);
   } catch (error) {
     state.errors.push(`Could not remove ${path}: ${formatError(error)}`);
