@@ -22,6 +22,7 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import { CommentPopover } from '../CommentPopover';
 import { Button } from '../core/button';
 import { Textarea } from '../core/textarea';
+import { copyTextToClipboard } from '../../utils/clipboard';
 
 interface GoalSetupSurfaceProps {
   bundle: GoalSetupBundle;
@@ -67,10 +68,10 @@ async function submitGoalSetup(payload: unknown): Promise<void> {
 }
 
 async function copyGoalSetupText(text: string): Promise<void> {
-  if (!navigator.clipboard?.writeText) {
+  const copied = await copyTextToClipboard(text);
+  if (!copied) {
     throw new Error('Clipboard is unavailable in this browser');
   }
-  await navigator.clipboard.writeText(text);
 }
 
 function useGoalSetupCopy(onError: (message: string) => void) {
