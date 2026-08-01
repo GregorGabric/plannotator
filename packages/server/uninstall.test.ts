@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeAll, describe, expect, test } from "bun:test";
 import {
   existsSync,
   linkSync,
@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -38,8 +39,9 @@ type Fixture = {
 };
 
 const temporaryRoots: string[] = [];
+let supportsCaseVariantPaths = false;
 
-const supportsCaseVariantPaths = (() => {
+function detectCaseVariantPathSupport(): boolean {
   const root = mkdtempSync(join(tmpdir(), "plannotator-case-probe-"));
   try {
     const exact = join(root, "case-probe");
@@ -53,7 +55,11 @@ const supportsCaseVariantPaths = (() => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-})();
+}
+
+beforeAll(() => {
+  supportsCaseVariantPaths = detectCaseVariantPathSupport();
+});
 
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
@@ -362,7 +368,7 @@ describe("default uninstall", () => {
     });
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -464,7 +470,7 @@ describe("default uninstall", () => {
     const before = snapshotTree(fixture.root);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: true },
+      { purge: false, dryRun: true, skipHosts: false },
       {
         ...fixture.environment,
         which: () => "/fake/claude",
@@ -505,7 +511,7 @@ describe("default uninstall", () => {
     writeText(configPath, contents);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -539,7 +545,7 @@ describe("default uninstall", () => {
     writeText(configPath, contents);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -547,7 +553,7 @@ describe("default uninstall", () => {
     expect(existsSync(binary)).toBe(true);
     expect(result.ok).toBe(false);
     expect(result.errors).toContain(
-      `Preserved ${configPath}: it is not valid JSON or JSONC, and it may contain a managed Plannotator entry. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
+      `Preserved ${configPath}: it is not valid JSON or JSONC, so managed host entries cannot be classified safely. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
     );
   });
 
@@ -574,7 +580,7 @@ describe("default uninstall", () => {
     });
 
     await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -617,7 +623,7 @@ describe("default uninstall", () => {
     writeText(settingsPath, contents);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -650,7 +656,7 @@ describe("default uninstall", () => {
     });
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -671,7 +677,7 @@ describe("default uninstall", () => {
     });
   });
 
-  test("does not let unrelated malformed Gemini settings block binary removal", async () => {
+  test("requires an explicit host skip for unrelated malformed Gemini settings", async () => {
     const fixture = createFixture();
     const binary = join(fixture.homeDir, ".local", "bin", "plannotator");
     const settingsPath = join(
@@ -683,20 +689,28 @@ describe("default uninstall", () => {
     writeText(binary);
     writeText(settingsPath, contents);
 
-    const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+    const blocked = await runPlannotatorUninstall(
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
-    expect(result.ok).toBe(true);
+    expect(blocked.ok).toBe(false);
+    expect(existsSync(binary)).toBe(true);
+    expect(readFileSync(settingsPath, "utf8")).toBe(contents);
+    expect(blocked.errors).toContain(
+      `Preserved ${settingsPath}: it is not strict JSON, so managed host entries cannot be classified safely. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
+    );
+
+    const escaped = await runPlannotatorUninstall(
+      { purge: false, dryRun: false, skipHosts: true },
+      fixture.environment,
+    );
+    expect(escaped.ok).toBe(true);
     expect(existsSync(binary)).toBe(false);
     expect(readFileSync(settingsPath, "utf8")).toBe(contents);
-    expect(result.warnings).toContain(
-      `Preserved ${settingsPath}: it is not strict JSON. No recognizable Plannotator entry was found, so uninstall continued.`,
-    );
   });
 
-  test("fails safe for possibly managed malformed config unless hosts are skipped", async () => {
+  test("fails safe for escaped managed spellings in malformed host config", async () => {
     const fixture = createFixture();
     const binary = join(fixture.homeDir, ".local", "bin", "plannotator");
     const settingsPath = join(
@@ -710,20 +724,21 @@ describe("default uninstall", () => {
       "agents",
       "plannotator.json",
     );
-    const contents = '{ "command": "plannotator" // malformed managed hook\n}';
+    const contents = '{ "command": "pl\\u0061nnotator" // malformed managed hook\n}';
     const kiroContents = '{ "name": "plannotator" // malformed agent\n}';
     writeText(binary);
     writeText(settingsPath, contents);
     writeText(kiroAgentPath, kiroContents);
 
     const blocked = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
     expect(blocked.ok).toBe(false);
     expect(existsSync(binary)).toBe(true);
-    expect(blocked.errors[0]).toContain("may contain a managed Plannotator entry");
+    expect(contents.toLowerCase()).not.toContain("plannotator");
+    expect(blocked.errors[0]).toContain("cannot be classified safely");
     expect(blocked.errors[0]).toContain("--skip-hosts");
 
     const escaped = await runPlannotatorUninstall(
@@ -756,7 +771,7 @@ describe("default uninstall", () => {
     writeText(unrelatedVendorFile, "unrelated");
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         dataDir: fixture.homeDir,
@@ -778,7 +793,7 @@ describe("purge uninstall", () => {
     writeText(join(fixture.dataDir, "vendor", "sem", "v0.8.0", "sem"));
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: true },
+      { purge: true, dryRun: true, skipHosts: false },
       fixture.environment,
     );
 
@@ -794,7 +809,7 @@ describe("purge uninstall", () => {
     mkdirSync(vendorDirectory, { recursive: true });
 
     const preview = await runPlannotatorUninstall(
-      { purge: true, dryRun: true },
+      { purge: true, dryRun: true, skipHosts: false },
       fixture.environment,
     );
     expect(preview.preserved).toContain(
@@ -802,7 +817,7 @@ describe("purge uninstall", () => {
     );
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -827,7 +842,7 @@ describe("purge uninstall", () => {
     writeText(customPath, "not installer-owned");
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -850,7 +865,7 @@ describe("purge uninstall", () => {
     writeText(join(fixture.dataDir, "vendor", "sem", "v0.8.0", "sem"));
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -877,7 +892,7 @@ describe("purge uninstall", () => {
     writeText(binary);
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         dataDir: fixture.homeDir,
@@ -890,9 +905,54 @@ describe("purge uninstall", () => {
     expect(existsSync(binary)).toBe(true);
   });
 
-  test.skipIf(!supportsCaseVariantPaths)(
+  test("refuses a data-directory swap after awaited host cleanup", async () => {
+    const fixture = createFixture();
+    const validatedDirectory = join(fixture.root, "validated-data");
+    const replacementTarget = join(fixture.root, "replacement-target");
+    const originalPlan = join(fixture.dataDir, "plans", "original.md");
+    const replacementPlan = join(replacementTarget, "plans", "must-survive.md");
+    const binary = join(
+      fixture.homeDir,
+      ".local",
+      "bin",
+      "plannotator",
+    );
+    writeText(originalPlan, "original data");
+    writeText(replacementPlan, "unrelated replacement data");
+    writeText(binary);
+    writeJson(join(fixture.homeDir, ".claude", "settings.json"), {
+      enabledPlugins: { "plannotator@plannotator": true },
+    });
+
+    const result = await runPlannotatorUninstall(
+      { purge: true, dryRun: false, skipHosts: false },
+      {
+        ...fixture.environment,
+        which: (command) => command === "claude" ? "/fake/claude" : null,
+        runCommand: async () => {
+          renameSync(fixture.dataDir, validatedDirectory);
+          symlinkSync(replacementTarget, fixture.dataDir, "dir");
+          return { exitCode: 0, timedOut: false };
+        },
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      `Refusing to remove managed paths under ${fixture.dataDir}: the data directory changed after initial validation (the data directory is a symlink; set PLANNOTATOR_DATA_DIR to its resolved target and retry).`,
+    );
+    expect(readFileSync(join(validatedDirectory, "plans", "original.md"), "utf8"))
+      .toBe("original data");
+    expect(readFileSync(replacementPlan, "utf8")).toBe(
+      "unrelated replacement data",
+    );
+    expect(existsSync(binary)).toBe(true);
+  });
+
+  test(
     "refuses a case-variant data-dir spelling that resolves to HOME",
     async () => {
+      if (!supportsCaseVariantPaths) return;
       const fixture = createFixture();
       const caseVariantHome = join(dirname(fixture.homeDir), "HOME");
       const plan = join(fixture.homeDir, "plans", "must-survive.md");
@@ -906,7 +966,7 @@ describe("purge uninstall", () => {
       writeText(binary);
 
       const result = await runPlannotatorUninstall(
-        { purge: true, dryRun: false },
+        { purge: true, dryRun: false, skipHosts: false },
         {
           ...fixture.environment,
           dataDir: caseVariantHome,
@@ -956,7 +1016,7 @@ describe("purge uninstall", () => {
       writeText(binary);
 
       const result = await runPlannotatorUninstall(
-        { purge: true, dryRun: false },
+        { purge: true, dryRun: false, skipHosts: false },
         {
           ...fixture.environment,
           ...safetyCase.configure(fixture),
@@ -980,7 +1040,7 @@ describe("purge uninstall", () => {
     linkSync(externalFile, join(fixture.dataDir, "config.json"));
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -1006,7 +1066,7 @@ describe("purge uninstall", () => {
     writeText(binary);
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         dataDir: symlink,
@@ -1032,7 +1092,7 @@ describe("purge uninstall", () => {
     writeText(binary);
 
     const result = await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         dataDir: dataFile,
@@ -1060,7 +1120,7 @@ describe("host and platform integrations", () => {
     });
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       fixture.environment,
     );
 
@@ -1107,7 +1167,7 @@ describe("host and platform integrations", () => {
     );
 
     await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         which: (command) => `/fake/${command}`,
@@ -1159,7 +1219,7 @@ describe("host and platform integrations", () => {
     );
 
     await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         which: (command) => `/fake/${command}`,
@@ -1201,7 +1261,7 @@ describe("host and platform integrations", () => {
     });
 
     await runPlannotatorUninstall(
-      { purge: true, dryRun: false },
+      { purge: true, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         which: (command) => `/fake/${command}`,
@@ -1226,7 +1286,7 @@ describe("host and platform integrations", () => {
     writeText(legacyExe);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         platform: "win32",
@@ -1262,7 +1322,7 @@ describe("host and platform integrations", () => {
     writeText(unrelatedFile);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         platform: "win32",
@@ -1287,7 +1347,7 @@ describe("host and platform integrations", () => {
     writeText(currentExe);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         platform: "win32",
@@ -1313,7 +1373,7 @@ describe("host and platform integrations", () => {
     writeText(currentExe);
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         platform: "win32",
@@ -1344,7 +1404,7 @@ describe("host and platform integrations", () => {
     let commandCount = 0;
 
     const result = await runPlannotatorUninstall(
-      { purge: false, dryRun: false },
+      { purge: false, dryRun: false, skipHosts: false },
       {
         ...fixture.environment,
         platform: "win32",

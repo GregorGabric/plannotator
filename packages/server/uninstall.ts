@@ -169,7 +169,7 @@ export interface UninstallRequest {
   readonly purge: boolean;
   readonly dryRun: boolean;
   /** Leave host plugin managers and shared host configuration untouched. */
-  readonly skipHosts?: boolean;
+  readonly skipHosts: boolean;
 }
 
 /** Caller-visible record of completed, planned, preserved, and failed work. */
@@ -196,6 +196,11 @@ type HookCleanupSpec = {
   readonly event: string;
   readonly matcher?: string;
   readonly suffix: "" | "improve-context";
+};
+
+type HookCleanupPolicy = {
+  readonly allowRelocatedBinary: boolean;
+  readonly removeFileWhenEmpty: boolean;
 };
 
 type PathIdentity = {
@@ -260,6 +265,7 @@ export async function runPlannotatorUninstall(
     errors: [],
   };
 
+  const initialDataDirIdentity = readPathIdentity(state.dataDir);
   const dataDirSafetyIssue =
     getDataDirSafetyIssue(
       state.dataDir,
@@ -294,11 +300,23 @@ export async function runPlannotatorUninstall(
       `Preserved managed runtime paths under ${state.dataDir}: ${dataDirSafetyIssue}.`,
     );
   } else {
-    removeInstallerData(request, state);
-  }
-
-  if (request.purge) {
-    purgeLocalData(request, state);
+    const destructiveBoundaryIssue = getDataDirDestructiveBoundaryIssue(
+      state.dataDir,
+      resolve(environment.homeDir),
+      resolve(environment.tempDir),
+      environment.platform,
+      initialDataDirIdentity,
+    );
+    if (destructiveBoundaryIssue) {
+      state.errors.push(
+        `Refusing to remove managed paths under ${state.dataDir}: ${destructiveBoundaryIssue}.`,
+      );
+    } else {
+      // Keep this block synchronous: no host command or other awaited work may
+      // reopen a path-swap window after the destructive-boundary revalidation.
+      removeInstallerData(request, state);
+      if (request.purge) purgeLocalData(request, state);
+    }
   }
 
   if (state.errors.length === 0) {
@@ -512,8 +530,10 @@ function removeHostConfigEntries(
     ],
     paths.binaryPaths,
     environment.platform,
-    false,
-    false,
+    {
+      allowRelocatedBinary: false,
+      removeFileWhenEmpty: false,
+    },
     "managed Claude Code hooks",
     request,
     state,
@@ -524,8 +544,10 @@ function removeHostConfigEntries(
     [{ event: "Stop", suffix: "" }],
     paths.binaryPaths,
     environment.platform,
-    true,
-    true,
+    {
+      allowRelocatedBinary: true,
+      removeFileWhenEmpty: true,
+    },
     "managed Codex Stop hook",
     request,
     state,
@@ -952,8 +974,7 @@ function cleanupHooksJson(
   specs: readonly HookCleanupSpec[],
   binaryPaths: readonly string[],
   platform: NodeJS.Platform,
-  allowRelocatedBinary: boolean,
-  removeWhenEmpty: boolean,
+  policy: HookCleanupPolicy,
   label: string,
   request: UninstallRequest,
   state: MutableUninstallResult,
@@ -994,7 +1015,7 @@ function cleanupHooksJson(
             binaryPaths,
             spec.suffix,
             platform,
-            allowRelocatedBinary,
+            policy.allowRelocatedBinary,
           ),
       );
       if (nextHooks.length === hookEntries.length) {
@@ -1024,7 +1045,7 @@ function cleanupHooksJson(
     return;
   }
 
-  if (removeWhenEmpty && Object.keys(parsed).length === 0) {
+  if (policy.removeFileWhenEmpty && Object.keys(parsed).length === 0) {
     removePath(filePath, request, state);
     return;
   }
@@ -1148,7 +1169,6 @@ function cleanupOpenCodeConfig(
   if (parseErrors.length > 0 || !parsed) {
     reportMalformedSharedConfig(
       filePath,
-      content,
       "it is not valid JSON or JSONC",
       state,
     );
@@ -1309,7 +1329,6 @@ function readJsonRecord(
     if (!record) {
       reportMalformedSharedConfig(
         filePath,
-        content,
         "it is not a JSON object",
         state,
       );
@@ -1319,7 +1338,6 @@ function readJsonRecord(
   } catch {
     reportMalformedSharedConfig(
       filePath,
-      content,
       "it is not strict JSON",
       state,
     );
@@ -1329,19 +1347,11 @@ function readJsonRecord(
 
 function reportMalformedSharedConfig(
   filePath: string,
-  content: string,
   reason: string,
   state: MutableUninstallResult,
 ): void {
-  const prefix = `Preserved ${filePath}: ${reason}`;
-  if (content.toLowerCase().includes("plannotator")) {
-    state.errors.push(
-      `${prefix}, and it may contain a managed Plannotator entry. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
-    );
-    return;
-  }
-  state.warnings.push(
-    `${prefix}. No recognizable Plannotator entry was found, so uninstall continued.`,
+  state.errors.push(
+    `Preserved ${filePath}: ${reason}, so managed host entries cannot be classified safely. Re-run with --skip-hosts to leave host integrations for manual cleanup.`,
   );
 }
 
@@ -1805,6 +1815,40 @@ function getDataDirSafetyIssue(
   }
   if (tempRelation === "unknown") {
     return "the data directory identity relative to the shared temporary directory could not be verified";
+  }
+  return null;
+}
+
+function getDataDirDestructiveBoundaryIssue(
+  dataDir: string,
+  homeDir: string,
+  tempDir: string,
+  platform: NodeJS.Platform,
+  initialIdentity: PathIdentityResult,
+): string | null {
+  const currentSafetyIssue =
+    getDataDirSafetyIssue(dataDir, homeDir, tempDir, platform) ??
+    inspectDataDir(dataDir);
+  if (currentSafetyIssue) {
+    return `the data directory changed after initial validation (${currentSafetyIssue})`;
+  }
+
+  const currentIdentity = readPathIdentity(dataDir);
+  if (
+    initialIdentity.kind === "error" ||
+    currentIdentity.kind === "error"
+  ) {
+    return "the data directory identity could not be revalidated after host cleanup";
+  }
+  if (initialIdentity.kind !== currentIdentity.kind) {
+    return "the data directory changed after initial validation";
+  }
+  if (
+    initialIdentity.kind === "found" &&
+    currentIdentity.kind === "found" &&
+    !sameIdentity(initialIdentity.identity, currentIdentity.identity)
+  ) {
+    return "the data directory changed after initial validation";
   }
   return null;
 }

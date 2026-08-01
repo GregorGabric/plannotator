@@ -253,7 +253,7 @@ updates preserve the file's indentation, line endings, and trailing-newline
 style. Custom
 or unrecognized files, separately installed optional skills, project-local
 integrations, external plan-save locations, and invalid configs are preserved
-(with an error only when the malformed content may contain a managed entry).
+(malformed host config is a fail-safe error unless `--skip-hosts` is explicit).
 If cleanup reports an error,
 the CLI remains available for a safe retry, and its Windows PATH entry is
 retained or restored when possible. If PATH restoration itself fails, the
@@ -262,6 +262,9 @@ For safety, purge refuses filesystem roots, the home directory, the shared
 temporary directory, symlinked data directories, and non-directory data paths.
 Existing paths are compared by filesystem identity, so case aliases, symlinks,
 hardlinks, and bind mounts cannot bypass the root/home/ancestor checks.
+That identity and every containment guard are revalidated after awaited host
+commands, immediately before the synchronous data-removal block; a replaced
+data directory is refused without touching either the old or replacement data.
 If your dedicated data directory is symlinked, point `PLANNOTATOR_DATA_DIR` at
 its resolved target and retry.
 

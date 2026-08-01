@@ -118,16 +118,19 @@ integrations manually afterward.
 The purge removes only known Plannotator entries from the configured data
 directory. Unknown top-level files are preserved rather than guessed at, and
 custom external plan-save paths or project-local integrations are never
-deleted. If a host plugin manager is unavailable or a shared config cannot be
-edited safely, the command reports the follow-up and preserves the CLI and its
-Windows PATH entry so you can fix the problem and retry. If Windows PATH
-restoration itself fails, the CLI remains on disk and the output gives its full
-path for retry and manual PATH repair.
+deleted. Malformed host config is treated as a fail-safe error unless
+`--skip-hosts` is explicit. If a host plugin manager is unavailable or a shared
+config cannot be edited safely, the command reports the follow-up and preserves
+the CLI and its Windows PATH entry so you can fix the problem and retry. If
+Windows PATH restoration itself fails, the CLI remains on disk and the output
+gives its full path for retry and manual PATH repair.
 Purge also refuses broad targets (filesystem roots, the home directory, or the
 shared temporary directory), symlinked data directories, and non-directory
 paths. Existing targets are compared by filesystem identity, so case aliases,
 symlinks, hardlinks, and bind mounts cannot bypass the root/home/ancestor
-checks. For a symlinked dedicated directory, set `PLANNOTATOR_DATA_DIR` to its
+checks. The identity and containment guards are revalidated after awaited host
+commands, immediately before data removal, so a swapped directory is refused.
+For a symlinked dedicated directory, set `PLANNOTATOR_DATA_DIR` to its
 resolved target and retry.
 
 Pi-only installations that do not include the `plannotator` CLI should use:
