@@ -13,6 +13,7 @@
  */
 import { describe, test, expect, afterEach, mock } from 'bun:test';
 import { copyTextToClipboard } from './clipboard';
+import { ANNOTATION_SELECTORS } from '../components/PopoutDialog';
 
 const hasDom = typeof document !== 'undefined';
 
@@ -97,6 +98,67 @@ describe('copyTextToClipboard', () => {
     override(document, 'execCommand', execCommand);
 
     await expect(copyTextToClipboard('hello')).resolves.toBe(false);
+  });
+
+  test.skipIf(!hasDom)('fallback runs synchronously when navigator.clipboard is absent', () => {
+    // execCommand('copy') is only honored inside the user-gesture window, so
+    // the fallback must fire before the call returns its promise. An inserted
+    // await ahead of the fallback would defer it past the gesture and
+    // silently break every insecure-context copy. Pin the synchronicity:
+    // assert the spy fired BEFORE the returned promise is awaited.
+    override(navigator, 'clipboard', undefined);
+    const execCommand = mock(() => true);
+    override(document, 'execCommand', execCommand);
+
+    const promise = copyTextToClipboard('sync payload');
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    return promise.then((result) => expect(result).toBe(true));
+  });
+
+  test.skipIf(!hasDom)('copy event without clipboardData is not treated as success', async () => {
+    override(navigator, 'clipboard', undefined);
+    // Simulate a browser whose synthetic copy event has no clipboardData:
+    // the handler must not preventDefault or flag success, so the helper
+    // proceeds to the hidden-textarea retry (second execCommand call).
+    let dispatched = 0;
+    const execCommand = mock((command: string) => {
+      if (command !== 'copy') return false;
+      dispatched += 1;
+      if (dispatched === 1) {
+        const event = new Event('copy', { cancelable: true });
+        document.dispatchEvent(event);
+        // Native copy "succeeded", but our payload was never written.
+        return !event.defaultPrevented;
+      }
+      return false; // textarea retry also fails
+    });
+    override(document, 'execCommand', execCommand);
+
+    await expect(copyTextToClipboard('hello')).resolves.toBe(false);
+    expect(execCommand.mock.calls.length).toBe(2);
+  });
+
+  test.skipIf(!hasDom)('fallback textarea is tagged for PopoutDialog focus-out guard', async () => {
+    override(navigator, 'clipboard', undefined);
+    // First execCommand call fails (copy-event path), forcing the textarea
+    // path; the second call runs while the textarea is in the DOM, where we
+    // assert it carries the marker PopoutDialog whitelists.
+    let sawTaggedTextarea = false;
+    let call = 0;
+    const execCommand = mock(() => {
+      call += 1;
+      if (call === 1) return false;
+      const textarea = document.querySelector('textarea[data-clipboard-fallback="true"]');
+      sawTaggedTextarea = textarea !== null &&
+        ANNOTATION_SELECTORS.some((sel) => textarea.closest(sel) !== null);
+      return true;
+    });
+    override(document, 'execCommand', execCommand);
+
+    await expect(copyTextToClipboard('hello')).resolves.toBe(true);
+    expect(sawTaggedTextarea).toBe(true);
+    // The transient textarea must be gone once the copy resolves.
+    expect(document.querySelector('[data-clipboard-fallback="true"]')).toBeNull();
   });
 
   test.skipIf(!hasDom)('fallback copy event carries the text payload', async () => {

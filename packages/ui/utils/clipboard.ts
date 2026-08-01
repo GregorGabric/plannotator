@@ -10,13 +10,19 @@ function copyTextWithFallback(text: string, focusOwner?: HTMLElement): boolean {
   let copied = false;
 
   const handleCopy = (event: ClipboardEvent) => {
+    // Without clipboardData there is nothing to write into; leave the native
+    // copy untouched (preventDefault would only suppress it) and stay
+    // unsuccessful so the textarea path below runs.
+    if (!event.clipboardData) return;
     event.preventDefault();
-    event.clipboardData?.setData('text/plain', text);
+    event.clipboardData.setData('text/plain', text);
     copied = true;
   };
   document.addEventListener('copy', handleCopy);
   try {
-    copied = document.execCommand('copy') || copied;
+    // Success requires BOTH: our handler actually wrote the payload via
+    // setData, AND execCommand reported the copy command ran.
+    copied = document.execCommand('copy') && copied;
   } catch {
     copied = false;
   } finally {
@@ -26,6 +32,10 @@ function copyTextWithFallback(text: string, focusOwner?: HTMLElement): boolean {
   if (!copied) {
     const textarea = document.createElement('textarea');
     textarea.style.cssText = 'position:fixed;opacity:0;pointer-events:none';
+    // Marker so focus-sensitive surfaces (PopoutDialog's focus-out close
+    // guard) can recognize the transient fallback textarea and not treat the
+    // focus shift as leaving the dialog.
+    textarea.setAttribute('data-clipboard-fallback', 'true');
     textarea.value = text;
     document.body.appendChild(textarea);
     textarea.select();

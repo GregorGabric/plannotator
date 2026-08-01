@@ -4725,7 +4725,7 @@ const App: React.FC = () => {
             onClose={() => setIsPanelOpen(false)}
             onQuickCopy={async () => {
               const output = getCurrentFeedbackPayload();
-              await copyTextToClipboard(wrapCopiedFeedback(output));
+              return copyTextToClipboard(wrapCopiedFeedback(output));
             }}
             onShare={canShareCurrentSession ? () => { setIsPanelOpen(false); setInitialExportTab('share'); setShowExport(true); } : undefined}
             otherFileAnnotations={otherFileAnnotations}
