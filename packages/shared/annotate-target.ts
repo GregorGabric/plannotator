@@ -43,9 +43,29 @@ export interface AnnotateTokenCandidate {
 export type AnnotateTokenSelection =
   | { kind: "single"; candidate: AnnotateTokenCandidate }
   | { kind: "multiple"; candidates: AnnotateTokenCandidate[] }
-  | { kind: "none"; words: string[] };
+  | { kind: "none"; words: string[] }
+  /**
+   * The input contains dash-prefixed tokens the caller did not recognize
+   * (every known flag is stripped before selection runs). Tolerance must not
+   * apply: silently skipping a typo'd flag would change behavior (for
+   * example `--no-jna` fetching via Jina, exactly what `--no-jina` exists to
+   * prevent). Callers fall through to their unchanged pipeline so the
+   * invocation fails the same way it did before tolerant resolution existed.
+   */
+  | { kind: "flagged"; flagTokens: string[] };
 
 export type AnnotateTokenProbe = (token: string) => string | null;
+
+export interface ProbeAnnotateTokenOptions {
+  /**
+   * Whether a bare directory name (no path separator) may resolve as a
+   * folder candidate. Defaults to true, which is correct when the token is
+   * the sole argument. Multi-token selection passes false so a stray word
+   * that happens to match a directory name (or `.`) cannot hijack the
+   * fast path; explicit paths like `src/` or `docs/guides` still resolve.
+   */
+  bareDirectories?: boolean;
+}
 
 /**
  * Would `plannotator annotate <token>` reach a specific verdict on this
@@ -67,19 +87,23 @@ export type AnnotateTokenProbe = (token: string) => string | null;
 export function probeAnnotateToken(
   token: string,
   projectRoot: string,
+  options?: ProbeAnnotateTokenOptions,
 ): string | null {
   if (!token) return null;
 
   if (/^https?:\/\//i.test(token)) return token;
 
-  const folder = resolveAtReference(token, (candidate) => {
-    try {
-      return statSync(resolveUserPath(candidate, projectRoot)).isDirectory();
-    } catch {
-      return false;
-    }
-  });
-  if (folder !== null) return resolveUserPath(folder, projectRoot);
+  const allowBareDirectory = options?.bareDirectories !== false;
+  if (allowBareDirectory || /[\\/]/.test(token)) {
+    const folder = resolveAtReference(token, (candidate) => {
+      try {
+        return statSync(resolveUserPath(candidate, projectRoot)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+    if (folder !== null) return resolveUserPath(folder, projectRoot);
+  }
 
   const html = resolveAtReference(token, (candidate) => {
     const abs = resolveUserPath(candidate, projectRoot);
@@ -95,9 +119,16 @@ export function probeAnnotateToken(
   if (doc.kind === "found") return doc.path;
   if (doc.kind === "ambiguous") return stripped;
 
-  const literal = resolveAtReference(token, (candidate) =>
-    existsSync(resolveUserPath(candidate, projectRoot)),
-  );
+  // Bare existence is file-only: directories are candidates exclusively via
+  // the folder branch above, so disabling bare directories cannot be undone
+  // by this fallback.
+  const literal = resolveAtReference(token, (candidate) => {
+    try {
+      return statSync(resolveUserPath(candidate, projectRoot)).isFile();
+    } catch {
+      return false;
+    }
+  });
   if (literal !== null) return resolveUserPath(literal, projectRoot);
 
   return null;
@@ -119,21 +150,33 @@ export function annotateInputNamesExistingTarget(
 }
 
 /**
- * Tier 1/2/3 selection over the whitespace-delimited tokens of the raw
- * argument string. Tokens starting with `-` are treated as flags, never as
- * target candidates; duplicate tokens are probed once.
+ * Tier 1/2/3 selection over the tokens of the raw argument input. Accepts
+ * either the pre-split argv tokens (preserving quoted arguments that contain
+ * whitespace) or a single raw string that is split on whitespace. Duplicate
+ * tokens are probed once. Any dash-prefixed token makes the selection
+ * `flagged` (see the type comment): known flags are stripped by the caller
+ * before selection, so whatever remains is an unrecognized flag that must
+ * error the way it always did, not be skipped.
  */
 export function selectAnnotateTokenTarget(
-  rawInput: string,
+  rawInput: string | string[],
   probe: AnnotateTokenProbe,
 ): AnnotateTokenSelection {
-  const tokens = (rawInput ?? "").trim().split(/\s+/).filter(Boolean);
+  const tokens = (Array.isArray(rawInput)
+    ? rawInput.map((token) => token.trim())
+    : (rawInput ?? "").trim().split(/\s+/)
+  ).filter(Boolean);
+
+  const flagTokens = tokens.filter((token) => token.startsWith("-"));
+  if (flagTokens.length > 0) {
+    return { kind: "flagged", flagTokens };
+  }
+
   const seen = new Set<string>();
   const words: string[] = [];
   const candidates: AnnotateTokenCandidate[] = [];
 
   for (const token of tokens) {
-    if (token.startsWith("-")) continue;
     if (seen.has(token)) continue;
     seen.add(token);
     words.push(token);

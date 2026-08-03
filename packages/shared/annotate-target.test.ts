@@ -25,6 +25,9 @@ beforeAll(() => {
   writeFileSync(join(root, "notes/dup.md"), "# B");
   // Existing but not annotatable.
   writeFileSync(join(root, "script.py"), "print()");
+  // Exists so that a wrongly split quoted token ("my notes.md" -> "notes.md")
+  // would resolve if token boundaries were not preserved.
+  writeFileSync(join(root, "notes.md"), "# Notes");
 });
 
 afterAll(() => {
@@ -67,6 +70,15 @@ describe("probeAnnotateToken", () => {
     expect(probe("aim")).toBeNull();
     expect(probe("missing.md")).toBeNull();
     expect(probe("")).toBeNull();
+  });
+
+  test("bare directory names only resolve when bareDirectories is allowed", () => {
+    expect(probeAnnotateToken("docs", root, { bareDirectories: false })).toBeNull();
+    expect(probeAnnotateToken(".", root, { bareDirectories: false })).toBeNull();
+    // Explicit paths keep resolving: a separator marks intent.
+    expect(probeAnnotateToken("docs/", root, { bareDirectories: false })).toBe(join(root, "docs"));
+    // Default (sole-argument semantics) is unchanged.
+    expect(probeAnnotateToken("docs", root)).toBe(join(root, "docs"));
   });
 });
 
@@ -120,11 +132,30 @@ describe("selectAnnotateTokenTarget", () => {
     expect(selection.kind).toBe("single");
   });
 
-  test("flag-like tokens are never candidates and never listed as words", () => {
-    const selection = selectAnnotateTokenTarget("the aim doc --markdwn", probe);
+  test("unrecognized dash tokens disable tolerance instead of being skipped", () => {
+    // Known flags are stripped before selection, so any dash token here is a
+    // typo'd flag; skipping it would change behavior (e.g. --no-jna
+    // silently fetching via Jina).
+    const typoFlag = selectAnnotateTokenTarget("the aim doc --markdwn", probe);
+    expect(typoFlag.kind).toBe("flagged");
+    if (typoFlag.kind === "flagged") {
+      expect(typoFlag.flagTokens).toEqual(["--markdwn"]);
+    }
+
+    const noJinaTypo = selectAnnotateTokenTarget("--no-jna https://example.com/doc", probe);
+    expect(noJinaTypo.kind).toBe("flagged");
+    if (noJinaTypo.kind === "flagged") {
+      expect(noJinaTypo.flagTokens).toEqual(["--no-jna"]);
+    }
+  });
+
+  test("pre-split argv tokens keep quoted arguments whole", () => {
+    // "my notes.md" arrived as ONE argv token; it must be probed as one
+    // token, never re-split so that "notes.md" silently resolves.
+    const selection = selectAnnotateTokenTarget(["my notes.md", "runme"], probe);
     expect(selection.kind).toBe("none");
     if (selection.kind === "none") {
-      expect(selection.words).toEqual(["the", "aim", "doc"]);
+      expect(selection.words).toEqual(["my notes.md", "runme"]);
     }
   });
 

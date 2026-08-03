@@ -234,7 +234,8 @@ const hookFlag = hookIdx !== -1;
 if (hookFlag) args.splice(hookIdx, 1);
 if (hookFlag) gateFlag = true;
 const renderHtmlIdx = args.indexOf("--render-html");
-if (renderHtmlIdx !== -1) args.splice(renderHtmlIdx, 1);
+const renderHtmlFlag = renderHtmlIdx !== -1;
+if (renderHtmlFlag) args.splice(renderHtmlIdx, 1);
 const renderMarkdownIdx = args.indexOf("--markdown");
 const renderMarkdownFlag = renderMarkdownIdx !== -1;
 if (renderMarkdownFlag) args.splice(renderMarkdownIdx, 1);
@@ -1029,12 +1030,19 @@ if (args[0] === "sessions") {
   // words verbatim, so a non-strict invocation with several tokens probes
   // each one instead of blindly taking args[1]. Exactly one token naming an
   // existing target proceeds with it; several is an error naming every
-  // candidate (never guess); none becomes a handoff for the agent reading
-  // this output. Single-token invocations run the unchanged pipeline first,
-  // so a bare correct invocation cannot change behavior.
+  // candidate (never guess); two or more unresolvable words become a handoff
+  // for the agent reading this output. Single-token invocations run the
+  // unchanged pipeline and keep every legacy error (a lone typo'd path stays
+  // "File not found" with exit 1), and unrecognized dash-prefixed tokens
+  // disable tolerance entirely so a typo'd flag errors the way it always
+  // did instead of being silently skipped.
   const targetTokens = args.slice(1);
   const tolerantMultiToken = !strictAnnotate && targetTokens.length > 1;
-  const annotateProbe = (token: string) => probeAnnotateToken(token, projectRoot);
+  // Bare directory names only count as targets when they are the sole
+  // argument; in multi-token mode a stray word matching a directory (or `.`)
+  // must not hijack the fast path.
+  const annotateProbe = (token: string) =>
+    probeAnnotateToken(token, projectRoot, { bareDirectories: false });
 
   let resolution: Awaited<ReturnType<typeof resolveAnnotateTarget>> | null =
     tolerantMultiToken
@@ -1046,11 +1054,8 @@ if (args[0] === "sessions") {
           renderMarkdown: renderMarkdownFlag,
         });
 
-  if (
-    !strictAnnotate &&
-    (resolution === null || (!resolution.ok && resolution.notFound))
-  ) {
-    const selection = selectAnnotateTokenTarget(targetTokens.join(" "), annotateProbe);
+  if (tolerantMultiToken) {
+    const selection = selectAnnotateTokenTarget(targetTokens, annotateProbe);
     if (selection.kind === "single") {
       resolution = await resolveAnnotateTarget({
         rawFilePath: selection.candidate.value,
@@ -1060,11 +1065,14 @@ if (args[0] === "sessions") {
       });
     } else if (selection.kind === "multiple") {
       exitAnnotateStartupFailure(buildAmbiguousAnnotateArgsMessage(selection.candidates));
-    } else if (selection.words.length > 0) {
+    } else if (selection.kind === "none" && selection.words.length > 1) {
+      // Content flags only: transport flags (--gate/--json/--hook) describe
+      // this invocation's plumbing, and suggesting them would tell an agent
+      // to start a blocking interactive gate from a plain re-run.
       const handoffFlags = [
         ...(renderMarkdownFlag ? ["--markdown"] : []),
         ...(cliNoJina ? ["--no-jina"] : []),
-        ...(gateFlag && !hookFlag ? ["--gate"] : []),
+        ...(renderHtmlFlag ? ["--render-html"] : []),
       ];
       const message = buildUnresolvedAnnotateArgsMessage({
         words: selection.words,
@@ -1073,7 +1081,7 @@ if (args[0] === "sessions") {
       });
       if (jsonFlag || hookFlag) {
         // Machine-readable stdout stays reserved for decision records; the
-        // wrappers (droid, amp) forward stderr on failure.
+        // droid wrapper forwards stderr on failure.
         exitAnnotateStartupFailure(message);
       }
       // Plain mode: a non-zero exit from Claude Code's bash-substitution
@@ -1082,8 +1090,9 @@ if (args[0] === "sessions") {
       console.log(message);
       process.exit(0);
     }
-    // No interpretable words (flag-like tokens only): fall through to the
-    // pipeline's own failure below.
+    // "flagged" (unrecognized dash tokens) or a single unresolvable word:
+    // fall through to the unchanged pipeline on args[1] so its legacy
+    // failure surfaces verbatim.
   }
 
   if (resolution === null) {

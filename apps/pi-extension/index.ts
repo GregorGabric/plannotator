@@ -658,7 +658,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 			// accepted (Pi writes back via sendUserMessage, not stdout).
 			// `rawFilePath` keeps any leading `@` for the literal-@ fallback
 			// (scoped-package-style names).
-			let { filePath, rawFilePath, gate, renderMarkdown: renderMarkdownFlag, noJina } = parseAnnotateArgs(args ?? "");
+			let { filePath, rawFilePath, gate, renderHtml: renderHtmlFlag, renderMarkdown: renderMarkdownFlag, noJina } = parseAnnotateArgs(args ?? "");
 			if (!filePath) {
 				ctx.ui.notify("Usage: /plannotator-annotate <file.md | file.txt | file.html | https://... | folder/> [--markdown] [--no-jina] [--gate] [--json]", "error");
 				return;
@@ -666,11 +666,14 @@ export default function plannotator(pi: ExtensionAPI): void {
 
 			// Tolerant fallback (#1182): when the whole argument string names
 			// nothing, probe each token; exactly one existing target proceeds,
-			// several is an error, none gets an actionable message instead of
-			// "File not found: the".
+			// several is an error, several unresolvable words get an actionable
+			// message instead of "File not found: the". Bare directory names
+			// only count in the sole-arg pre-pass, and unrecognized
+			// dash-prefixed tokens disable tolerance so a typo'd flag errors
+			// the way it always did.
 			if (!annotateInputNamesExistingTarget(rawFilePath, ctx.cwd)) {
 				const selection = selectAnnotateTokenTarget(rawFilePath, (token: string) =>
-					probeAnnotateToken(token, ctx.cwd),
+					probeAnnotateToken(token, ctx.cwd, { bareDirectories: false }),
 				);
 				if (selection.kind === "single") {
 					filePath = selection.candidate.value;
@@ -678,17 +681,20 @@ export default function plannotator(pi: ExtensionAPI): void {
 				} else if (selection.kind === "multiple") {
 					ctx.ui.notify(buildAmbiguousAnnotateArgsMessage(selection.candidates), "error");
 					return;
-				} else if (selection.words.length > 1) {
+				} else if (selection.kind === "none" && selection.words.length > 1) {
+					// Content flags only; --gate is transport for this
+					// invocation, not a property of the target.
 					const tolerantFlags = [
 						...(renderMarkdownFlag ? ["--markdown"] : []),
 						...(noJina ? ["--no-jina"] : []),
-						...(gate ? ["--gate"] : []),
+						...(renderHtmlFlag ? ["--render-html"] : []),
 					];
 					ctx.ui.notify(buildUnresolvedAnnotateArgsMessage({ words: selection.words, flags: tolerantFlags }), "error");
 					return;
 				}
-				// A single unresolvable word falls through to the existing
-				// pipeline so its specific errors stay verbatim.
+				// "flagged" (unrecognized dash tokens) or a single unresolvable
+				// word falls through to the existing pipeline so its specific
+				// errors stay verbatim.
 			}
 			if (!hasPlanBrowserHtml()) {
 				ctx.ui.notify(
