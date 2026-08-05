@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode-ai/plugin";
+import type { Plugin } from "@opencode-ai/plugin";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -52,7 +52,9 @@ type EmbeddedRuntimeModule = {
   }) => Promise<OpenCodePlanReviewResult>;
 };
 
-const serverPlugin = Plugin.define({
+// `Plugin.define` is an identity function in @opencode-ai/plugin; keeping the import
+// type-only avoids shipping a runtime dependency on an exact prerelease nightly.
+const serverPlugin = {
   id: "plannotator",
   setup: async (ctx) => {
     const workflowOptions = normalizeWorkflowOptions(ctx.options as PlannotatorOpenCodeOptions);
@@ -212,7 +214,7 @@ const serverPlugin = Plugin.define({
       });
     });
   },
-});
+} satisfies Plugin.Plugin;
 
 function getPlanEdits(input: unknown): PlanEdit[] | undefined {
   if (!input || typeof input !== "object") return undefined;
