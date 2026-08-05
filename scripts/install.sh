@@ -1545,14 +1545,26 @@ copy_commands_if_present() {
 # Push-Location/pushd for the same logic; a subshell is bash's
 # equivalent — the parent shell's CWD is inherited in, and any
 # cd inside the subshell disappears when the subshell exits.
+#
+# Do NOT rely on `set -e` in here. POSIX says -e is ignored for every
+# command of an AND-OR list except the last, and every shell we tested
+# (bash 3.2.57, which is what `curl | bash` gets on macOS, plus bash 5.3,
+# dash, zsh, and ksh) carries that suppression into the subshell. Writing
+# it as `if ! ( ... ); then` suppresses -e the same way. So the four fetch
+# steps below carry an explicit `|| exit 1`: without them a failed clone
+# ran the whole block anyway, the subshell exited 0 on its trailing `if`,
+# and the installer printed "YOU'RE ALL SET!" with no skills installed.
+# Everything after the checkout stays best-effort on purpose, matching
+# install.cmd, which only checks git clone and lets every xcopy run
+# unchecked. A local cp/mkdir/rm hiccup must not be reported through the
+# "network or git error" message below.
 checkout_failed=0
 (
-    set -e
-    cd "$skills_tmp"
+    cd "$skills_tmp" || exit 1
     git clone --depth 1 --filter=blob:none --sparse \
-        "https://github.com/${REPO}.git" --branch "$latest_tag" repo 2>/dev/null
-    cd repo
-    git sparse-checkout set apps/skills apps/kiro-cli apps/opencode-plugin/commands apps/gemini/commands 2>/dev/null
+        "https://github.com/${REPO}.git" --branch "$latest_tag" repo 2>/dev/null || exit 1
+    cd repo || exit 1
+    git sparse-checkout set apps/skills apps/kiro-cli apps/opencode-plugin/commands apps/gemini/commands 2>/dev/null || exit 1
 
     # Core skills -> Claude Code (also serve as /plannotator-* slash commands)
     # and the official OpenAI shared-agent path. SOFT guard: a tag pinned
