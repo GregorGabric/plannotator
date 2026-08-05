@@ -319,7 +319,13 @@ async function runPlanReview(input: {
         htmlContent: getPlanHtml(),
         timeoutSeconds: input.timeoutSeconds,
         abortSignal: input.abortSignal,
-        // handleServerReady owns the stable, exactly-once session URL output.
+        // Intentionally empty. OpenCode 2's server-plugin context exposes no log or
+        // tui domain, and the V2 client's app.log falls through to console.error,
+        // which is the same stderr stream handleServerReady already prints to.
+        // Wiring this up would duplicate the session URL in remote mode and add a
+        // stray line locally. V1 does target client.app.log and client.tui.showToast,
+        // which are HTTP surfaces separate from stderr, so V1 never repeats itself.
+        // A real toast here needs an upstream OpenCode API that does not exist yet.
         logReady: () => {},
       });
     } catch (error) {
