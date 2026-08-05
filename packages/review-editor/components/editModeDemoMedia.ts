@@ -1,20 +1,20 @@
+/// <reference path="../../ui/globals.d.ts" />
 /**
  * Demo media for the Edit Mode announcement dialog.
  *
- * The real asset is a short screen recording (webm, kept under ~2.5MB) that
- * lands as `packages/review-editor/assets/edit-mode-demo.webm` in a follow-up
- * commit. The review app builds to a single-file HTML bundle
- * (vite-plugin-singlefile with `assetsInlineLimit` raised far above the asset
- * size in `apps/review/vite.config.ts`), so a plain static import is inlined
- * as a base64 data URI at build time. No runtime fetch, no external host.
+ * The recording is a short screen capture (VP9 webm, ~563KB, 1100x700, 18.8s)
+ * of an edit session becoming a suggestion; the poster is a matching still so
+ * the panel has a frame before playback starts. The review app builds to a
+ * single-file HTML bundle (vite-plugin-singlefile with `assetsInlineLimit`
+ * raised far above these sizes in `apps/review/vite.config.ts`), so both
+ * static imports are inlined as base64 data URIs at build time. No runtime
+ * fetch, no external host.
  *
- * Swapping the placeholder for the real recording is a one-line change plus
- * the asset file:
- *
- *   import demoVideo from '../assets/edit-mode-demo.webm';
- *   export const EDIT_MODE_DEMO_VIDEO_SRC: string | null = demoVideo;
- *
- * (`declare module '*.webm'` already exists in `packages/ui/globals.d.ts`.)
- * While this is null, the dialog renders its built-in static placeholder.
+ * Setting EDIT_MODE_DEMO_VIDEO_SRC to null falls back to the dialog's static
+ * placeholder panel (kept as a test seam and safety net).
  */
-export const EDIT_MODE_DEMO_VIDEO_SRC: string | null = null;
+import demoVideo from '../assets/edit-mode-demo.webm';
+import demoPoster from '../assets/edit-mode-demo-poster.png';
+
+export const EDIT_MODE_DEMO_VIDEO_SRC: string | null = demoVideo;
+export const EDIT_MODE_DEMO_POSTER_SRC: string = demoPoster;

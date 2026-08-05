@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Ban, MessageSquarePlus, Pencil, Send } from 'lucide-react';
-import { EDIT_MODE_DEMO_VIDEO_SRC } from './editModeDemoMedia';
+import { EDIT_MODE_DEMO_POSTER_SRC, EDIT_MODE_DEMO_VIDEO_SRC } from './editModeDemoMedia';
 
 /**
  * One-time Edit Mode (edit-to-suggest) announcement. Same big-format shell as
@@ -22,6 +22,8 @@ interface EditModeAnnouncementDialogProps {
   readonly onDismiss: () => void;
   /** Test seam; defaults to the build-time inlined recording (or null). */
   readonly demoVideoSrc?: string | null;
+  /** Test seam; defaults to the build-time inlined poster still. */
+  readonly demoPosterSrc?: string;
 }
 
 interface FactRowProps {
@@ -110,9 +112,6 @@ function EditModeDemoPlaceholder() {
             <span className="block text-success">+ const delay = baseDelay * 2 ** attempt;</span>
           </div>
         </div>
-        <div className="mt-2 text-center text-[10px] text-muted-foreground/70">
-          Demo recording coming soon
-        </div>
       </div>
     </div>
   );
@@ -123,6 +122,7 @@ export function EditModeAnnouncementDialog({
   onEnable,
   onDismiss,
   demoVideoSrc = EDIT_MODE_DEMO_VIDEO_SRC,
+  demoPosterSrc = EDIT_MODE_DEMO_POSTER_SRC,
 }: EditModeAnnouncementDialogProps) {
   const primaryActionRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -208,12 +208,15 @@ export function EditModeAnnouncementDialog({
             {demoVideoSrc ? (
               <video
                 src={demoVideoSrc}
+                poster={demoPosterSrc}
                 autoPlay
                 loop
                 muted
                 playsInline
                 aria-hidden="true"
-                className="h-full min-h-[300px] w-full rounded-xl border border-border object-cover"
+                // Recording is 1100x700; matching the aspect ratio means no
+                // cropping and no letterboxing inside the rounded frame.
+                className="aspect-[11/7] w-full rounded-xl border border-border bg-muted/20 object-cover"
               />
             ) : (
               <EditModeDemoPlaceholder />

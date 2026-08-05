@@ -11,15 +11,17 @@ interface HarnessProps {
   readonly onEnable?: () => void;
   readonly onDismiss?: () => void;
   readonly demoVideoSrc?: string | null;
+  readonly demoPosterSrc?: string;
 }
 
-function Harness({ onEnable, onDismiss, demoVideoSrc }: HarnessProps) {
+function Harness({ onEnable, onDismiss, demoVideoSrc, demoPosterSrc }: HarnessProps) {
   const [isOpen, setIsOpen] = useState(true);
 
   return (
     <EditModeAnnouncementDialog
       isOpen={isOpen}
       demoVideoSrc={demoVideoSrc}
+      demoPosterSrc={demoPosterSrc}
       onEnable={() => {
         onEnable?.();
         setIsOpen(false);
@@ -72,19 +74,32 @@ describe('EditModeAnnouncementDialog', () => {
     expect(buttonWithText('Keep it off')).toBeTruthy();
   });
 
-  test.skipIf(!hasDom)('shows the static placeholder while no demo recording is bundled', async () => {
+  test.skipIf(!hasDom)('renders the bundled demo recording by default', async () => {
     await mountDialog();
+
+    const video = document.querySelector('video');
+    expect(video).not.toBeNull();
+    expect(video?.getAttribute('src')).toBeTruthy();
+    expect(video?.getAttribute('poster')).toBeTruthy();
+    expect(document.querySelector('[data-edit-mode-demo-placeholder]')).toBeNull();
+    expect(document.body.textContent).not.toContain('coming soon');
+  });
+
+  test.skipIf(!hasDom)('falls back to the static placeholder when no recording src is given', async () => {
+    await mountDialog({ demoVideoSrc: null });
 
     expect(document.querySelector('[data-edit-mode-demo-placeholder]')).not.toBeNull();
     expect(document.querySelector('video')).toBeNull();
+    expect(document.body.textContent).not.toContain('coming soon');
   });
 
-  test.skipIf(!hasDom)('renders the demo video slot once a recording src is provided', async () => {
-    await mountDialog({ demoVideoSrc: 'data:video/webm;base64,AAAA' });
+  test.skipIf(!hasDom)('the demo video slot autoplays muted, loops, and plays inline', async () => {
+    await mountDialog({ demoVideoSrc: 'data:video/webm;base64,AAAA', demoPosterSrc: 'data:image/png;base64,BBBB' });
 
     const video = document.querySelector('video');
     expect(video).not.toBeNull();
     expect(video?.getAttribute('src')).toBe('data:video/webm;base64,AAAA');
+    expect(video?.getAttribute('poster')).toBe('data:image/png;base64,BBBB');
     expect(video?.hasAttribute('autoplay')).toBe(true);
     expect(video?.hasAttribute('loop')).toBe(true);
     expect(video?.hasAttribute('playsinline')).toBe(true);
