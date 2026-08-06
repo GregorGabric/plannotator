@@ -14,6 +14,8 @@ import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea'
 import { useOverlayViewport } from '@plannotator/ui/hooks/useOverlayViewport';
 import { FileHeader } from './FileHeader';
 import { FileCommentBanner } from './FileCommentBanner';
+import { OversizedFileNotice } from './OversizedFileNotice';
+import { isOversizedReviewStubPatch } from '@plannotator/shared/diff-paths';
 import { isFileScopedAnnotation, lineRangeForAnnotation } from '../utils/annotationScope';
 import { lineAnnotationMetadata } from '../utils/annotationDisplay';
 import type { AnnotationScrollTarget } from '../types';
@@ -680,6 +682,10 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     [annotations],
   );
 
+  // Files over the review size cap arrive as a contents-free stub, which
+  // renders as an empty body. Say so instead of showing a bare header.
+  const isOversizedStub = useMemo(() => isOversizedReviewStubPatch(patch), [patch]);
+
   // Replay a selected line/range comment's anchor as the controlled highlight so
   // clicking it (inline card or sidebar) lights up its lines. A live compose
   // selection (pendingSelection) wins while the toolbar is open; file-scoped
@@ -725,6 +731,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         overflowX="scroll"
         onViewportReady={onViewportReady}
       >
+        {isOversizedStub && <OversizedFileNotice />}
         <FileCommentBanner
           comments={fileComments}
           selectedAnnotationId={selectedAnnotationId}
