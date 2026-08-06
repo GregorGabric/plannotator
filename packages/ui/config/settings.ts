@@ -12,6 +12,48 @@
 import type { DiffLineBgIntensity } from '@plannotator/core/config-types';
 import { storage } from '../utils/storage';
 import { generateIdentity } from '../utils/generateIdentity';
+import {
+  getDefaultThemePair,
+  normalizeThemePair,
+  seedThemePair,
+  type ThemePair,
+} from '../utils/themeRegistry';
+import { parseThemeMode } from '../components/themeModes';
+
+/** Legacy single-palette key, still written so a downgrade renders styled. */
+const COLOR_THEME_COOKIE = 'plannotator-color-theme';
+const MODE_COOKIE = 'plannotator-theme';
+const LIGHT_THEME_COOKIE = 'plannotator-light-theme';
+const DARK_THEME_COOKIE = 'plannotator-dark-theme';
+
+/**
+ * Persist a pair to its cookies without touching the server.
+ *
+ * ThemeProvider calls this once it has resolved a pair, because a pair
+ * migrated from the legacy single-palette key is DERIVED until it is written:
+ * the provider then mirrors the active palette back onto that legacy key, so
+ * leaving the halves underived would lose the migration on the next load.
+ */
+export function writeThemePairCookies(pair: ThemePair): void {
+  storage.setItem(MODE_COOKIE, pair.mode);
+  storage.setItem(LIGHT_THEME_COOKIE, pair.light);
+  storage.setItem(DARK_THEME_COOKIE, pair.dark);
+}
+
+/**
+ * Read the persisted pair, seeding either half from the single palette older
+ * releases stored. Returns undefined only when the user has never expressed a
+ * theme preference at all — ThemeProvider reads that as "my props decide".
+ */
+export function readThemePairCookies(): ThemePair | undefined {
+  const mode = storage.getItem(MODE_COOKIE);
+  const light = storage.getItem(LIGHT_THEME_COOKIE);
+  const dark = storage.getItem(DARK_THEME_COOKIE);
+  const legacy = storage.getItem(COLOR_THEME_COOKIE);
+  if (!mode && !light && !dark && !legacy) return undefined;
+  const seeded = seedThemePair(legacy, parseThemeMode(mode, getDefaultThemePair().mode));
+  return normalizeThemePair({ mode, light: light ?? seeded.light, dark: dark ?? seeded.dark }, seeded);
+}
 
 const DIFF_LINE_BG_INTENSITY_VALUES = ['subtle', 'normal', 'strong'] as const;
 function isDiffLineBgIntensity(v: unknown): v is DiffLineBgIntensity {
@@ -38,6 +80,35 @@ export const SETTINGS = {
     fromServer: (sc: Record<string, unknown>) =>
       typeof sc.displayName === 'string' && sc.displayName ? sc.displayName : undefined,
     toServer: (v: string) => ({ displayName: v }),
+  },
+
+  /**
+   * Appearance: the mode plus the palette assigned to each half of the pair.
+   * Stored as one value because the three fields are only meaningful together —
+   * `mode: system` picks between `light` and `dark` at render time.
+   *
+   * Cookies: `plannotator-theme` (mode) keeps its meaning, joined by
+   * `plannotator-light-theme` / `plannotator-dark-theme`. A user arriving from
+   * an older release has neither half, so the pair is seeded from the single
+   * `plannotator-color-theme` palette they were on (ThemeProvider keeps writing
+   * that key, so a downgrade still finds a palette and never renders unstyled).
+   *
+   * Server: round-trips through `theme` in ~/.plannotator/config.json exactly
+   * like `diffOptions` does, so the choice survives the random port each hook
+   * invocation runs on.
+   */
+  themePair: {
+    defaultValue: () => getDefaultThemePair(),
+    fromCookie: () => readThemePairCookies(),
+    toCookie: (v: ThemePair) => writeThemePairCookies(v),
+    serverKey: 'theme',
+    fromServer: (sc: Record<string, unknown>) => {
+      const theme = sc.theme as Record<string, unknown> | undefined;
+      if (!theme || typeof theme !== 'object') return undefined;
+      if (theme.mode === undefined && theme.light === undefined && theme.dark === undefined) return undefined;
+      return normalizeThemePair(theme, getDefaultThemePair());
+    },
+    toServer: (v: ThemePair) => ({ theme: { mode: v.mode, light: v.light, dark: v.dark } }),
   },
 
   gridEnabled: {

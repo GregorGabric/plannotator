@@ -1,12 +1,21 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { configStore } from '../config/configStore';
+import { readThemePairCookies, writeThemePairCookies } from '../config/settings';
+import { useConfigValue } from '../config/useConfig';
 import { storage } from '../utils/storage';
 import {
   BUILT_IN_THEMES,
-  normalizeThemeMode,
+  getUnsupportedMode,
+  resolvePairTheme,
   resolveThemeMode,
+  seedThemePair,
+  setDefaultThemePair,
+  themeSupportsHalf,
+  type ThemeHalf,
   type ThemeInfo,
+  type ThemePair,
 } from '../utils/themeRegistry';
-import { parseThemeMode, type Mode } from './themeModes';
+import type { Mode } from './themeModes';
 
 // Kept here because published consumers already import Mode from ThemeProvider.
 export type { Mode } from './themeModes';
@@ -19,9 +28,13 @@ type ThemeProviderState = {
   setMode: (mode: Mode) => void;
   preferredMode: 'dark' | 'light';
   resolvedMode: 'dark' | 'light';
-  // Color theme (palette)
+  // Color theme (the palette the current mode renders — pair[preferredMode])
   colorTheme: string;
   setColorTheme: (theme: string) => void;
+  // The pair itself: one palette per half, assignable independently
+  lightTheme: string;
+  darkTheme: string;
+  setHalfTheme: (half: ThemeHalf, theme: string) => void;
   availableThemes: ThemeInfo[];
 };
 
@@ -34,6 +47,9 @@ const ThemeProviderContext = createContext<ThemeProviderState>({
   resolvedMode: 'dark',
   colorTheme: 'plannotator',
   setColorTheme: () => null,
+  lightTheme: 'plannotator',
+  darkTheme: 'plannotator',
+  setHalfTheme: () => null,
   availableThemes: BUILT_IN_THEMES,
 });
 
@@ -74,22 +90,33 @@ export function ThemeProvider({
   storageKey = 'plannotator-theme',
   colorThemeStorageKey = 'plannotator-color-theme',
 }: ThemeProviderProps) {
-  const [colorTheme, setColorThemeState] = useState<string>(
-    () => storage.getItem(colorThemeStorageKey) || defaultColorTheme
-  );
-
-  const [mode, setModeState] = useState<Mode>(() => {
-    const storedMode = parseThemeMode(storage.getItem(storageKey), defaultTheme);
-    return normalizeThemeMode(colorTheme, storedMode);
+  // The props are the fallback for someone with no persisted preference. The
+  // config store is a singleton that may already have resolved its own default,
+  // so ask storage directly instead of trusting the resolved value; the seed is
+  // handed to the store below, once mounting is done.
+  const [propsSeed] = useState<ThemePair | null>(() => {
+    const fallback = seedThemePair(defaultColorTheme, defaultTheme);
+    setDefaultThemePair(fallback);
+    return readThemePairCookies() === undefined ? fallback : null;
   });
-  const colorThemeRef = useRef(colorTheme);
-  const modeRef = useRef(mode);
+  const pendingSeed = useRef(propsSeed);
+
+  const storePair = useConfigValue('themePair');
+  const pair = pendingSeed.current ?? storePair;
+  const mode = pair.mode;
+
+  useEffect(() => {
+    if (!pendingSeed.current) return;
+    configStore.set('themePair', pendingSeed.current);
+    pendingSeed.current = null;
+  }, []);
 
   const [systemIsLight, setSystemIsLight] = useState(getSystemIsLight);
 
-  // Keep the OS-resolved preference separate from the mode the palette can render.
+  // Keep the OS-resolved preference separate from the half it selects.
   const preferredMode: 'dark' | 'light' =
     mode === 'system' ? (systemIsLight ? 'light' : 'dark') : mode;
+  const colorTheme = resolvePairTheme(pair, preferredMode);
   const resolvedMode = resolveThemeMode(colorTheme, preferredMode);
 
   // [P3 fix] Apply theme class synchronously during initialization to prevent
@@ -128,28 +155,43 @@ export function ThemeProvider({
   }, [mode]);
 
   const setMode = useCallback((newMode: Mode) => {
-    const normalizedMode = normalizeThemeMode(colorThemeRef.current, newMode);
-    modeRef.current = normalizedMode;
-    storage.setItem(storageKey, normalizedMode);
-    setModeState(normalizedMode);
-  }, [storageKey]);
+    configStore.set('themePair', { ...configStore.get('themePair'), mode: newMode });
+  }, []);
 
+  /** Assign one palette to one half of the pair. */
+  const setHalfTheme = useCallback((half: ThemeHalf, newTheme: string) => {
+    if (!themeSupportsHalf(newTheme, half)) return;
+    configStore.set('themePair', { ...configStore.get('themePair'), [half]: newTheme });
+  }, []);
+
+  /**
+   * Legacy single-palette API. A palette that renders both modes takes over the
+   * whole pair; a mode-restricted one takes the half it supports and pins the
+   * mode there, so a caller that picks Dracula still sees Dracula.
+   */
   const setColorTheme = useCallback((newTheme: string) => {
-    const normalizedMode = normalizeThemeMode(newTheme, modeRef.current);
-    colorThemeRef.current = newTheme;
-    storage.setItem(colorThemeStorageKey, newTheme);
-    if (normalizedMode !== modeRef.current) {
-      modeRef.current = normalizedMode;
-      storage.setItem(storageKey, normalizedMode);
-      setModeState(normalizedMode);
+    const current = configStore.get('themePair');
+    const unsupported = getUnsupportedMode(newTheme);
+    if (!unsupported) {
+      configStore.set('themePair', { ...current, light: newTheme, dark: newTheme });
+      return;
     }
-    setColorThemeState(newTheme);
-  }, [colorThemeStorageKey, storageKey]);
+    const half: ThemeHalf = unsupported === 'light' ? 'dark' : 'light';
+    configStore.set('themePair', { ...current, [half]: newTheme, mode: half });
+  }, []);
 
-  // Repair invalid or incompatible values left by older versions at the boundary.
+  // Mirror the resolved choice onto the keys older releases read, so a
+  // downgrade lands on the user's palette instead of an unstyled first frame.
+  // The pair itself is written first: a pair migrated from the legacy
+  // single-palette key is derived, and the mirror below overwrites the key it
+  // was derived from.
   useEffect(() => {
+    writeThemePairCookies(pair);
+    if (storage.getItem(colorThemeStorageKey) !== colorTheme) {
+      storage.setItem(colorThemeStorageKey, colorTheme);
+    }
     if (storage.getItem(storageKey) !== mode) storage.setItem(storageKey, mode);
-  }, [mode, storageKey]);
+  }, [pair, colorTheme, colorThemeStorageKey, mode, storageKey]);
 
   const value = useMemo<ThemeProviderState>(() => ({
     theme: mode,
@@ -160,8 +202,11 @@ export function ThemeProvider({
     resolvedMode,
     colorTheme,
     setColorTheme,
+    lightTheme: pair.light,
+    darkTheme: pair.dark,
+    setHalfTheme,
     availableThemes: BUILT_IN_THEMES,
-  }), [mode, preferredMode, resolvedMode, colorTheme, setMode, setColorTheme]);
+  }), [mode, preferredMode, resolvedMode, colorTheme, pair.light, pair.dark, setMode, setColorTheme, setHalfTheme]);
 
   return (
     <ThemeProviderContext.Provider value={value}>

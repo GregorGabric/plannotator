@@ -1,8 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { configStore } from '../config/configStore';
 import { resetStorageBackend, setStorageBackend } from '../utils/storage';
-import { BUILT_IN_THEMES } from '../utils/themeRegistry';
+import {
+  BUILT_IN_THEMES,
+  DEFAULT_COLOR_THEME,
+  normalizeThemePair,
+  resetDefaultThemePair,
+  seedThemePair,
+  themesForHalf,
+  themeSupportsHalf,
+} from '../utils/themeRegistry';
 import { THEME_MODES, isThemeMode, parseThemeMode } from './themeModes';
 import { ThemeProvider, useTheme } from './ThemeProvider';
 import { ThemeTab } from './ThemeTab';
@@ -23,6 +32,43 @@ function Probe() {
 function themeState(): ReturnType<typeof useTheme> {
   if (!currentTheme) throw new Error('ThemeProvider is not mounted');
   return currentTheme;
+}
+
+/** Every palette card in the grid — the only buttons carrying color swatches. */
+function paletteButtons(): HTMLButtonElement[] {
+  return Array.from(host!.querySelectorAll('button')).filter(button =>
+    button.querySelector('.rounded-full')
+  );
+}
+
+function paletteNames(): string[] {
+  return paletteButtons().map(button => button.textContent?.trim() ?? '');
+}
+
+function palette(name: string): HTMLButtonElement {
+  const found = paletteButtons().find(button => button.textContent?.trim() === name);
+  if (!found) throw new Error(`palette "${name}" is not in the grid`);
+  return found;
+}
+
+function button(label: string): HTMLButtonElement {
+  const found = Array.from(host!.querySelectorAll('button')).find(
+    candidate => candidate.textContent?.trim() === label
+  );
+  if (!found) throw new Error(`button "${label}" did not render`);
+  return found;
+}
+
+function summaryButton(prefix: string): HTMLButtonElement {
+  const found = Array.from(host!.querySelectorAll('button')).find(candidate =>
+    candidate.textContent?.trim().startsWith(prefix)
+  );
+  if (!found) throw new Error(`summary button "${prefix}" did not render`);
+  return found;
+}
+
+function clickButton(target: HTMLButtonElement): void {
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
 }
 
 function installMatchMedia(initialMatches: boolean) {
@@ -67,6 +113,10 @@ function installMatchMedia(initialMatches: boolean) {
 }
 
 async function mountTheme(children?: React.ReactNode): Promise<void> {
+  // The config store is a process-wide singleton: re-read it from the storage
+  // backend this test installed so seeded cookies (not a previous test's
+  // values) decide the pair.
+  configStore.loadFromBackend();
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -110,6 +160,80 @@ describe('theme registry', () => {
     expect(theme.modeSupport).toBe('both');
     expect(theme.syntaxHighlighting).toBe(true);
     expect(theme.colors.dark.background).not.toBe(theme.colors.light.background);
+  });
+
+  test('offers each palette only for the half it can render', () => {
+    const light = themesForHalf(BUILT_IN_THEMES, 'light').map(({ id }) => id);
+    const dark = themesForHalf(BUILT_IN_THEMES, 'dark').map(({ id }) => id);
+
+    expect(light).toContain('kanagawa-lotus');
+    expect(light).not.toContain('kanagawa-wave');
+    expect(dark).toContain('kanagawa-wave');
+    expect(dark).not.toContain('kanagawa-lotus');
+
+    // A `both` palette — the colorblind theme included — belongs to each half.
+    for (const id of ['rose-pine', 'colorblind']) {
+      expect(light).toContain(id);
+      expect(dark).toContain(id);
+      expect(themeSupportsHalf(id, 'light')).toBe(true);
+      expect(themeSupportsHalf(id, 'dark')).toBe(true);
+    }
+  });
+
+  test('seeds both halves from the single palette older releases stored', () => {
+    // A palette that renders both modes takes over the whole pair.
+    expect(seedThemePair('rose-pine', 'system')).toEqual({
+      mode: 'system',
+      light: 'rose-pine',
+      dark: 'rose-pine',
+    });
+
+    // A mode-restricted one keeps its half; the other half falls back.
+    expect(seedThemePair('kanagawa-wave', 'dark')).toEqual({
+      mode: 'dark',
+      light: DEFAULT_COLOR_THEME,
+      dark: 'kanagawa-wave',
+    });
+    expect(seedThemePair('kanagawa-lotus', 'light')).toEqual({
+      mode: 'light',
+      light: 'kanagawa-lotus',
+      dark: DEFAULT_COLOR_THEME,
+    });
+
+    // Nothing stored, or a palette this build does not ship.
+    expect(seedThemePair(null, 'system')).toEqual({
+      mode: 'system',
+      light: DEFAULT_COLOR_THEME,
+      dark: DEFAULT_COLOR_THEME,
+    });
+    expect(seedThemePair('gone-in-this-build', 'dark')).toEqual({
+      mode: 'dark',
+      light: DEFAULT_COLOR_THEME,
+      dark: DEFAULT_COLOR_THEME,
+    });
+  });
+
+  test('repairs a pair whose halves hold unusable palettes', () => {
+    const fallback = { mode: 'system', light: 'rose-pine', dark: 'kanagawa-wave' } as const;
+
+    expect(normalizeThemePair({ mode: 'light', light: 'tinacious', dark: 'vesper' }, fallback)).toEqual({
+      mode: 'light',
+      light: 'tinacious',
+      dark: 'vesper',
+    });
+
+    // A dark-only palette can never occupy the light half, and vice versa.
+    expect(normalizeThemePair({ mode: 'sepia', light: 'vesper', dark: 'tinacious' }, fallback)).toEqual({
+      mode: 'system',
+      light: 'rose-pine',
+      dark: 'kanagawa-wave',
+    });
+
+    expect(normalizeThemePair(undefined)).toEqual({
+      mode: 'dark',
+      light: DEFAULT_COLOR_THEME,
+      dark: DEFAULT_COLOR_THEME,
+    });
   });
 });
 
@@ -168,78 +292,126 @@ describe('ThemeProvider', () => {
     expect(themeState().resolvedMode).toBe('dark');
   });
 
-  test.skipIf(!hasDom)('keeps System coherent and normalizes explicit modes for constrained palettes', async () => {
+  test.skipIf(!hasDom)('flips between the two halves of the pair when the OS scheme changes', async () => {
     stored.set('plannotator-theme', 'system');
-    stored.set('plannotator-color-theme', 'andromeeda');
+    stored.set('plannotator-light-theme', 'kanagawa-lotus');
+    stored.set('plannotator-dark-theme', 'kanagawa-wave');
     const media = installMatchMedia(true);
 
     await mountTheme();
-    expect(themeState().mode).toBe('system');
-    expect(themeState().preferredMode).toBe('light');
-    expect(themeState().resolvedMode).toBe('dark');
-    expect(document.documentElement.classList.contains('theme-andromeeda')).toBe(true);
-    expect(document.documentElement.classList.contains('light')).toBe(false);
+    expect(themeState().lightTheme).toBe('kanagawa-lotus');
+    expect(themeState().darkTheme).toBe('kanagawa-wave');
+    expect(themeState().colorTheme).toBe('kanagawa-lotus');
+    expect(themeState().resolvedMode).toBe('light');
+    expect(document.documentElement.classList.contains('theme-kanagawa-lotus')).toBe(true);
+    expect(document.documentElement.classList.contains('light')).toBe(true);
 
     await act(async () => media.setMatches(false));
-    expect(themeState().mode).toBe('system');
-    expect(themeState().preferredMode).toBe('dark');
+    expect(themeState().colorTheme).toBe('kanagawa-wave');
     expect(themeState().resolvedMode).toBe('dark');
+    expect(document.documentElement.classList.contains('theme-kanagawa-wave')).toBe(true);
+    expect(document.documentElement.classList.contains('light')).toBe(false);
 
-    await act(async () => themeState().setColorTheme('kanagawa-lotus'));
-    expect(themeState().mode).toBe('system');
-    expect(themeState().resolvedMode).toBe('light');
-    expect(stored.get('plannotator-theme')).toBe('system');
-
-    await act(async () => themeState().setMode('dark'));
-    expect(themeState().mode).toBe('light');
-    expect(themeState().resolvedMode).toBe('light');
-    expect(stored.get('plannotator-theme')).toBe('light');
-
-    await act(async () => themeState().setColorTheme('andromeeda'));
-    expect(themeState().mode).toBe('dark');
-    expect(themeState().resolvedMode).toBe('dark');
-    expect(stored.get('plannotator-theme')).toBe('dark');
-
-    await act(async () => {
-      themeState().setColorTheme('plannotator');
-      themeState().setMode('light');
-      themeState().setColorTheme('andromeeda');
-      themeState().setMode('light');
-    });
-    expect(themeState().mode).toBe('dark');
-    expect(themeState().resolvedMode).toBe('dark');
-    expect(stored.get('plannotator-theme')).toBe('dark');
+    // Older releases read the single-palette key, so it keeps tracking the
+    // palette actually on screen — a downgrade never lands unstyled.
+    expect(stored.get('plannotator-color-theme')).toBe('kanagawa-wave');
   });
 
-  test.skipIf(!hasDom)('repairs invalid persisted modes before exposing state', async () => {
+  test.skipIf(!hasDom)('migrates a stored dark-only palette into the dark half only', async () => {
+    stored.set('plannotator-theme', 'system');
+    stored.set('plannotator-color-theme', 'kanagawa-wave');
+    installMatchMedia(true);
+
+    await mountTheme();
+    expect(themeState().darkTheme).toBe('kanagawa-wave');
+    expect(themeState().lightTheme).toBe(DEFAULT_COLOR_THEME);
+    // The OS is light, so the migrated pair renders its light half — the mode
+    // is no longer coerced to keep a dark-only palette on screen.
+    expect(themeState().mode).toBe('system');
+    expect(themeState().preferredMode).toBe('light');
+    expect(themeState().resolvedMode).toBe('light');
+    expect(themeState().colorTheme).toBe(DEFAULT_COLOR_THEME);
+
+    // The migrated pair is persisted on arrival — the legacy key it was
+    // derived from is immediately overwritten with the active palette.
+    expect(stored.get('plannotator-light-theme')).toBe(DEFAULT_COLOR_THEME);
+    expect(stored.get('plannotator-dark-theme')).toBe('kanagawa-wave');
+    expect(stored.get('plannotator-color-theme')).toBe(DEFAULT_COLOR_THEME);
+  });
+
+  test.skipIf(!hasDom)('keeps every mode selectable while a dark-only palette owns the dark half', async () => {
+    stored.set('plannotator-theme', 'dark');
+    stored.set('plannotator-light-theme', 'rose-pine');
+    stored.set('plannotator-dark-theme', 'dracula');
+    installMatchMedia(false);
+
+    await mountTheme(<ThemeTab />);
+    expect(themeState().colorTheme).toBe('dracula');
+
+    const modeButtons = Array.from(host!.querySelectorAll('button')).filter(button =>
+      ['Light', 'Dark', 'System'].includes(button.textContent?.trim() ?? '')
+    );
+    expect(modeButtons.length).toBe(3);
+    expect(modeButtons.some(button => button.disabled)).toBe(false);
+
+    await act(async () => themeState().setMode('light'));
+    expect(themeState().mode).toBe('light');
+    expect(themeState().colorTheme).toBe('rose-pine');
+    expect(themeState().resolvedMode).toBe('light');
+    expect(stored.get('plannotator-theme')).toBe('light');
+    expect(stored.get('plannotator-dark-theme')).toBe('dracula');
+  });
+
+  test.skipIf(!hasDom)('repairs invalid persisted values before exposing state', async () => {
     stored.set('plannotator-theme', 'sepia');
+    stored.set('plannotator-light-theme', 'dracula');
+    stored.set('plannotator-dark-theme', 'gone-in-this-build');
     stored.set('plannotator-color-theme', 'andromeeda');
     installMatchMedia(true);
 
     await mountTheme();
     expect(themeState().mode).toBe('dark');
+    expect(themeState().lightTheme).toBe(DEFAULT_COLOR_THEME);
+    expect(themeState().darkTheme).toBe('andromeeda');
     expect(themeState().resolvedMode).toBe('dark');
     expect(stored.get('plannotator-theme')).toBe('dark');
   });
 
-  test.skipIf(!hasDom)('previews a constrained palette using the mode it actually renders', async () => {
-    stored.set('plannotator-theme', 'system');
-    stored.set('plannotator-color-theme', 'tinacious');
-    installMatchMedia(false);
+  test.skipIf(!hasDom)('assigns one half at a time from its own grid', async () => {
+    stored.set('plannotator-theme', 'light');
+    stored.set('plannotator-light-theme', DEFAULT_COLOR_THEME);
+    stored.set('plannotator-dark-theme', DEFAULT_COLOR_THEME);
+    installMatchMedia(true);
 
     await mountTheme(<ThemeTab />);
-    expect(themeState().preferredMode).toBe('dark');
-    expect(themeState().resolvedMode).toBe('light');
 
-    const paletteButton = Array.from(host!.querySelectorAll('button')).find(button =>
-      button.textContent?.includes('Tinacious')
-    );
-    if (!paletteButton) throw new Error('Tinacious palette preview did not render');
-    const swatches = paletteButton.querySelectorAll<HTMLElement>('.rounded-full');
-    const palette = BUILT_IN_THEMES.find(theme => theme.id === 'tinacious');
-    if (!palette) throw new Error('Tinacious palette is not registered');
+    // The grid opens on the half the user is actually looking at.
+    expect(paletteNames()).toContain('Kanagawa Lotus');
+    expect(paletteNames()).not.toContain('Kanagawa Wave');
 
-    expect(swatches[3]?.style.backgroundColor).toBe(palette.colors.light.background);
-    expect(swatches[3]?.style.backgroundColor).not.toBe(palette.colors.dark.background);
+    await act(async () => clickButton(palette('Tinacious')));
+    expect(themeState().lightTheme).toBe('tinacious');
+    expect(themeState().colorTheme).toBe('tinacious');
+
+    const swatches = palette('Tinacious').querySelectorAll<HTMLElement>('.rounded-full');
+    const tinacious = BUILT_IN_THEMES.find(theme => theme.id === 'tinacious');
+    if (!tinacious) throw new Error('Tinacious palette is not registered');
+    expect(swatches[3]?.style.backgroundColor).toBe(tinacious.colors.light.background);
+
+    // Assigning the other half leaves the visible palette alone.
+    await act(async () => clickButton(button('Dark theme')));
+    expect(paletteNames()).toContain('Kanagawa Wave');
+    expect(paletteNames()).not.toContain('Kanagawa Lotus');
+
+    await act(async () => clickButton(palette('Dracula')));
+    expect(themeState().darkTheme).toBe('dracula');
+    expect(themeState().mode).toBe('light');
+    expect(themeState().colorTheme).toBe('tinacious');
+
+    // The summary names both halves and jumps the grid back to the light one.
+    expect(host!.textContent).toContain('Tinacious');
+    expect(host!.textContent).toContain('Dracula');
+    await act(async () => clickButton(summaryButton('Light:')));
+    expect(paletteNames()).toContain('Kanagawa Lotus');
   });
 });
