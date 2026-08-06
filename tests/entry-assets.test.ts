@@ -24,9 +24,32 @@ describe('review entry assets', () => {
     expect(theme).toContain("--font-sans: 'Inter Variable'");
     expect(theme).toContain("--font-mono: 'Geist Mono Variable'");
 
+    // Syntax highlighting is the bundled Shiki instance @pierre/diffs already
+    // runs (JavaScript regex engine, no WASM, no network). A CDN-loaded
+    // highlighter or a runtime wasm fetch would break the single-file builds.
     const codeBlock = read('packages/ui/components/blocks/CodeBlock.tsx');
-    expect(codeBlock).toContain("import hljs from 'highlight.js';");
-    expect(codeBlock).toContain("import 'highlight.js/styles/github-dark.css';");
+    expect(codeBlock).toContain("from '../../utils/codeHighlight'");
+
+    const highlighter = read('packages/ui/utils/codeHighlight.ts');
+    expect(highlighter).toContain("import('@pierre/diffs')");
+    expect(highlighter).toContain("preferredHighlighter: 'shiki-js'");
+    expect(highlighter).not.toMatch(/https?:\/\//);
+  });
+
+  test('nothing depends on highlight.js any more', () => {
+    for (const manifest of ['packages/ui/package.json', 'packages/review-editor/package.json']) {
+      expect(read(manifest)).not.toContain('highlight.js');
+    }
+  });
+
+  test('the dead Oniguruma WASM is aliased out of every bundled app', () => {
+    for (const config of [
+      'apps/review/vite.config.ts',
+      'apps/hook/vite.config.ts',
+      'apps/portal/vite.config.ts',
+    ]) {
+      expect(read(config)).toContain("'shiki/wasm': path.resolve(");
+    }
   });
 });
 

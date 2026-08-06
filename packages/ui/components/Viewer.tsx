@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import hljs from 'highlight.js';
 import { AnnotationType, type Block, type Annotation, type EditorMode, type InputMethod, type ImageAttachment, type ActionsLabelMode } from '../types';
+import { applyHighlight, codeBlockClassName } from '../utils/codeHighlight';
+import { useFenceTheme } from '../hooks/useFenceTheme';
 import { computeListIndices, groupBlocks, type Frontmatter } from '../utils/parser';
 import { buildHeadingSlugMap } from '../utils/slugify';
 import { copyTextToClipboard } from '../utils/clipboard';
@@ -238,6 +239,11 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const [locationHash, setLocationHash] = useState(() => window.location.hash);
   const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
+  // Read through a ref: only the imperative removeHighlight path below needs
+  // it, and CodeBlock re-highlights itself on palette change.
+  const fenceTheme = useFenceTheme();
+  const fenceThemeRef = useRef(fenceTheme);
+  fenceThemeRef.current = fenceTheme;
 
   const handleCopyPlan = async () => {
     if (await copyTextToClipboard(markdown)) {
@@ -628,13 +634,9 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
           el.remove();
           codeEl.textContent = plainText;
           const block = blocks.find(b => b.id === codeEl.closest('[data-block-id]')?.getAttribute('data-block-id'));
-          codeEl.removeAttribute('data-highlighted');
-          codeEl.className = `hljs font-mono${block?.language ? ` language-${block.language}` : ''}`;
-          // Skip highlighting language-less fences so highlight.js doesn't
-          // auto-detect a language and color plain text.
-          if (block?.language) {
-            hljs.highlightElement(codeEl);
-          }
+          codeEl.className = codeBlockClassName(block?.language);
+          // Language-less fences stay plain (#1212) — applyHighlight never guesses.
+          applyHighlight(codeEl, plainText, block?.language, fenceThemeRef.current);
         }
       });
 
