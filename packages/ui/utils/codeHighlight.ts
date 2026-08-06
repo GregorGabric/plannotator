@@ -194,6 +194,39 @@ export function ensureHighlight(lang: string, theme: string): Promise<boolean> {
 const renderSeq = new WeakMap<HTMLElement, number>();
 let seqCounter = 0;
 
+type HighlightSwapListener = (el: HTMLElement) => void;
+const swapListeners = new Set<HighlightSwapListener>();
+
+/**
+ * Observe every write `applyHighlight` makes to a `<code>` element.
+ *
+ * Each write REPLACES the element's children, which destroys anything the
+ * annotation layer wrapped inside it — a whole-fence `<mark data-bind-id>` is
+ * gone the moment the palette changes or the first async grammar attach lands.
+ * Listeners run SYNCHRONOUSLY, immediately after the write, so re-applying a
+ * mark from a listener is ordered by construction rather than by a timer: a
+ * restore that ran before the swap is re-established in the same task the swap
+ * happened in, and a restore that runs after it finds the mark already there.
+ *
+ * Returns an unsubscribe function.
+ */
+export function onCodeHighlightSwap(listener: HighlightSwapListener): () => void {
+  swapListeners.add(listener);
+  return () => {
+    swapListeners.delete(listener);
+  };
+}
+
+function notifyHighlightSwap(el: HTMLElement): void {
+  if (swapListeners.size === 0) return;
+  for (const listener of Array.from(swapListeners)) {
+    // A misbehaving observer must never take syntax highlighting down with it.
+    try {
+      listener(el);
+    } catch {}
+  }
+}
+
 /**
  * Drop-in replacement for `hljs.highlightElement(el)`.
  *
@@ -215,20 +248,25 @@ export function applyHighlight(
   // #1212: a fence with no language stays plain. Never guess.
   if (!lang) {
     el.textContent = code;
+    notifyHighlightSwap(el);
     return;
   }
 
   const immediate = highlightToHtml(code, lang, theme);
   if (immediate !== null) {
     el.innerHTML = immediate;
+    notifyHighlightSwap(el);
     return;
   }
 
   el.textContent = code;
+  notifyHighlightSwap(el);
   void ensureHighlight(lang, theme).then((ok) => {
     if (!ok || renderSeq.get(el) !== seq || !el.isConnected) return;
     const html = highlightToHtml(code, lang, theme);
-    if (html !== null) el.innerHTML = html;
+    if (html === null) return;
+    el.innerHTML = html;
+    notifyHighlightSwap(el);
   });
 }
 
@@ -239,4 +277,17 @@ export function __resetCodeHighlightCacheForTests(): void {
   inflight.clear();
   pierre = undefined;
   pierreLoad = undefined;
+}
+
+/**
+ * Test seam: stand in for `@pierre/diffs` so a test can drive real swaps
+ * (including WHEN the async one lands) without loading Shiki's full bundle.
+ * Pass `undefined` to go back to the real dynamic import.
+ */
+export function __setCodeHighlightModuleForTests(mod: PierreModule | undefined): void {
+  ready.clear();
+  rejected.clear();
+  inflight.clear();
+  pierre = mod;
+  pierreLoad = mod ? Promise.resolve(mod) : undefined;
 }
