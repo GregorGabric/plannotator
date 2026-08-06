@@ -24,17 +24,11 @@
  * DOM-gated (DOM_TESTS=1) and registered in .github/workflows/test.yml's
  * "Run UI seam-contract + DOM tests" step.
  */
-import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import React from 'react';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import {
-  DEFAULT_THEMES,
-  disposeHighlighter,
-  getFiletypeFromFileName,
-  getHighlighterOptions,
-  preloadHighlighter,
-} from '@pierre/diffs';
+import { getSingularPatch, processFile } from '@pierre/diffs';
 
 mock.module('../workerPool', () => ({
   useIsWorkerPoolReadyOrDisabled: () => true,
@@ -69,7 +63,10 @@ const PATCH = [
   'index 0000000..1111111 100644',
   '--- a/calc.ts',
   '+++ b/calc.ts',
-  '@@ -61,7 +61,7 @@',
+  // `const head58 = 58;` really is line 59 of both contents, so the header,
+  // the context lines and the files agree. Pierre realigns a misaligned header
+  // rather than rejecting it, which makes a wrong one a silent trap.
+  '@@ -59,7 +59,7 @@',
   ' const head58 = 58;',
   ' const head59 = 59;',
   ' export function add(a: number, b: number) {',
@@ -99,6 +96,27 @@ function shadowHTML(host: HTMLElement): string {
 
 function countExpandButtons(host: HTMLElement): number {
   return (shadowHTML(host).match(/data-expand-button/g) ?? []).length;
+}
+
+/**
+ * What Pierre actually painted, for when a wait gives up.
+ *
+ * A bare "expected true, received false" from a render wait says nothing about
+ * WHICH of the several things upstream of the pixels went wrong, and this test
+ * has already cost one CI round trip to a mystery. Printed only on failure.
+ */
+function renderDiagnostics(host: HTMLElement | null, label: string): string {
+  if (host == null) return `${label}: no host`;
+  const html = shadowHTML(host);
+  const count = (needle: string) => (html.match(new RegExp(needle, 'g')) ?? []).length;
+  return [
+    `${label}: shadowHTML ${html.length} chars`,
+    `  diffs-container=${count('diffs-container')}`,
+    `  data-separator=${count('data-separator')}`,
+    `  data-expand-button=${count('data-expand-button')}`,
+    `  data-line-number=${count('data-line-number')}`,
+    `  head-fragment: ${html.slice(0, 600).replace(/\s+/g, ' ')}`,
+  ].join('\n');
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -158,14 +176,6 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
   let host: HTMLDivElement | null = null;
   const originalFetch = globalThis.fetch;
 
-  // The highlighter warmed below is a MODULE SINGLETON shared by every test
-  // file in this bun process, and packages/ui/utils/codeHighlight.test.ts
-  // asserts the pre-attachment behaviour of exactly that singleton. Put it back
-  // the way we found it so warming it here cannot decide another file's result.
-  afterAll(async () => {
-    await disposeHighlighter();
-  });
-
   afterEach(async () => {
     if (root) {
       await act(async () => root!.unmount());
@@ -204,15 +214,18 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
         return new Response('{}', { headers: { 'content-type': 'application/json' } });
       }) as typeof fetch;
 
-      // Warm Pierre's SHARED (module-singleton) Shiki highlighter before
-      // mounting. Otherwise the first render has to build it, and every paint
-      // this test observes queues behind a multi-second Shiki/grammar
-      // initialization whose cost is entirely the runner's CPU. Warming it here
-      // moves that cost outside the observed window on fast and slow machines
-      // alike, so the swap is measured, not the highlighter's startup.
-      await preloadHighlighter(
-        getHighlighterOptions(getFiletypeFromFileName('calc.ts'), { theme: DEFAULT_THEMES }),
-      );
+      // Precondition, asserted rather than assumed: the REAL parser and the
+      // REAL augmenter, on these exact fixtures, must produce a non-partial
+      // diff. Bun's `mock.module` is process global and earlier files in the
+      // DOM suite mock this very specifier, so this also fails loudly (and in
+      // milliseconds) if a stale module mock ever reaches this file, instead of
+      // presenting as an inexplicable render that never arrives.
+      expect(getSingularPatch(PATCH).isPartial).toBe(true);
+      const expected = processFile(PATCH, {
+        oldFile: { name: 'calc.ts', contents: OLD_CONTENTS },
+        newFile: { name: 'calc.ts', contents: NEW_CONTENTS },
+      });
+      expect(expected?.isPartial).toBe(false);
 
       host = document.createElement('div');
       document.body.appendChild(host);
@@ -221,12 +234,19 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
         root!.render(view());
       });
 
-      // The partial diff paints first, and a partial diff is NOT expandable —
-      // Pierre renders the gap bars without chevrons. This is the baseline the
-      // stale render cache would freeze forever. The gate is still closed here,
-      // so the augmented diff cannot exist yet no matter how slow the box is.
+      // The gate is still closed here, so the augmented diff cannot exist yet
+      // no matter how slow the box is.
       await fileContentRequested;
-      expect(await waitUntil(() => shadowHTML(host!).includes('data-separator'))).toBe(true);
+      // Reported, deliberately NOT asserted. The verdict belongs to the swap
+      // below: whether the partial diff had painted first only affects how
+      // strong the "no chevrons yet" observation is, and making it a hard gate
+      // would let a slow or absent FIRST paint mask the result we actually
+      // came for. A tree without the fix still fails, because it never paints
+      // chevrons at any point.
+      const painted = await waitUntil(() => shadowHTML(host!).includes('data-separator'));
+      if (!painted) console.error(renderDiagnostics(host, 'partial diff never painted'));
+      // A partial diff is not expandable, so Pierre draws its gap bars without
+      // chevrons. This is the state the stale render cache freezes forever.
       expect(countExpandButtons(host!)).toBe(0);
 
       await act(async () => {
@@ -236,18 +256,17 @@ describe.if(hasDom)('DiffViewer full-content swap (DOM)', () => {
 
       // The augmented full-content diff must reach the PIXELS, not just the
       // React tree: expansion chevrons in the gap bars. With the fix these
-      // arrive in the first turn or two (the highlighter is warm, so the swap
-      // render is synchronous); without it they never arrive at all.
+      // arrive in the first turn or two; without it they never arrive at all.
       const swapped = await waitUntil(() => countExpandButtons(host!) > 0);
+      if (!swapped) console.error(renderDiagnostics(host, 'augmented diff never painted'));
       expect(swapped).toBe(true);
 
       // And the separator now advertises a real expand target, which is what
       // makes the click live rather than dead.
       expect(shadowHTML(host!)).toContain('data-expand-index');
     },
-    // The only bound in this test. Generous because it has to cover the
-    // highlighter warm-up on a cold, contended CI runner; the assertions
-    // themselves carry no wall-clock budget.
+    // The only wall-clock bound in this test, and only a backstop: the
+    // assertions themselves are budgeted in scheduler turns.
     180_000,
   );
 });
