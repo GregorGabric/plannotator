@@ -1,13 +1,17 @@
 /**
- * A file whose card has no diff in it must SAY so.
+ * A file over the review size cap must SAY why its card is empty.
  *
- * A patch chunk carrying a binary marker and no hunks renders as an empty
- * body, so the card is a bare header with no counts and no reason. That is
- * what a file dropped by the review size probe looked like (#1167): reviewers
- * saw an empty card and could approve without ever seeing the content.
+ * The review core replaces such files with a contents-free stub patch
+ * (`buildOversizedTrackedStub`), which @pierre/diffs renders as a body with no
+ * lines. Before this, the card was a bare header with no counts and no reason,
+ * and users read it as a broken diff. The stub carries an explicit marker line
+ * (`OVERSIZED_REVIEW_STUB_MARKER`) so the UI can tell it apart from a genuine
+ * binary file, which must keep rendering exactly as it always did.
  *
- * DOM-gated (DOM_TESTS=1) and registered in .github/workflows/test.yml's
- * "Run UI seam-contract + DOM tests" step.
+ * DOM-gated (DOM_TESTS=1) and run by .github/workflows/test.yml's
+ * "Run diff-renderer DOM tests (isolated, real @pierre/diffs)" step — its own
+ * process, because a file in the shared DOM step mocks '@pierre/diffs'
+ * process-wide and this renders against the real renderer.
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import React from 'react';
@@ -34,19 +38,16 @@ const { DiffViewer } = await import('./DiffViewer');
 
 const hasDom = typeof document !== 'undefined';
 
-// The shape the review core emits for a file it declined to read: rename
-// metadata, no hunks. Before the fix a renamed-and-edited file could land here
-// purely because its size probe could not find the worktree blob.
-const STUB_PATCH = [
-  'diff --git a/src/Card.tsx b/src/Panel.tsx',
-  'similarity index 94%',
-  'rename from src/Card.tsx',
-  'rename to src/Panel.tsx',
-  'index bab081fdb737..99fffbd3cac3 100644',
-  'Binary files a/src/Card.tsx and b/src/Panel.tsx differ',
+const OVERSIZED_STUB = [
+  'diff --git a/assets/blob.pack b/assets/blob.pack',
+  OVERSIZED_REVIEW_STUB_MARKER,
+  'index 1111111111aa..2222222222bb 100644',
+  'Binary files a/assets/blob.pack and b/assets/blob.pack differ',
   '',
 ].join('\n');
 
+// A genuine binary file: same shape MINUS the marker. It must not pick up the
+// size-cap explanation, which would be a lie about why it has no diff.
 const REAL_BINARY = [
   'diff --git a/assets/logo.png b/assets/logo.png',
   'index 1111111111aa..2222222222bb 100644',
@@ -67,18 +68,8 @@ const TEXT_PATCH = [
   '',
 ].join('\n');
 
-// The same shape PLUS the size-cap marker. The specific notice owns this one,
-// so exactly one explanation must appear on the card.
-const MARKED_OVERSIZED_STUB = [
-  'diff --git a/assets/blob.pack b/assets/blob.pack',
-  OVERSIZED_REVIEW_STUB_MARKER,
-  'index 1111111111aa..2222222222bb 100644',
-  'Binary files a/assets/blob.pack and b/assets/blob.pack differ',
-  '',
-].join('\n');
-
-const NOTICE_SELECTOR = '[data-binary-file-notice]';
-const OVERSIZED_NOTICE_SELECTOR = '[data-oversized-file-notice]';
+const NOTICE_SELECTOR = '[data-oversized-file-notice]';
+const NOTICE_COPY = 'review limit';
 
 function view(patch: string, filePath: string) {
   return (
@@ -100,13 +91,13 @@ function view(patch: string, filePath: string) {
   );
 }
 
-describe.if(hasDom)('contentless binary card presentation (DOM)', () => {
+describe.if(hasDom)('oversized-file stub presentation (DOM)', () => {
   let root: Root | null = null;
   let host: HTMLDivElement | null = null;
   const originalFetch = globalThis.fetch;
 
   async function render(patch: string, filePath: string) {
-    // There is no expandable content for these shapes; keep the lookup inert.
+    // No expandable content for a stub; keep the lookup inert either way.
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ oldContent: null, newContent: null }), {
         headers: { 'content-type': 'application/json' },
@@ -132,30 +123,22 @@ describe.if(hasDom)('contentless binary card presentation (DOM)', () => {
     globalThis.fetch = originalFetch;
   });
 
-  test('a hunkless stub explains its empty body', async () => {
-    const el = await render(STUB_PATCH, 'src/Panel.tsx');
+  test('an oversized stub explains itself', async () => {
+    const el = await render(OVERSIZED_STUB, 'assets/blob.pack');
     const notice = el.querySelector(NOTICE_SELECTOR);
     expect(notice).not.toBeNull();
-    expect(notice!.textContent).toContain('content not shown');
+    expect(notice!.textContent).toContain(NOTICE_COPY);
+    // The raw marker is plumbing, never user-facing copy.
+    expect(el.textContent).not.toContain(OVERSIZED_REVIEW_STUB_MARKER);
   });
 
-  test('a genuine binary file explains its empty body too', async () => {
+  test('a genuine binary file is left alone', async () => {
     const el = await render(REAL_BINARY, 'assets/logo.png');
-    expect(el.querySelector(NOTICE_SELECTOR)).not.toBeNull();
+    expect(el.querySelector(NOTICE_SELECTOR)).toBeNull();
   });
 
   test('an ordinary text diff is left alone', async () => {
     const el = await render(TEXT_PATCH, 'calc.ts');
     expect(el.querySelector(NOTICE_SELECTOR)).toBeNull();
-    expect(el.querySelector(OVERSIZED_NOTICE_SELECTOR)).toBeNull();
-  });
-
-  test('a marker-carrying stub is explained once, by the specific notice', async () => {
-    // Specific beats general: the size-cap notice knows WHY the body is empty,
-    // so the fallback must stand down rather than stack a second line on it.
-    const el = await render(MARKED_OVERSIZED_STUB, 'assets/blob.pack');
-    expect(el.querySelectorAll(OVERSIZED_NOTICE_SELECTOR).length).toBe(1);
-    expect(el.querySelectorAll(NOTICE_SELECTOR).length).toBe(0);
-    expect(el.textContent).not.toContain(OVERSIZED_REVIEW_STUB_MARKER);
   });
 });
