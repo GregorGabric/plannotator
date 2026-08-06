@@ -13,7 +13,9 @@ import { ToolbarHost, type ToolbarHostHandle } from './ToolbarHost';
 import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea';
 import { useOverlayViewport } from '@plannotator/ui/hooks/useOverlayViewport';
 import { FileHeader } from './FileHeader';
+import { BinaryFileNotice } from './BinaryFileNotice';
 import { FileCommentBanner } from './FileCommentBanner';
+import { isContentlessBinaryPatch } from '@plannotator/shared/diff-paths';
 import { isFileScopedAnnotation, lineRangeForAnnotation } from '../utils/annotationScope';
 import { lineAnnotationMetadata } from '../utils/annotationDisplay';
 import type { AnnotationScrollTarget } from '../types';
@@ -312,6 +314,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
   // Parse patch into FileDiffMetadata for @pierre/diffs FileDiff component
   const fileDiff = useMemo(() => getSingularPatch(patch), [patch]);
+
+  // Binary marker, no hunks: the body below renders nothing at all.
+  const isBinaryOnlyPatch = useMemo(() => isContentlessBinaryPatch(patch), [patch]);
 
   // Fetch full file contents for expandable context
   const [fileContents, setFileContents] = useState<{ forPath: string; old: string | null; new: string | null } | null>(null);
@@ -697,6 +702,9 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         overflowX="scroll"
         onViewportReady={onViewportReady}
       >
+        {/* A binary or unread file has no hunks to draw, so say so instead of
+            leaving a header with an empty body under it. */}
+        {isBinaryOnlyPatch && <BinaryFileNotice />}
         <FileCommentBanner
           comments={fileComments}
           selectedAnnotationId={selectedAnnotationId}

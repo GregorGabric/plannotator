@@ -180,6 +180,30 @@ export function parseDiffFilePathLines(lines: string[]): DiffPathPair {
   return { oldPath, newPath };
 }
 
+/**
+ * True when a single file's patch chunk carries a binary marker and no hunks,
+ * so a diff renderer has literally nothing to draw for it.
+ *
+ * Git emits this shape for real binary files, and the review core emits it for
+ * files it declined to read (`buildOversizedTrackedStub`). Either way the card
+ * renders as a bare header with no counts and no body, which reads as a broken
+ * or empty diff rather than as content that was deliberately not shown.
+ *
+ * Scanning stops at the first hunk header: content lines always carry a `+`,
+ * `-`, or space prefix, so a `Binary files ` line at column zero before any
+ * `@@ ` can only be the extended header git (or the stub builder) wrote.
+ */
+export function isContentlessBinaryPatch(patch: string): boolean {
+  let hasBinaryMarker = false;
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("@@ ")) return false;
+    if (line.startsWith("Binary files ") || line === "GIT binary patch") {
+      hasBinaryMarker = true;
+    }
+  }
+  return hasBinaryMarker;
+}
+
 export function parseDiffMetadataPathLines(lines: string[]): DiffPathPair {
   let oldPath: string | undefined;
   let newPath: string | undefined;

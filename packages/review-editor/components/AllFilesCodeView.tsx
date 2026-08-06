@@ -21,6 +21,7 @@ import type {
   DiffAnnotationMetadata,
   TokenAnnotationMeta,
 } from '@plannotator/ui/types';
+import { isContentlessBinaryPatch } from '@plannotator/shared/diff-paths';
 import { CommentPopover } from '@plannotator/ui/components/CommentPopover';
 import { usePierreTheme } from '../hooks/usePierreTheme';
 import { useIsWorkerPoolReadyOrDisabled, useWorkerPoolThemeSync } from '../workerPool';
@@ -31,6 +32,7 @@ import { getDiffSelection, getLineNumberFromNode, getSideFromNode } from '../uti
 import { isContentConsistentWithPatch } from '../utils/patchConsistency';
 import { ToolbarHost, type ToolbarHostHandle } from './ToolbarHost';
 import { FileHeader } from './FileHeader';
+import { BinaryFileNotice } from './BinaryFileNotice';
 import { EditSessionHud } from './EditSessionHud';
 import { FileCommentBanner } from './FileCommentBanner';
 import { annotationMatchesPrScope, isFileScopedAnnotation, lineRangeForAnnotation } from '../utils/annotationScope';
@@ -2184,6 +2186,11 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         }
         onCollapseToggle={() => toggleItemCollapsed(item.id)}
         />
+        {/* A binary or unread file has no hunks to draw, so say so instead of
+            leaving a header with an empty body under it. */}
+        {!collapsed && isContentlessBinaryPatch(file.patch) && (
+          <BinaryFileNotice onHeightChange={() => refreshItem(item.id)} />
+        )}
         {/* EXPERIMENTAL edit-session HUD: session controls + state in a slim
             strip below the header, above the file content. Appears/disappears
             with session start/end, which both go through a version-bumped
