@@ -21,8 +21,10 @@
  * DiffViewer's Vite-only worker-pool module and the theme/toolbar chrome are
  * stubbed.
  *
- * DOM-gated (DOM_TESTS=1) and registered in .github/workflows/test.yml's
- * "Run UI seam-contract + DOM tests" step.
+ * DOM-gated (DOM_TESTS=1) and run by .github/workflows/test.yml's
+ * "Run diff-renderer DOM tests (isolated, real @pierre/diffs)" step. Its own
+ * process on purpose: a file in the shared DOM step mocks '@pierre/diffs'
+ * process-wide, and this test is only meaningful against the real renderer.
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import React from 'react';

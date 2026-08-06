@@ -8,8 +8,10 @@
  * (`OVERSIZED_REVIEW_STUB_MARKER`) so the UI can tell it apart from a genuine
  * binary file, which must keep rendering exactly as it always did.
  *
- * DOM-gated (DOM_TESTS=1) and registered in .github/workflows/test.yml's
- * "Run UI seam-contract + DOM tests" step.
+ * DOM-gated (DOM_TESTS=1) and run by .github/workflows/test.yml's
+ * "Run diff-renderer DOM tests (isolated, real @pierre/diffs)" step — its own
+ * process, because a file in the shared DOM step mocks '@pierre/diffs'
+ * process-wide and this renders against the real renderer.
  */
 import { afterEach, describe, expect, mock, test } from 'bun:test';
 import React from 'react';
