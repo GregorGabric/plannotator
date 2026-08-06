@@ -27,6 +27,24 @@ const LIGHT_THEME_COOKIE = 'plannotator-light-theme';
 const DARK_THEME_COOKIE = 'plannotator-dark-theme';
 
 /**
+ * Where a host keeps the two PRE-PAIR values, if not under Plannotator's own
+ * keys. These mirror ThemeProvider's `storageKey` / `colorThemeStorageKey`
+ * props, which existed before the pair and are what a host's already-stored
+ * user preference lives under.
+ *
+ * Only these two legacy keys are overridable. The pair halves are a new
+ * concept with no pre-existing host data, so they always use the fixed
+ * `plannotator-light-theme` / `plannotator-dark-theme` keys; two hosts sharing
+ * one origin with different key prefixes would share those halves.
+ */
+export interface ThemePairLegacyKeys {
+  /** Where the mode is stored (ThemeProvider's `storageKey`). */
+  mode?: string;
+  /** Where the single pre-pair palette is stored (`colorThemeStorageKey`). */
+  colorTheme?: string;
+}
+
+/**
  * Persist a pair to its cookies without touching the server.
  *
  * ThemeProvider calls this once it has resolved a pair, because a pair
@@ -34,8 +52,8 @@ const DARK_THEME_COOKIE = 'plannotator-dark-theme';
  * the provider then mirrors the active palette back onto that legacy key, so
  * leaving the halves underived would lose the migration on the next load.
  */
-export function writeThemePairCookies(pair: ThemePair): void {
-  storage.setItem(MODE_COOKIE, pair.mode);
+export function writeThemePairCookies(pair: ThemePair, keys?: ThemePairLegacyKeys): void {
+  storage.setItem(keys?.mode ?? MODE_COOKIE, pair.mode);
   storage.setItem(LIGHT_THEME_COOKIE, pair.light);
   storage.setItem(DARK_THEME_COOKIE, pair.dark);
 }
@@ -44,12 +62,15 @@ export function writeThemePairCookies(pair: ThemePair): void {
  * Read the persisted pair, seeding either half from the single palette older
  * releases stored. Returns undefined only when the user has never expressed a
  * theme preference at all — ThemeProvider reads that as "my props decide".
+ *
+ * `keys` points the two legacy reads at a host's own storage keys so an
+ * upgrade migrates that host's stored preference instead of discarding it.
  */
-export function readThemePairCookies(): ThemePair | undefined {
-  const mode = storage.getItem(MODE_COOKIE);
+export function readThemePairCookies(keys?: ThemePairLegacyKeys): ThemePair | undefined {
+  const mode = storage.getItem(keys?.mode ?? MODE_COOKIE);
   const light = storage.getItem(LIGHT_THEME_COOKIE);
   const dark = storage.getItem(DARK_THEME_COOKIE);
-  const legacy = storage.getItem(COLOR_THEME_COOKIE);
+  const legacy = storage.getItem(keys?.colorTheme ?? COLOR_THEME_COOKIE);
   if (!mode && !light && !dark && !legacy) return undefined;
   const seeded = seedThemePair(legacy, parseThemeMode(mode, getDefaultThemePair().mode));
   return normalizeThemePair({ mode, light: light ?? seeded.light, dark: dark ?? seeded.dark }, seeded);

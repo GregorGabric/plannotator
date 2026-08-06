@@ -23,6 +23,32 @@ let host: HTMLElement | null = null;
 let currentTheme: ReturnType<typeof useTheme> | null = null;
 let stored = new Map<string, string>();
 let originalMatchMediaDescriptor: PropertyDescriptor | undefined;
+let originalFetch: typeof globalThis.fetch | null = null;
+
+/** Capture every request the default server-sync transport would make. */
+function captureConfigPosts(): string[] {
+  const posts: string[] = [];
+  originalFetch = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : String(input);
+    if (url.includes('/api/config')) posts.push(String(init?.body ?? ''));
+    return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+  }) as typeof globalThis.fetch;
+  return posts;
+}
+
+/** Let the store's 300ms server-sync debounce fire (or prove it never does). */
+async function afterServerSyncDebounce(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>(resolve => setTimeout(resolve, 400));
+  });
+}
+
+/** Flush writes an earlier test queued, so only this test's posts are counted. */
+async function drainPendingServerSync(posts: string[]): Promise<void> {
+  await afterServerSyncDebounce();
+  posts.length = 0;
+}
 
 function Probe() {
   currentTheme = useTheme();
@@ -117,6 +143,11 @@ async function mountTheme(children?: React.ReactNode): Promise<void> {
   // backend this test installed so seeded cookies (not a previous test's
   // values) decide the pair.
   configStore.loadFromBackend();
+  await mountThemeFresh(children);
+}
+
+/** Mount WITHOUT pre-seeding the store, i.e. what a cookie-less visit hits. */
+async function mountThemeFresh(children?: React.ReactNode): Promise<void> {
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -264,6 +295,11 @@ describe('ThemeProvider', () => {
         Reflect.deleteProperty(window, 'matchMedia');
       }
       originalMatchMediaDescriptor = undefined;
+    }
+    configStore.resetServerSync();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+      originalFetch = null;
     }
     resetStorageBackend();
   });
@@ -413,5 +449,199 @@ describe('ThemeProvider', () => {
     expect(host!.textContent).toContain('Dracula');
     await act(async () => clickButton(summaryButton('Light:')));
     expect(paletteNames()).toContain('Kanagawa Lotus');
+  });
+
+  test.skipIf(!hasDom)('honors a host\'s own storage keys when migrating to a pair', async () => {
+    stored.set('host-mode', 'system');
+    stored.set('host-palette', 'kanagawa-wave');
+    installMatchMedia(false);
+
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <ThemeProvider storageKey="host-mode" colorThemeStorageKey="host-palette">
+          <Probe />
+        </ThemeProvider>,
+      );
+    });
+
+    // The host's stored preference is migrated, not discarded.
+    expect(themeState().mode).toBe('system');
+    expect(themeState().darkTheme).toBe('kanagawa-wave');
+    expect(themeState().colorTheme).toBe('kanagawa-wave');
+    // And the mirror keeps writing the host's keys, not Plannotator's.
+    expect(stored.get('host-mode')).toBe('system');
+    expect(stored.get('host-palette')).toBe('kanagawa-wave');
+  });
+});
+
+describe('ThemeProvider server write-back', () => {
+  let posts: string[] = [];
+
+  beforeEach(() => {
+    if (hasDom) {
+      originalMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    }
+    stored = new Map<string, string>();
+    setStorageBackend({
+      getItem: key => stored.get(key) ?? null,
+      setItem: (key, value) => {
+        stored.set(key, value);
+      },
+      removeItem: key => {
+        stored.delete(key);
+      },
+    });
+    posts = captureConfigPosts();
+  });
+
+  afterEach(async () => {
+    if (hasDom) {
+      await unmountTheme();
+      document.documentElement.className = '';
+      if (originalMatchMediaDescriptor) {
+        Object.defineProperty(window, 'matchMedia', originalMatchMediaDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'matchMedia');
+      }
+      originalMatchMediaDescriptor = undefined;
+    }
+    configStore.resetServerSync();
+    if (originalFetch) {
+      globalThis.fetch = originalFetch;
+      originalFetch = null;
+    }
+    resetStorageBackend();
+  });
+
+  // A cookie-less visit (fresh profile, incognito, cleared cookies) must not
+  // write anything to ~/.plannotator/config.json: that POST would land after
+  // the server config arrives and reset the user's real theme to defaults.
+  test.skipIf(!hasDom)('posts nothing when mounting with no stored preference', async () => {
+    // Drain anything an earlier test's debounce still had in flight.
+    await drainPendingServerSync(posts);
+    installMatchMedia(false);
+
+    await mountThemeFresh();
+    await afterServerSyncDebounce();
+
+    expect(posts).toEqual([]);
+    // The pair still resolved and was persisted locally.
+    expect(themeState().colorTheme).toBe(DEFAULT_COLOR_THEME);
+    expect(stored.get('plannotator-light-theme')).toBe(DEFAULT_COLOR_THEME);
+  });
+
+  test.skipIf(!hasDom)('posts a real choice, so the pair still reaches config.json', async () => {
+    await drainPendingServerSync(posts);
+    installMatchMedia(false);
+
+    await mountThemeFresh();
+    await act(async () => themeState().setHalfTheme('dark', 'vesper'));
+    await afterServerSyncDebounce();
+
+    expect(posts.length).toBe(1);
+    expect(JSON.parse(posts[0]!)).toEqual({
+      theme: { mode: 'dark', light: DEFAULT_COLOR_THEME, dark: 'vesper' },
+    });
+  });
+
+  // The legacy single-palette API was cookie-only before pairs existed, and a
+  // host that never installed a serverSync transport has no endpoint to post to.
+  test.skipIf(!hasDom)('keeps the legacy setColorTheme cookie-only', async () => {
+    await drainPendingServerSync(posts);
+    installMatchMedia(false);
+
+    await mountThemeFresh();
+    await act(async () => themeState().setColorTheme('vesper'));
+    await afterServerSyncDebounce();
+
+    expect(posts).toEqual([]);
+    expect(themeState().darkTheme).toBe('vesper');
+    expect(stored.get('plannotator-dark-theme')).toBe('vesper');
+  });
+});
+
+describe('ThemeProvider legacy setColorTheme', () => {
+  beforeEach(() => {
+    if (hasDom) {
+      originalMatchMediaDescriptor = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    }
+    stored = new Map<string, string>();
+    setStorageBackend({
+      getItem: key => stored.get(key) ?? null,
+      setItem: (key, value) => {
+        stored.set(key, value);
+      },
+      removeItem: key => {
+        stored.delete(key);
+      },
+    });
+  });
+
+  afterEach(async () => {
+    if (hasDom) {
+      await unmountTheme();
+      document.documentElement.className = '';
+      if (originalMatchMediaDescriptor) {
+        Object.defineProperty(window, 'matchMedia', originalMatchMediaDescriptor);
+      } else {
+        Reflect.deleteProperty(window, 'matchMedia');
+      }
+      originalMatchMediaDescriptor = undefined;
+    }
+    configStore.resetServerSync();
+    resetStorageBackend();
+  });
+
+  test.skipIf(!hasDom)('assigns a both-mode palette to the half on screen only', async () => {
+    stored.set('plannotator-theme', 'dark');
+    stored.set('plannotator-light-theme', 'one-light');
+    stored.set('plannotator-dark-theme', 'vesper');
+    installMatchMedia(false);
+
+    await mountTheme();
+    await act(async () => themeState().setColorTheme('gruvbox'));
+
+    expect(themeState().darkTheme).toBe('gruvbox');
+    // The other half keeps the user's assignment.
+    expect(themeState().lightTheme).toBe('one-light');
+    expect(themeState().mode).toBe('dark');
+  });
+
+  test.skipIf(!hasDom)('assigns a mode-restricted palette without moving the mode', async () => {
+    stored.set('plannotator-theme', 'system');
+    stored.set('plannotator-light-theme', 'one-light');
+    stored.set('plannotator-dark-theme', 'nord');
+    const media = installMatchMedia(true);
+
+    await mountTheme();
+    expect(themeState().colorTheme).toBe('one-light');
+
+    await act(async () => themeState().setColorTheme('vesper'));
+    expect(themeState().darkTheme).toBe('vesper');
+    expect(themeState().lightTheme).toBe('one-light');
+    // Still System: a dark-only palette does not yank the user out of it.
+    expect(themeState().mode).toBe('system');
+    expect(themeState().colorTheme).toBe('one-light');
+
+    // And it is what renders as soon as the OS goes dark.
+    await act(async () => media.setMatches(false));
+    expect(themeState().colorTheme).toBe('vesper');
+  });
+
+  test.skipIf(!hasDom)('assigns a light-only palette to the light half from dark mode', async () => {
+    stored.set('plannotator-theme', 'dark');
+    stored.set('plannotator-light-theme', 'one-light');
+    stored.set('plannotator-dark-theme', 'nord');
+    installMatchMedia(false);
+
+    await mountTheme();
+    await act(async () => themeState().setColorTheme('kanagawa-lotus'));
+
+    expect(themeState().lightTheme).toBe('kanagawa-lotus');
+    expect(themeState().darkTheme).toBe('nord');
+    expect(themeState().mode).toBe('dark');
   });
 });

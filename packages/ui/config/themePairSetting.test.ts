@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { resetStorageBackend, setStorageBackend } from '../utils/storage';
 import { DEFAULT_COLOR_THEME, resetDefaultThemePair } from '../utils/themeRegistry';
+import { ConfigStoreForTest } from './configStore';
 import { SETTINGS } from './settings';
 
 function installStorage(seed: Record<string, string> = {}) {
@@ -113,5 +114,50 @@ describe('theme pair setting', () => {
     expect(SETTINGS.themePair.fromServer({})).toBeUndefined();
     expect(SETTINGS.themePair.fromServer({ theme: {} })).toBeUndefined();
     expect(SETTINGS.themePair.fromServer({ diffOptions: { diffStyle: 'unified' } })).toBeUndefined();
+  });
+});
+
+describe('config store seeding', () => {
+  test('a seed writes the cookie but never the server', async () => {
+    const values = installStorage();
+    const store = new ConfigStoreForTest();
+    const synced: Record<string, unknown>[] = [];
+    store.setServerSync(payload => { synced.push(payload); });
+
+    store.seed('themePair', { mode: 'system', light: 'rose-pine', dark: 'vesper' });
+    await new Promise<void>(resolve => setTimeout(resolve, 350));
+
+    expect(store.get('themePair')).toEqual({ mode: 'system', light: 'rose-pine', dark: 'vesper' });
+    expect(values.get('plannotator-dark-theme')).toBe('vesper');
+    expect(synced).toEqual([]);
+  });
+
+  test('a seed never undoes a value the server supplied', () => {
+    installStorage();
+    const store = new ConfigStoreForTest();
+
+    store.init({ theme: { mode: 'light', light: 'kanagawa-lotus', dark: 'nord' } });
+    store.seed('themePair', { mode: 'dark', light: DEFAULT_COLOR_THEME, dark: DEFAULT_COLOR_THEME });
+
+    expect(store.get('themePair')).toEqual({ mode: 'light', light: 'kanagawa-lotus', dark: 'nord' });
+  });
+
+  // A write queued before the server config arrives would otherwise flush
+  // AFTER it and push the superseded value back into config.json.
+  test('init() retracts queued writes for the keys it just overrode', async () => {
+    installStorage();
+    const store = new ConfigStoreForTest();
+    const synced: Record<string, unknown>[] = [];
+    store.setServerSync(payload => { synced.push(payload); });
+
+    store.set('themePair', { mode: 'dark', light: DEFAULT_COLOR_THEME, dark: DEFAULT_COLOR_THEME });
+    store.set('diffStyle', 'unified');
+    store.init({ theme: { mode: 'system', light: 'rose-pine', dark: 'vesper' } });
+    await new Promise<void>(resolve => setTimeout(resolve, 350));
+
+    // The theme write is gone; the untouched setting still syncs.
+    const merged = Object.assign({}, ...synced) as Record<string, unknown>;
+    expect(merged.theme).toBeUndefined();
+    expect(merged.diffOptions).toEqual({ diffStyle: 'unified' });
   });
 });

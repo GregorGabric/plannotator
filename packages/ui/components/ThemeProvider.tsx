@@ -79,7 +79,20 @@ interface ThemeProviderProps {
   children: React.ReactNode;
   defaultTheme?: Mode;
   defaultColorTheme?: string;
+  /**
+   * Where the mode is stored. Read when resolving the initial pair and written
+   * by the legacy mirror, so a host's already-stored preference survives the
+   * upgrade to pairs.
+   */
   storageKey?: string;
+  /**
+   * Where the single pre-pair palette is stored. Read as the migration source
+   * for both halves and kept in sync with the palette on screen.
+   *
+   * Note: the two halves themselves are a new concept with no pre-existing
+   * host data, so they always live under `plannotator-light-theme` /
+   * `plannotator-dark-theme`; these props rename only the two legacy values.
+   */
   colorThemeStorageKey?: string;
 }
 
@@ -90,25 +103,39 @@ export function ThemeProvider({
   storageKey = 'plannotator-theme',
   colorThemeStorageKey = 'plannotator-color-theme',
 }: ThemeProviderProps) {
-  // The props are the fallback for someone with no persisted preference. The
-  // config store is a singleton that may already have resolved its own default,
-  // so ask storage directly instead of trusting the resolved value; the seed is
-  // handed to the store below, once mounting is done.
-  const [propsSeed] = useState<ThemePair | null>(() => {
-    const fallback = seedThemePair(defaultColorTheme, defaultTheme);
-    setDefaultThemePair(fallback);
-    return readThemePairCookies() === undefined ? fallback : null;
+  const legacyKeys = useMemo(
+    () => ({ mode: storageKey, colorTheme: colorThemeStorageKey }),
+    [storageKey, colorThemeStorageKey],
+  );
+
+  // Resolve the pair this provider starts on from ITS OWN storage keys: what
+  // the user persisted (migrating a host's pre-pair values), else these props.
+  // The config store is a singleton that may already have resolved a default of
+  // its own, so storage is asked directly rather than trusting that value.
+  const [initialPair] = useState<ThemePair>(() => {
+    const resolved = readThemePairCookies(legacyKeys)
+      ?? seedThemePair(defaultColorTheme, defaultTheme);
+    setDefaultThemePair(resolved);
+    return resolved;
   });
-  const pendingSeed = useRef(propsSeed);
+  const pendingSeed = useRef<ThemePair | null>(initialPair);
+  const [, setSeedApplied] = useState(false);
 
   const storePair = useConfigValue('themePair');
   const pair = pendingSeed.current ?? storePair;
   const mode = pair.mode;
 
+  // Hand the resolved pair to the store as a SEED, not a user choice: seeding
+  // writes memory + cookies only. Routing it through set() would queue a
+  // server write of a value nobody picked, which (flushing after the server
+  // config arrives) would overwrite the user's real ~/.plannotator/config.json
+  // theme from any cookie-less visit.
   useEffect(() => {
-    if (!pendingSeed.current) return;
-    configStore.set('themePair', pendingSeed.current);
+    const seed = pendingSeed.current;
+    if (!seed) return;
     pendingSeed.current = null;
+    configStore.seed('themePair', seed);
+    setSeedApplied(true);
   }, []);
 
   const [systemIsLight, setSystemIsLight] = useState(getSystemIsLight);
@@ -118,6 +145,11 @@ export function ThemeProvider({
     mode === 'system' ? (systemIsLight ? 'light' : 'dark') : mode;
   const colorTheme = resolvePairTheme(pair, preferredMode);
   const resolvedMode = resolveThemeMode(colorTheme, preferredMode);
+
+  // Read by the legacy setColorTheme, which must target the half on screen
+  // without re-creating its callback on every mode change.
+  const preferredModeRef = useRef(preferredMode);
+  preferredModeRef.current = preferredMode;
 
   // [P3 fix] Apply theme class synchronously during initialization to prevent
   // flash of unstyled content. CSS tokens live under .theme-* selectors, so
@@ -165,19 +197,25 @@ export function ThemeProvider({
   }, []);
 
   /**
-   * Legacy single-palette API. A palette that renders both modes takes over the
-   * whole pair; a mode-restricted one takes the half it supports and pins the
-   * mode there, so a caller that picks Dracula still sees Dracula.
+   * Legacy single-palette API, kept for published consumers. It assigns exactly
+   * ONE half and changes nothing else:
+   *
+   *  - a palette that renders both modes goes to the half currently on screen,
+   *    leaving the other half's assignment alone;
+   *  - a mode-restricted palette goes to the half it supports without touching
+   *    the mode, because render-time resolution (`resolveThemeMode`) already
+   *    keeps a System user on a palette that can be drawn.
+   *
+   * Persistence stays cookie-only unless a host installed a serverSync
+   * transport, matching the side effects this API had before the pair existed.
    */
   const setColorTheme = useCallback((newTheme: string) => {
     const current = configStore.get('themePair');
     const unsupported = getUnsupportedMode(newTheme);
-    if (!unsupported) {
-      configStore.set('themePair', { ...current, light: newTheme, dark: newTheme });
-      return;
-    }
-    const half: ThemeHalf = unsupported === 'light' ? 'dark' : 'light';
-    configStore.set('themePair', { ...current, [half]: newTheme, mode: half });
+    const half: ThemeHalf = unsupported
+      ? (unsupported === 'light' ? 'dark' : 'light')
+      : preferredModeRef.current;
+    configStore.setLocal('themePair', { ...current, [half]: newTheme });
   }, []);
 
   // Mirror the resolved choice onto the keys older releases read, so a
@@ -186,12 +224,11 @@ export function ThemeProvider({
   // single-palette key is derived, and the mirror below overwrites the key it
   // was derived from.
   useEffect(() => {
-    writeThemePairCookies(pair);
+    writeThemePairCookies(pair, legacyKeys);
     if (storage.getItem(colorThemeStorageKey) !== colorTheme) {
       storage.setItem(colorThemeStorageKey, colorTheme);
     }
-    if (storage.getItem(storageKey) !== mode) storage.setItem(storageKey, mode);
-  }, [pair, colorTheme, colorThemeStorageKey, mode, storageKey]);
+  }, [pair, colorTheme, colorThemeStorageKey, legacyKeys]);
 
   const value = useMemo<ThemeProviderState>(() => ({
     theme: mode,

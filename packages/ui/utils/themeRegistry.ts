@@ -587,6 +587,31 @@ export function getUnsupportedMode(themeId: string): 'light' | 'dark' | null {
   return null;
 }
 
+/**
+ * Return whether a palette can honor a mode choice without coercion.
+ *
+ * @deprecated Every mode is always selectable now that a palette is assigned to
+ * one half of a light/dark pair: a palette that cannot render a mode simply
+ * never occupies that half. Use {@link themeSupportsHalf} to ask whether a
+ * palette may be ASSIGNED to a half. Kept for published consumers.
+ */
+export function isThemeModeAvailable(themeId: string, mode: Mode): boolean {
+  return mode === 'system' || getUnsupportedMode(themeId) !== mode;
+}
+
+/**
+ * Keep System intact while coercing an unsupported explicit mode.
+ *
+ * @deprecated Modes are no longer coerced. Assign the palette to the half it
+ * supports ({@link themeSupportsHalf}) and let {@link resolveThemeMode} handle
+ * rendering. Kept for published consumers.
+ */
+export function normalizeThemeMode(themeId: string, mode: Mode): Mode {
+  const unsupportedMode = getUnsupportedMode(themeId);
+  if (mode === 'system' || mode !== unsupportedMode) return mode;
+  return unsupportedMode === 'light' ? 'dark' : 'light';
+}
+
 /** Resolve the mode a palette actually renders. */
 export function resolveThemeMode(
   themeId: string,
