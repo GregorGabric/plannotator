@@ -60,6 +60,7 @@ jobs:
           packages/review-editor/edit/discardRestoreRender.test.tsx
           packages/review-editor/edit/selectionActionPopover.test.ts
           packages/review-editor/components/AllFilesCodeView.lifecycle.test.tsx
+          packages/review-editor/components/DiffViewer.fullContentSwap.test.tsx
           packages/review-editor/components/guide/GuideSectionCard.test.tsx
           packages/review-editor/components/guide/GuideView.test.tsx
           packages/review-editor/hooks/useReviewSearch.test.tsx

@@ -19,6 +19,7 @@ import { lineAnnotationMetadata } from '../utils/annotationDisplay';
 import type { AnnotationScrollTarget } from '../types';
 import { getLineNumberFromNode, getSideFromNode, getDiffSelection } from '../utils/diffSelection';
 import { isContentConsistentWithPatch } from '../utils/patchConsistency';
+import { hashString } from '../utils/hashString';
 import { InlineAnnotation } from './InlineAnnotation';
 import { InlineAIMarker } from './InlineAIMarker';
 import type { AIChatEntry } from '../hooks/useAIChat';
@@ -310,8 +311,28 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
   const toolbarHostRef = useRef<ToolbarHostHandle>(null);
 
-  // Parse patch into FileDiffMetadata for @pierre/diffs FileDiff component
-  const fileDiff = useMemo(() => getSingularPatch(patch), [patch]);
+  // Parse patch into FileDiffMetadata for @pierre/diffs FileDiff component.
+  //
+  // Pinned to @pierre/diffs 1.3.2: `FileDiff.render` DEFAULTS an unset
+  // `fileDiff.cacheKey` to the file's NAME (`prevName:name` for renames), and
+  // `areDiffTargetsEqual` — the only identity check its render/highlight
+  // caches make — compares nothing but that key. Two different diffs of the
+  // same path therefore look IDENTICAL to Pierre, and the second one is
+  // silently served the first one's cached render.
+  //
+  // This FileDiff instance survives (`key={filePath}`) across both the
+  // partial -> full-content swap below AND diff-type / base / whitespace
+  // switches, so every diff object handed to it must mint its own
+  // content-derived key. Hash, not `patch.length`: the worker highlight cache
+  // is a singleton that outlives remounts, so a same-length different-content
+  // patch must not collide either. See AllFilesCodeView, which mints the same
+  // shape of key for the all-files surface (which is why that surface was
+  // never affected by this bug).
+  const fileDiff = useMemo(() => {
+    const parsed = getSingularPatch(patch);
+    parsed.cacheKey = `${filePath}#${hashString(patch)}`;
+    return parsed;
+  }, [patch, filePath]);
 
   // Fetch full file contents for expandable context
   const [fileContents, setFileContents] = useState<{ forPath: string; old: string | null; new: string | null } | null>(null);
@@ -353,7 +374,14 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
         oldFile: fileContents.old != null ? { name: oldPath || filePath, contents: fileContents.old } : undefined,
         newFile: fileContents.new != null ? { name: filePath, contents: fileContents.new } : undefined,
       });
-      return result && !result.isPartial ? result : fileDiff;
+      if (!result || result.isPartial) return fileDiff;
+      // A DIFFERENT key from the partial diff above (`#full`), still derived
+      // from the patch content so it also changes across diff-type / base
+      // switches. Without it Pierre keeps painting the partial render forever:
+      // gap bars with no chevrons and dead expansion clicks, at every file
+      // size. (See the cacheKey note on `fileDiff`.)
+      result.cacheKey = `${filePath}#full#${hashString(patch)}`;
+      return result;
     } catch {
       return fileDiff;
     }
