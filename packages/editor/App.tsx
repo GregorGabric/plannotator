@@ -1429,19 +1429,23 @@ const App: React.FC = () => {
   const [skillContentGeneration, setSkillContentGeneration] = useState(0);
   useEffect(() => {
     if (!isApiMode) return;
+    // Only reviewer-written comments prime skill contents. Annotations with a
+    // `source` arrived through the unauthenticated external-annotations API
+    // and can never cause injection (see skillReferenceExportBlock), so their
+    // references must not trigger content fetches either.
     const texts: Array<string | undefined> = [];
-    for (const a of allAnnotations) texts.push(a.text);
-    for (const a of codeAnnotations) texts.push(a.text);
+    for (const a of allAnnotations) if (!a.source) texts.push(a.text);
+    for (const a of codeAnnotations) if (!a.source) texts.push(a.text);
     for (const entry of linkedDocHook.getDocAnnotations().values()) {
-      for (const a of entry.annotations) texts.push(a.text);
+      for (const a of entry.annotations) if (!a.source) texts.push(a.text);
     }
     if (messageMultiSelectMode) {
       for (const state of getMessageStatesWithCurrent().values()) {
-        for (const a of state.linkedDocSession.root.annotations) texts.push(a.text);
+        for (const a of state.linkedDocSession.root.annotations) if (!a.source) texts.push(a.text);
         for (const doc of state.linkedDocSession.docs.values()) {
-          for (const a of doc.annotations) texts.push(a.text);
+          for (const a of doc.annotations) if (!a.source) texts.push(a.text);
         }
-        for (const a of state.codeAnnotations) texts.push(a.text);
+        for (const a of state.codeAnnotations) if (!a.source) texts.push(a.text);
       }
     }
     let cancelled = false;

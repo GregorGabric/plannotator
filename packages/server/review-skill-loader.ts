@@ -441,6 +441,20 @@ export function listReferenceSkills(): ReferenceSkill[] {
  */
 export const MAX_INJECTED_SKILL_CONTENT_LEN = 20_000;
 
+/**
+ * Read bound for the content endpoint. The endpoint is unauthenticated on
+ * localhost and reachable by a no-cors fetch loop from any page, so the read
+ * itself must be bounded — reading a whole multi-GB SKILL.md and then slicing
+ * would let response-unreadable requests balloon process RSS. The bound is the
+ * frontmatter allowance the catalog already uses (SKILL_META_HEAD_BYTES) plus
+ * 4 bytes per capped content char (UTF-8 worst case) and slack, so any file
+ * whose frontmatter fits the catalog bound always yields the full
+ * MAX_INJECTED_SKILL_CONTENT_LEN characters of body — truncation detection is
+ * unchanged for every such file.
+ */
+const SKILL_CONTENT_HEAD_BYTES =
+  SKILL_META_HEAD_BYTES + MAX_INJECTED_SKILL_CONTENT_LEN * 4 + 4_096;
+
 /** A referenced skill's SKILL.md body, prepared for feedback injection. */
 export interface ReferenceSkillContent {
   name: string;
@@ -462,42 +476,59 @@ export interface ReferenceSkillContent {
  * Security: the client-supplied name is only ever MATCHED against the names
  * produced by discoverSkills() — it is never used to build a filesystem path,
  * so traversal sequences, separators, and absolute paths cannot reach outside
- * the discovered roots (they simply match no skill). The explicit separator
- * guard just fails such names fast without a discovery walk.
+ * the discovered roots (they simply match no skill). Because matching is the
+ * whole defense, the fast-fail guard rejects only names that can never be a
+ * readdir entry (empty, `.`, `..`) — a substring check like `includes("..")`
+ * would 404 legitimately discovered directories such as `v1..2`, and POSIX
+ * directory names may legitimately contain `\`.
+ *
+ * The read is bounded (SKILL_CONTENT_HEAD_BYTES): only the head that can
+ * contribute to the response is read, so a giant SKILL.md costs bounded
+ * memory per request instead of its file size.
  *
  * Returns null (never throws) when the name matches no discovered skill, the
  * file cannot be read, or the body is empty — the client then falls back to
  * naming the skill plus its directory.
  */
 export function readReferenceSkillContent(name: string): ReferenceSkillContent | null {
-  if (!name || /[\\/]/.test(name) || name.includes("..")) return null;
+  if (!name || name === "." || name === "..") return null;
   const skill = discoverSkills().find((s) => s.name === name);
   if (!skill) return null;
 
-  let raw: string;
-  try {
-    raw = readFileSync(skill.skillMdPath, "utf-8");
-  } catch (err) {
-    console.error(
-      `[plannotator] Could not read skill "${name}" for reference injection: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
-    );
+  const head = readFileHead(skill.skillMdPath, SKILL_CONTENT_HEAD_BYTES);
+  if (head === null) {
+    console.error(`[plannotator] Could not read skill "${name}" for reference injection.`);
     return null;
   }
 
   // Frontmatter is metadata (name, description, invocation flags), not
   // instruction — strip it, matching how review profiles consume skills.
-  const meta = parseSkillFrontmatterMeta(raw);
-  const body = stripFrontmatter(raw).trim();
+  const meta = parseSkillFrontmatterMeta(head.text, { truncated: head.truncated });
+  const raw = head.text.replace(/^﻿/, "");
+  // Frontmatter that OPENED but never closed within the head read: when the
+  // file continues past the read, the metadata alone exceeds the bound — fall
+  // back rather than injecting a screenful of raw YAML as "instructions". (In
+  // a complete file the unterminated block keeps its pre-bound behavior: the
+  // whole text is the body, exactly as readFileSync produced before.)
+  const frontmatterOpened = /^---\r?\n/.test(raw);
+  const frontmatterClosed = /^---\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/.test(raw);
+  if (head.truncated && frontmatterOpened && !frontmatterClosed) return null;
+
+  const body = stripFrontmatter(head.text).trim();
   if (!body) return null;
 
-  const truncated = body.length > MAX_INJECTED_SKILL_CONTENT_LEN;
+  // `head.truncated` alone marks truncation even when the head yielded fewer
+  // than the cap's worth of characters (multibyte-heavy files): the file
+  // continues past what was read, and the notice must say so.
+  const truncated = head.truncated || body.length > MAX_INJECTED_SKILL_CONTENT_LEN;
   return {
     name: skill.name,
     dir: skill.sourcePath,
     path: skill.skillMdPath,
-    content: truncated ? body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN) : body,
+    content:
+      body.length > MAX_INJECTED_SKILL_CONTENT_LEN
+        ? body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN)
+        : body,
     truncated,
     humanOnly: meta.humanOnly,
   };

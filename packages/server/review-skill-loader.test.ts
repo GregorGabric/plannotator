@@ -651,13 +651,87 @@ describe("readReferenceSkillContent — human-only skill injection source", () =
     for (const name of [
       "../../secret.md",
       "..",
+      ".",
       "legit/../../secret.md",
       "legit/SKILL.md",
       `${join(home, "secret.md")}`,
-      "a\\b",
       "",
     ]) {
       expect(readReferenceSkillContent(name)).toBeNull();
     }
+  });
+
+  test("a discovered directory named with consecutive dots (v1..2) is servable", () => {
+    // The old `name.includes("..")` guard 404'd this legitimately discovered
+    // skill forever while the catalog and menu still listed it. The name is
+    // only ever MATCHED against discovery output — never joined into a path —
+    // so the substring check defended nothing.
+    writeContentSkill("v1..2", "# Versioned body");
+    expect(listReferenceSkills().map((s) => s.name)).toContain("v1..2");
+    expect(readReferenceSkillContent("v1..2")).toMatchObject({
+      name: "v1..2",
+      content: "# Versioned body",
+    });
+  });
+
+  test("every discovered skill name is servable — catalog and content endpoint agree", () => {
+    if (process.platform === "win32") return; // backslash dirs are separators there
+    // A POSIX directory name containing a backslash is legal; discovery
+    // normalizes it (basename past either separator) and whatever name the
+    // catalog advertises, the content endpoint must serve — the old guard
+    // broke that invariant for dotted and backslashed names.
+    writeContentSkill("v1..2", "# A");
+    writeContentSkill("odd\\name", "# B");
+    const listed = listReferenceSkills();
+    expect(listed.length).toBeGreaterThanOrEqual(2);
+    for (const skill of listed) {
+      expect(readReferenceSkillContent(skill.name)).not.toBeNull();
+    }
+  });
+
+  test("a huge SKILL.md is read boundedly: capped content, flagged truncated", () => {
+    // 8MB of body. The endpoint must not materialize the whole file per
+    // request (the read is head-bounded), and the visible behavior must be
+    // identical to the old read-then-slice: first cap chars, truncated: true.
+    const line = "y".repeat(99) + "\n";
+    const body = line.repeat(80_000); // 8MB
+    writeContentSkill("mega", body);
+    const result = readReferenceSkillContent("mega")!;
+    expect(result.truncated).toBe(true);
+    expect(result.content.length).toBe(MAX_INJECTED_SKILL_CONTENT_LEN);
+    expect(result.content).toBe(body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN));
+  });
+
+  test("multibyte bodies keep exact char-cap semantics under the byte-bounded read", () => {
+    const body = "é".repeat(MAX_INJECTED_SKILL_CONTENT_LEN + 500); // 2 bytes/char
+    writeContentSkill("multibyte", body);
+    const result = readReferenceSkillContent("multibyte")!;
+    expect(result.truncated).toBe(true);
+    expect(result.content).toBe(body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN));
+  });
+
+  test("frontmatter larger than the read bound falls back to null, never injects raw YAML", () => {
+    // The closing --- sits past the bounded head read: the body cannot be
+    // located, so the endpoint reports no content (client falls back to name +
+    // directory) instead of serving a screenful of YAML as instructions.
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, "yaml-bomb");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: yaml-bomb\npadding: ${"y".repeat(400_000)}\n---\n# Real body`,
+    );
+    expect(readReferenceSkillContent("yaml-bomb")).toBeNull();
+  });
+
+  test("a complete file with genuinely unterminated frontmatter keeps its old behavior", () => {
+    // Under the bound, no closing ---: the whole text is the body, exactly as
+    // the unbounded readFileSync produced before.
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, "unterminated");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), "---\nname: unterminated\n# not closed");
+    const result = readReferenceSkillContent("unterminated")!;
+    expect(result.content).toBe("---\nname: unterminated\n# not closed");
   });
 });

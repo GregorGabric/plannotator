@@ -1188,9 +1188,12 @@ export const exportAnnotations = (
         break;
     }
 
-    // Skill references in the comment text (no-op unless a catalog is registered)
+    // Skill references in the comment text (no-op unless a catalog is
+    // registered). An annotation carrying a `source` arrived through the
+    // external-annotations API, not from the reviewer — it may list skills
+    // but must never cause a human-only skill's instructions to be injected.
     if (!ann.isQuickLabel) {
-      output += skillReferenceExportBlock(ann.text, injectedSkills);
+      output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
     }
 
     // Add attached images for this annotation
@@ -1286,7 +1289,8 @@ export const exportLinkedDocAnnotations = (
           break;
       }
 
-      output += skillReferenceExportBlock(ann.text, injectedSkills);
+      // External (tool-sourced) comments list skills but never inject.
+      output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
 
       if (ann.images && ann.images.length > 0) {
         output += `**Attached images:**\n`;
@@ -1351,7 +1355,8 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
     if (ann.text) {
       output += `> ${ann.text}\n`;
     }
-    output += skillReferenceExportBlock(ann.text, injectedSkills);
+    // External (tool-sourced) comments list skills but never inject.
+    output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
     if (ann.images && ann.images.length > 0) {
       output += `**Attached images:**\n`;
       ann.images.forEach((img) => {

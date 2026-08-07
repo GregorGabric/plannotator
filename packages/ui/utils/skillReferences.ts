@@ -271,15 +271,46 @@ export function resetSkillContentsForExport(): void {
 const HUMAN_ONLY_EXPORT_NOTE =
   'human-invocation-only: you cannot invoke this skill; the reviewer included it as context';
 
+/**
+ * The structural forms the injection block itself uses: the BEGIN/END markers
+ * and the truncation notice. A skill body line matching one of these could
+ * close our block early (everything after it then reads to the receiving
+ * agent as the reviewer's own words), forge a BEGIN marker for a skill nobody
+ * referenced, or forge a truncation notice pointing at an attacker-chosen
+ * path. Skill bodies are user-installed — routinely from third-party repos —
+ * so lookalike lines are neutralized before injection. Leading whitespace and
+ * case variants count: a loose reader would still take them for markers.
+ */
+const MARKER_LOOKALIKE_RE =
+  /^\s*(?:-{2,}\s*(?:BEGIN|END)\s+SKILL\s+INSTRUCTIONS\b|\[\s*Instructions\s+truncated\b)/i;
+
+const NEUTRALIZED_LINE_PREFIX =
+  '[plannotator: the following skill-body line matched an injection marker and was neutralized] ';
+
+/**
+ * Neutralize body lines that match our own structural markers, visibly: each
+ * matching line is kept verbatim but prefixed, never silently deleted, so the
+ * line no longer parses as a marker while the reader can still see exactly
+ * what the body contained.
+ */
+export function neutralizeSkillMarkerLines(body: string): string {
+  return body
+    .split('\n')
+    .map((line) => (MARKER_LOOKALIKE_RE.test(line) ? NEUTRALIZED_LINE_PREFIX + line : line))
+    .join('\n');
+}
+
 /** Instruction block for one injected human-only skill. Unmistakably delimited
  *  (BEGIN/END markers survive any markdown inside the body, unlike a fence)
- *  and labeled so it can never read as the reviewer's own words. */
+ *  and labeled so it can never read as the reviewer's own words. Body lines
+ *  that imitate the markers are neutralized (see neutralizeSkillMarkerLines)
+ *  so the body cannot close the block early or forge a sibling block. */
 function injectedSkillSection(name: string, body: SkillExportContent): string {
   let out = `--- BEGIN SKILL INSTRUCTIONS: ${name} ---\n`;
   out += `This skill cannot be invoked by a model, so its instructions are included here at the reviewer's request. Follow them when acting on this feedback.\n`;
   out += `Skill directory: ${body.dir}\n`;
   out += `Resolve any relative paths in the instructions below (e.g. references/, scripts/, assets/) against that absolute directory; your working directory is not the skill directory.\n\n`;
-  out += `${body.content}\n`;
+  out += `${neutralizeSkillMarkerLines(body.content)}\n`;
   if (body.truncated) {
     out += `\n[Instructions truncated: this is not the full skill. Read the rest at ${body.path}]\n`;
   }
@@ -303,15 +334,26 @@ function injectedSkillSection(name: string, body: SkillExportContent): string {
  * `injectedNames` is an optional per-export dedupe: exporters thread one Set
  * through every comment of a single export so a skill's instructions are
  * injected once, and later references point at the earlier injection.
+ *
+ * `options.external` marks a comment that was NOT written by the reviewer in
+ * this UI — it arrived through the unauthenticated external-annotations API
+ * (annotations carrying a `source`), which any local process can post to.
+ * The whole justification for injection is that a human referencing a
+ * human-only skill IS the human invocation, so a tool-submitted comment must
+ * never cause it: external comments still LIST their skill references, but a
+ * human-only reference falls back to naming the skill plus its directory
+ * (the same shape as the content-unavailable path) instead of injecting.
  */
 export function skillReferenceExportBlock(
   text: string | undefined,
   injectedNames?: Set<string>,
+  options?: { external?: boolean },
 ): string {
   if (!text) return '';
   const refs = extractSkillReferences(text, exportCatalog);
   if (refs.length === 0) return '';
 
+  const external = options?.external === true;
   const toInject: Array<{ name: string; body: SkillExportContent }> = [];
   let out = `**Skills referenced** (the reviewer is asking you to invoke these skills when acting on this feedback):\n`;
   for (const ref of refs) {
@@ -320,14 +362,19 @@ export function skillReferenceExportBlock(
       continue;
     }
     const body = exportContents.get(ref.name);
-    if (body) {
-      if (injectedNames?.has(ref.name)) {
-        out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included earlier in this feedback)\n`;
-      } else {
-        injectedNames?.add(ref.name);
-        toInject.push({ name: ref.name, body });
-        out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included below at the reviewer's request)\n`;
-      }
+    if (body && injectedNames?.has(ref.name)) {
+      // Already injected earlier in this export (necessarily by a reviewer-
+      // written comment) — true regardless of who references it now.
+      out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included earlier in this feedback)\n`;
+    } else if (external) {
+      // Tool-submitted comment: name + directory, never verbatim injection.
+      out += ref.dir
+        ? `- \`${ref.name}\` (cannot be invoked by a model; this comment came from an external tool, so its instructions are not included — SKILL.md is in ${ref.dir})\n`
+        : `- \`${ref.name}\` (${HUMAN_ONLY_EXPORT_NOTE})\n`;
+    } else if (body) {
+      injectedNames?.add(ref.name);
+      toInject.push({ name: ref.name, body });
+      out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included below at the reviewer's request)\n`;
     } else if (ref.dir) {
       out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions could not be included, read SKILL.md in ${ref.dir} and follow it)\n`;
     } else {
