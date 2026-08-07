@@ -6,6 +6,8 @@ import { submitHint } from '../utils/platform';
 import { useDraggable } from '../hooks/useDraggable';
 import { SparklesIcon } from './SparklesIcon';
 import { hasUnsavedCommentContent } from '../utils/commentContent';
+import { useSkillReferenceAutocomplete } from '../hooks/useSkillReferenceAutocomplete';
+import { HumanOnlySkillNotice, SkillReferenceMenu } from './SkillReferenceMenu';
 
 export interface CommentAskAIContext {
   kind: 'general' | 'selection';
@@ -46,6 +48,8 @@ interface CommentPopoverProps {
   onAskAI?: CommentAskAIHandler;
   askAIContext?: CommentAskAIContext;
   askAIDisabled?: boolean;
+  /** Opt-in: `/` and `$` skill-reference autocomplete (document UI surfaces). Off by default. */
+  skillReferences?: boolean;
 }
 
 const MAX_POPOVER_WIDTH = 384;
@@ -96,6 +100,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
   onAskAI,
   askAIContext,
   askAIDisabled = false,
+  skillReferences = false,
 }) => {
   const [mode, setMode] = useState<'popover' | 'dialog'>('popover');
   const initialDraft = draftKey ? draftStore.get(draftKey) : undefined;
@@ -235,7 +240,15 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
     onClose();
   }, [allowImages, askAIContext, contextText, draftKey, isGlobal, onAskAI, onClose, onDraftChange, text]);
 
+  const skillAc = useSkillReferenceAutocomplete({
+    text,
+    setText,
+    textareaRef,
+    enabled: skillReferences,
+  });
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (skillAc.onKeyDown(e)) return;
     if (e.key === 'Escape') {
       e.stopPropagation();
       if (mode === 'dialog') {
@@ -308,16 +321,26 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
           </div>
 
           {/* Textarea */}
-          <div className="px-4 py-3 flex-1">
+          <div className="relative px-4 py-3 flex-1">
+            {skillAc.menu && (
+              <SkillReferenceMenu
+                items={skillAc.menu.items}
+                highlightIndex={skillAc.menu.highlightIndex}
+                onSelect={skillAc.select}
+                onHighlight={skillAc.setHighlightIndex}
+              />
+            )}
             <textarea
               ref={focusOnMountRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => { setText(e.target.value); skillAc.onSelect(); }}
               onKeyDown={handleKeyDown}
+              onSelect={skillAc.onSelect}
               placeholder={isGlobal ? 'Add a global comment...' : 'Add a comment...'}
               className="w-full bg-transparent text-sm placeholder:text-muted-foreground resize-none focus:outline-none min-h-48 max-h-96 px-1 py-0.5"
               style={{ fieldSizing: 'content' } as React.CSSProperties}
             />
+            <HumanOnlySkillNotice skills={skillAc.humanOnlyReferences} />
           </div>
 
           {/* Footer — DOM order sets tab order (Save first); row-reverse keeps the visual layout unchanged */}
@@ -430,16 +453,26 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
       </div>
 
       {/* Textarea */}
-      <div className="px-3 py-2">
+      <div className="relative px-3 py-2">
+        {skillAc.menu && (
+          <SkillReferenceMenu
+            items={skillAc.menu.items}
+            highlightIndex={skillAc.menu.highlightIndex}
+            onSelect={skillAc.select}
+            onHighlight={skillAc.setHighlightIndex}
+          />
+        )}
         <textarea
           ref={focusOnMountRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => { setText(e.target.value); skillAc.onSelect(); }}
           onKeyDown={handleKeyDown}
+          onSelect={skillAc.onSelect}
           placeholder={isGlobal ? 'Add a global comment...' : 'Add a comment...'}
           className="w-full bg-transparent text-sm placeholder:text-muted-foreground resize-none focus:outline-none max-h-64 min-h-[4.5rem] px-1 py-0.5"
           style={{ fieldSizing: 'content' } as React.CSSProperties}
         />
+        <HumanOnlySkillNotice skills={skillAc.humanOnlyReferences} />
       </div>
 
       {/* Footer — same DOM-order/row-reverse pattern as the dialog footer above */}

@@ -12,7 +12,10 @@ import {
   discoverSkills,
   enableReviewSkill,
   listAllSkills,
+  listReferenceSkills,
   loadReviewProfiles,
+  MAX_REFERENCE_SKILLS,
+  parseSkillFrontmatterMeta,
   readCuratedSkillNames,
   resolveRequestedReviewProfile,
   stripFrontmatter,
@@ -347,5 +350,121 @@ describe("enableReviewSkill — curation write", () => {
 
   test("rejects a name with no matching discovered skill", () => {
     expect(() => enableReviewSkill("does-not-exist")).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reference catalog (skill mentions in plan/annotate comments)
+// ---------------------------------------------------------------------------
+
+describe("parseSkillFrontmatterMeta", () => {
+  test("plain scalars: description + disable-model-invocation: true", () => {
+    const meta = parseSkillFrontmatterMeta(
+      "---\nname: x\ndescription: Reviews prose for clarity.\ndisable-model-invocation: true\n---\nbody",
+    );
+    expect(meta.description).toBe("Reviews prose for clarity.");
+    expect(meta.humanOnly).toBe(true);
+  });
+
+  test("absent flag → humanOnly false", () => {
+    const meta = parseSkillFrontmatterMeta("---\nname: x\ndescription: d\n---\nbody");
+    expect(meta.humanOnly).toBe(false);
+  });
+
+  test("quoted values are unquoted; 'false' stays false", () => {
+    const meta = parseSkillFrontmatterMeta(
+      '---\ndescription: "Quoted description"\ndisable-model-invocation: "false"\n---\n',
+    );
+    expect(meta.description).toBe("Quoted description");
+    expect(meta.humanOnly).toBe(false);
+  });
+
+  test("folded block-scalar description joins to one line", () => {
+    const meta = parseSkillFrontmatterMeta(
+      "---\ndescription: >-\n  First line of the\n  description text.\nname: x\n---\n",
+    );
+    expect(meta.description).toBe("First line of the description text.");
+  });
+
+  test("no frontmatter → no metadata, never throws", () => {
+    expect(parseSkillFrontmatterMeta("# Just a body")).toEqual({ humanOnly: false });
+  });
+
+  test("descriptions are capped at 200 chars", () => {
+    const meta = parseSkillFrontmatterMeta(`---\ndescription: ${"x".repeat(500)}\n---\n`);
+    expect(meta.description?.length).toBe(200);
+  });
+
+  test("CRLF frontmatter is tolerated", () => {
+    const meta = parseSkillFrontmatterMeta(
+      "---\r\ndescription: windows\r\ndisable-model-invocation: true\r\n---\r\nbody",
+    );
+    expect(meta.description).toBe("windows");
+    expect(meta.humanOnly).toBe(true);
+  });
+});
+
+describe("listReferenceSkills — the comment-reference catalog", () => {
+  /** Write a skill with explicit frontmatter fields. */
+  function writeMetaSkill(
+    root: string,
+    name: string,
+    opts: { description?: string; humanOnly?: boolean } = {},
+  ) {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    const fm = [
+      `name: ${name}`,
+      ...(opts.description ? [`description: ${opts.description}`] : []),
+      ...(opts.humanOnly ? ["disable-model-invocation: true"] : []),
+    ].join("\n");
+    writeFileSync(join(dir, "SKILL.md"), `---\n${fm}\n---\n# ${name}\n`);
+  }
+
+  test("lists skills across all roots with metadata, sorted by name", () => {
+    writeMetaSkill(join(home, ".claude", "skills"), "zeta", { description: "Z skill" });
+    writeMetaSkill(join(home, ".codex", "skills"), "alpha", { humanOnly: true });
+    writeMetaSkill(join(home, ".agents", "skills"), "mid");
+
+    const skills = listReferenceSkills();
+    expect(skills.map((s) => s.name)).toEqual(["alpha", "mid", "zeta"]);
+    expect(skills[0]).toMatchObject({ root: "codex", humanOnly: true });
+    expect(skills[2]).toMatchObject({ root: "claude", description: "Z skill", humanOnly: false });
+  });
+
+  test("cross-root name clash: first-seen wins (claude over codex)", () => {
+    writeMetaSkill(join(home, ".claude", "skills"), "dupe", { description: "claude copy" });
+    writeMetaSkill(join(home, ".codex", "skills"), "dupe", { description: "codex copy" });
+
+    const skills = listReferenceSkills();
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({ root: "claude", description: "claude copy" });
+  });
+
+  test("no roots at all → empty catalog, no throw", () => {
+    expect(listReferenceSkills()).toEqual([]);
+  });
+
+  test("caps discovery at MAX_REFERENCE_SKILLS", () => {
+    const root = join(home, ".claude", "skills");
+    for (let i = 0; i < MAX_REFERENCE_SKILLS + 25; i++) {
+      writeMetaSkill(root, `skill-${String(i).padStart(4, "0")}`);
+    }
+    expect(listReferenceSkills().length).toBe(MAX_REFERENCE_SKILLS);
+  });
+
+  test("frontmatter past the 8KB head read yields no metadata but keeps the skill", () => {
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, "big-frontmatter");
+    mkdirSync(dir, { recursive: true });
+    const padding = `comment-${"y".repeat(9000)}`;
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: big-frontmatter\npadding: ${padding}\ndisable-model-invocation: true\n---\nbody`,
+    );
+    const skills = listReferenceSkills();
+    expect(skills.map((s) => s.name)).toEqual(["big-frontmatter"]);
+    // The closing --- never appears inside the head read, so the flag is unknown → false.
+    expect(skills[0].humanOnly).toBe(false);
   });
 });

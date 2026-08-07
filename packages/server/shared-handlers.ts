@@ -15,6 +15,7 @@ import { saveDraft, loadDraft, deleteDraft, getDraftGeneration } from "./draft";
 import { FAVICON_PNG_BYTES } from "@plannotator/shared/favicon";
 import { saveToObsidian, saveToBear, saveToOctarine } from "./integrations";
 import type { ObsidianConfig, BearConfig, OctarineConfig, IntegrationResult } from "./integrations";
+import { listReferenceSkills } from "./review-skill-loader";
 
 function normalizeDraftGeneration(value: unknown): number | undefined {
   if (typeof value !== "number") return undefined;
@@ -150,6 +151,22 @@ export function handleDraftLoad(contentKey: string): Response {
 export function handleDraftDelete(contentKey: string, req?: Request): Response {
   deleteDraft(contentKey, req ? readDraftGenerationFromUrl(req) : undefined);
   return Response.json({ ok: true });
+}
+
+/**
+ * List global agent skills for comment skill references. Used by plan +
+ * annotate servers. Takes no client input (fixed roots only) and degrades to an
+ * empty catalog on any failure so the composer never breaks.
+ */
+export function handleReferenceSkills(): Response {
+  try {
+    return Response.json({ skills: listReferenceSkills() });
+  } catch (err) {
+    console.error(
+      `[plannotator] Skill catalog failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return Response.json({ skills: [] });
+  }
 }
 
 /** Return the shared JSON response for an unmatched API route. */

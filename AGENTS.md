@@ -333,6 +333,7 @@ During normal plan review, an Archive sidebar tab provides the same browsing via
 | `/api/image`          | GET    | Serve image by path query param            |
 | `/api/upload`         | POST   | Upload image, returns `{ path, originalName }` |
 | `/api/obsidian/vaults`| GET    | Detect available Obsidian vaults           |
+| `/api/skills`         | GET    | List global agent skills for comment skill references (`{ skills: [{ name, root, description?, humanOnly }] }`) |
 | `/api/reference/obsidian/files` | GET | List vault markdown files as nested tree (`?vaultPath=<path>`) |
 | `/api/reference/obsidian/doc`   | GET | Read a vault markdown file (`?vaultPath=<path>&path=<file>`) |
 | `/api/plan/vscode-diff` | POST   | Open diff in VS Code (body: baseVersion)   |
@@ -422,6 +423,7 @@ During normal plan review, an Archive sidebar tab provides the same browsing via
 | `/api/upload`         | POST   | Upload image, returns `{ path, originalName }` |
 | `/api/doc`            | GET    | Serve linked .md/.mdx/.html file or code file (`?path=<path>&base=<dir>`) |
 | `/api/doc/exists`     | POST   | Batch-validate code-file paths (body: `{ paths: string[], base?: string }`) |
+| `/api/skills`         | GET    | List global agent skills for comment skill references (`{ skills: [{ name, root, description?, humanOnly }] }`) |
 | `/api/draft`          | GET/POST/DELETE | Auto-save annotation drafts to survive server crashes |
 | `/api/annotate/client-lease` | GET (SSE) | Client lease for local direct structured gates: each open stream is one connected review surface. 404 when the capability is not advertised. |
 | `/api/agent-terminal/pty/<token>` | WebSocket | Tokenized PTY bridge for the optional annotate-mode agent terminal |

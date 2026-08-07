@@ -20,10 +20,13 @@
  */
 
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
   statSync,
   writeFileSync,
@@ -46,7 +49,7 @@ export const MAX_SKILL_BODY_LEN = 20_000;
 /** Directories never descended during discovery. */
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "__pycache__"]);
 
-type SkillRoot = "claude" | "codex" | "universal";
+export type SkillRoot = "claude" | "codex" | "universal";
 
 /** A skill discovered on disk — catalog stage, no body read, no frontmatter read. */
 export interface DiscoveredSkill {
@@ -233,6 +236,126 @@ function skillHasExtraFiles(sourcePath: string): boolean {
  */
 function skillFilesPointerLine(skillDir: string): string {
   return `This review skill's files (references, scripts, assets) are at: ${skillDir}\nResolve any relative paths in the instructions below (e.g. references/, scripts/, assets/) against that absolute directory — the working directory is the repository under review, not the skill directory.`;
+}
+
+// ---------------------------------------------------------------------------
+// Reference catalog (skill mentions in plan/annotate comments)
+// ---------------------------------------------------------------------------
+
+/**
+ * Discovery bound for the reference catalog, mirroring the bounded-discovery
+ * precedent of PLANNOTATOR_FILE_BROWSER_MAX_FILES: the picker never grows
+ * past this many skills, however large the roots are.
+ */
+export const MAX_REFERENCE_SKILLS = 500;
+
+/**
+ * Only the head of SKILL.md is read for catalog metadata — frontmatter lives at
+ * the top, and this caps I/O per skill regardless of body size. A frontmatter
+ * block that somehow exceeds this bound simply yields no metadata (never an
+ * error).
+ */
+const SKILL_META_HEAD_BYTES = 8192;
+
+/** Descriptions are picker subtitles, not documents. */
+const MAX_SKILL_DESCRIPTION_LEN = 200;
+
+/** A skill as served to the comment-composer picker. */
+export interface ReferenceSkill {
+  name: string;
+  root: SkillRoot;
+  description?: string;
+  /**
+   * True when SKILL.md frontmatter carries `disable-model-invocation: true` —
+   * the skill can only be invoked by a human, so a model receiving feedback
+   * that references it cannot run it.
+   */
+  humanOnly: boolean;
+}
+
+/** Read at most `maxBytes` from the start of a file, or null when unreadable. */
+function readFileHead(path: string, maxBytes: number): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, "r");
+  } catch {
+    return null;
+  }
+  try {
+    const buf = Buffer.alloc(maxBytes);
+    const bytes = readSync(fd, buf, 0, maxBytes, 0);
+    return buf.subarray(0, bytes).toString("utf-8");
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Extract the two frontmatter fields the reference picker needs: `description`
+ * and `disable-model-invocation`. A deliberate line-scan, not a YAML parser —
+ * the same conservative posture as stripFrontmatter. Handles quoted scalars and
+ * `>` / `|` block scalars (folded to one line); anything it cannot read yields
+ * `{ humanOnly: false }` rather than an error.
+ */
+export function parseSkillFrontmatterMeta(raw: string): {
+  description?: string;
+  humanOnly: boolean;
+} {
+  const text = raw.replace(/^﻿/, "");
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!match) return { humanOnly: false };
+
+  const lines = match[1].split(/\r?\n/);
+  let description: string | undefined;
+  let humanOnly = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const kv = lines[i].match(/^([A-Za-z0-9_-]+):[ \t]*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1].toLowerCase();
+    const value = kv[2].trim();
+
+    if (key === "disable-model-invocation") {
+      const v = value.replace(/^["']|["']$/g, "").toLowerCase();
+      humanOnly = v === "true" || v === "yes";
+    } else if (key === "description") {
+      if (value === "" || /^[>|][+-]?$/.test(value)) {
+        // Block scalar: gather the following indented lines into one line.
+        const parts: string[] = [];
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].trim() === "") continue;
+          if (!/^[ \t]/.test(lines[j])) break;
+          parts.push(lines[j].trim());
+        }
+        description = parts.join(" ");
+      } else {
+        description = value.replace(/^["']|["']$/g, "");
+      }
+    }
+  }
+
+  if (description) description = description.slice(0, MAX_SKILL_DESCRIPTION_LEN);
+  return { ...(description ? { description } : {}), humanOnly };
+}
+
+/**
+ * The reference catalog: every discovered skill (same roots, dedupe, and
+ * first-seen precedence as discoverSkills — Claude → Codex → universal) with
+ * picker metadata read from the head of its SKILL.md. Read fresh on each call,
+ * never cached or persisted server-side (the catalog is ephemeral by design).
+ * A skill whose SKILL.md cannot be read is skipped; this never throws.
+ */
+export function listReferenceSkills(): ReferenceSkill[] {
+  const skills: ReferenceSkill[] = [];
+  for (const skill of discoverSkills().slice(0, MAX_REFERENCE_SKILLS)) {
+    const head = readFileHead(skill.skillMdPath, SKILL_META_HEAD_BYTES);
+    if (head === null) continue;
+    const meta = parseSkillFrontmatterMeta(head);
+    skills.push({ name: skill.name, root: skill.root, ...meta });
+  }
+  return skills.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 // ---------------------------------------------------------------------------

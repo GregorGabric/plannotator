@@ -1,5 +1,6 @@
 import type { Block, Annotation, CodeAnnotation, EditorAnnotation, ImageAttachment } from '../types';
 import { planDenyFeedback } from '@plannotator/core/feedback-templates';
+import { skillReferenceExportBlock } from './skillReferences';
 
 /**
  * Parsed YAML frontmatter as key-value pairs.
@@ -1183,6 +1184,11 @@ export const exportAnnotations = (
         break;
     }
 
+    // Skill references in the comment text (no-op unless a catalog is registered)
+    if (!ann.isQuickLabel) {
+      output += skillReferenceExportBlock(ann.text);
+    }
+
     // Add attached images for this annotation
     if (ann.images && ann.images.length > 0) {
       output += `**Attached images:**\n`;
@@ -1273,6 +1279,8 @@ export const exportLinkedDocAnnotations = (
           break;
       }
 
+      output += skillReferenceExportBlock(ann.text);
+
       if (ann.images && ann.images.length > 0) {
         output += `**Attached images:**\n`;
         ann.images.forEach((img: ImageAttachment) => {
@@ -1334,6 +1342,7 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
     if (ann.text) {
       output += `> ${ann.text}\n`;
     }
+    output += skillReferenceExportBlock(ann.text);
     if (ann.images && ann.images.length > 0) {
       output += `**Attached images:**\n`;
       ann.images.forEach((img) => {

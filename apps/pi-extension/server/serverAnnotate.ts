@@ -25,6 +25,7 @@ import {
 	handleDraftRequest,
 	handleFavicon,
 	handleImageRequest,
+	handleReferenceSkillsRequest,
 	readDraftGenerationFromBody,
 	readDraftGenerationFromUrl,
 	handleSaveNotesRequest,
@@ -754,6 +755,8 @@ export async function startAnnotateServer(options: {
 			await handleDocExistsRequest(res, req, { rootPaths: getReferenceRootPaths() });
 		} else if (url.pathname === "/api/obsidian/vaults") {
 			handleObsidianVaultsRequest(res);
+		} else if (url.pathname === "/api/skills" && req.method === "GET") {
+			handleReferenceSkillsRequest(res);
 		} else if (url.pathname === "/api/reference/obsidian/files" && req.method === "GET") {
 			handleObsidianFilesRequest(res, url);
 		} else if (url.pathname === "/api/reference/obsidian/doc" && req.method === "GET") {

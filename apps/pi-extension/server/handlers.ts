@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { saveDraft, loadDraft, deleteDraft, getDraftGeneration } from "../generated/draft.ts";
 import { FAVICON_PNG_BYTES } from "../generated/favicon.ts";
+import { listReferenceSkills } from "../generated/review-skill-loader.ts";
 
 import { json, parseBody, send, toWebRequest } from "./helpers.ts";
 import {
@@ -233,6 +234,22 @@ export function handleFavicon(res: Res): void {
 		"Content-Type": "image/png",
 		"Cache-Control": "public, max-age=86400",
 	});
+}
+
+/**
+ * List global agent skills for comment skill references. Used by plan +
+ * annotate servers. Takes no client input (fixed roots only) and degrades to an
+ * empty catalog on any failure so the composer never breaks.
+ */
+export function handleReferenceSkillsRequest(res: Res): void {
+	try {
+		json(res, { skills: listReferenceSkills() });
+	} catch (err) {
+		console.error(
+			`[plannotator] Skill catalog failed: ${err instanceof Error ? err.message : String(err)}`,
+		);
+		json(res, { skills: [] });
+	}
 }
 
 /** Save to external note apps (Obsidian, Bear, Octarine). Used by plan + annotate servers. */
