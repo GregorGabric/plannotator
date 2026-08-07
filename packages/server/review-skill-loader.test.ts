@@ -14,9 +14,11 @@ import {
   listAllSkills,
   listReferenceSkills,
   loadReviewProfiles,
+  MAX_INJECTED_SKILL_CONTENT_LEN,
   MAX_REFERENCE_SKILLS,
   parseSkillFrontmatterMeta,
   readCuratedSkillNames,
+  readReferenceSkillContent,
   resolveRequestedReviewProfile,
   stripFrontmatter,
 } from "./review-skill-loader";
@@ -574,5 +576,88 @@ describe("listReferenceSkills — the comment-reference catalog", () => {
     );
     const skills = listReferenceSkills();
     expect(skills[0].humanOnly).toBe(false);
+  });
+
+  test("each catalog entry carries its absolute skill directory", () => {
+    const root = join(home, ".claude", "skills");
+    writeMetaSkill(root, "with-dir");
+    const skills = listReferenceSkills();
+    expect(skills[0].dir).toBe(join(root, "with-dir"));
+  });
+});
+
+describe("readReferenceSkillContent — human-only skill injection source", () => {
+  function writeContentSkill(name: string, body: string, humanOnly = true) {
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    const fm = [
+      `name: ${name}`,
+      ...(humanOnly ? ["disable-model-invocation: true"] : []),
+    ].join("\n");
+    writeFileSync(join(dir, "SKILL.md"), `---\n${fm}\n---\n${body}`);
+    return dir;
+  }
+
+  test("returns the frontmatter-stripped body with dir and path", () => {
+    const dir = writeContentSkill("human-skill", "# Steps\n\nDo the thing.");
+    const result = readReferenceSkillContent("human-skill");
+    expect(result).toEqual({
+      name: "human-skill",
+      dir,
+      path: join(dir, "SKILL.md"),
+      content: "# Steps\n\nDo the thing.",
+      truncated: false,
+      humanOnly: true,
+    });
+  });
+
+  test("a model-invocable skill reads too (the client decides what to inject)", () => {
+    writeContentSkill("model-skill", "# Body", false);
+    expect(readReferenceSkillContent("model-skill")).toMatchObject({
+      humanOnly: false,
+      content: "# Body",
+    });
+  });
+
+  test("truncates an oversized body at the bound and flags it", () => {
+    const body = "x".repeat(MAX_INJECTED_SKILL_CONTENT_LEN + 500);
+    writeContentSkill("giant", body);
+    const result = readReferenceSkillContent("giant")!;
+    expect(result.truncated).toBe(true);
+    expect(result.content.length).toBe(MAX_INJECTED_SKILL_CONTENT_LEN);
+    expect(result.content).toBe(body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN));
+  });
+
+  test("an unknown or deleted skill returns null, never throws", () => {
+    expect(readReferenceSkillContent("does-not-exist")).toBeNull();
+
+    const dir = writeContentSkill("was-here", "# Body");
+    expect(readReferenceSkillContent("was-here")).not.toBeNull();
+    rmSync(dir, { recursive: true, force: true });
+    expect(readReferenceSkillContent("was-here")).toBeNull();
+  });
+
+  test("an empty body returns null (the client falls back to naming the skill)", () => {
+    writeContentSkill("blank-body", "");
+    expect(readReferenceSkillContent("blank-body")).toBeNull();
+  });
+
+  test("traversal, separator, and absolute-path names never read outside the roots", () => {
+    // A real file OUTSIDE every skill root that a traversal would love to read.
+    writeFileSync(join(home, "secret.md"), "top secret");
+    writeContentSkill("legit", "# Body");
+
+    for (const name of [
+      "../../secret.md",
+      "..",
+      "legit/../../secret.md",
+      "legit/SKILL.md",
+      `${join(home, "secret.md")}`,
+      "a\\b",
+      "",
+    ]) {
+      expect(readReferenceSkillContent(name)).toBeNull();
+    }
   });
 });

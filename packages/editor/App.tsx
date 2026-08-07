@@ -4,7 +4,7 @@ import { type Origin, getAgentName } from '@plannotator/shared/agents';
 import { shouldStripFrontmatter } from '@plannotator/shared/annotatable';
 import { annotateFileFeedback, annotateMessageFeedback, wrapFeedbackForClipboard, type AnnotateFeedbackTemplates } from '@plannotator/shared/feedback-templates';
 import { parseMarkdownToBlocks, exportAnnotations, exportLinkedDocAnnotations, exportEditorAnnotations, exportCodeFileAnnotations, exportMessageAnnotations, extractFrontmatter, wrapFeedbackForAgent, Frontmatter, type LinkedDocAnnotationEntry, type MessageAnnotationEntry } from '@plannotator/ui/utils/parser';
-import { primeSkillCatalog } from '@plannotator/ui/utils/skillCatalog';
+import { primeSkillCatalog, primeSkillContentsForExport } from '@plannotator/ui/utils/skillCatalog';
 import { Viewer, ViewerHandle } from '@plannotator/ui/components/Viewer';
 import { HtmlViewer } from '@plannotator/ui/components/html-viewer';
 import { MarkdownEditor, type MarkdownEditorHandle } from '@plannotator/ui/components/MarkdownEditor';
@@ -1419,6 +1419,49 @@ const App: React.FC = () => {
       linkedDocHook.docAnnotationCount +
       globalAttachments.length;
 
+  // Lazily fetch the SKILL.md contents of referenced HUMAN-ONLY skills so the
+  // exported feedback can inject their instructions (a human referencing a
+  // human-only skill IS the human invocation). Runs whenever comment state
+  // changes — covering typed comments, panel edits, draft restore, and
+  // external annotations — and bumps a generation so memoized exports
+  // recompute once content lands. A submit that races the fetch degrades to
+  // the name + directory fallback inside skillReferenceExportBlock.
+  const [skillContentGeneration, setSkillContentGeneration] = useState(0);
+  useEffect(() => {
+    if (!isApiMode) return;
+    const texts: Array<string | undefined> = [];
+    for (const a of allAnnotations) texts.push(a.text);
+    for (const a of codeAnnotations) texts.push(a.text);
+    for (const entry of linkedDocHook.getDocAnnotations().values()) {
+      for (const a of entry.annotations) texts.push(a.text);
+    }
+    if (messageMultiSelectMode) {
+      for (const state of getMessageStatesWithCurrent().values()) {
+        for (const a of state.linkedDocSession.root.annotations) texts.push(a.text);
+        for (const doc of state.linkedDocSession.docs.values()) {
+          for (const a of doc.annotations) texts.push(a.text);
+        }
+        for (const a of state.codeAnnotations) texts.push(a.text);
+      }
+    }
+    let cancelled = false;
+    primeSkillContentsForExport(texts).then((changed) => {
+      if (changed && !cancelled) setSkillContentGeneration((g) => g + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isApiMode,
+    allAnnotations,
+    codeAnnotations,
+    linkedDocHook.docAnnotationCount,
+    linkedDocHook.getDocAnnotations,
+    messageMultiSelectMode,
+    getMessageStatesWithCurrent,
+    activeMessageAnnotationCounts,
+  ]);
+
   const annotationsOutput = useMemo(() => {
     const docAnnotations = linkedDocHook.getDocAnnotations();
     const hasDocAnnotations = Array.from(docAnnotations.values()).some(
@@ -1469,7 +1512,9 @@ const App: React.FC = () => {
     }
 
     return output;
-  }, [blocks, allAnnotations, globalAttachments, linkedDocHook.getDocAnnotations, editorAnnotations, codeAnnotations, sourceConverted, annotateSource, linkedDocHook.isActive, linkedDocHook.filepath]);
+    // skillContentGeneration re-runs this once lazily fetched human-only skill
+    // contents land in the export registry (module state the exporters read).
+  }, [blocks, allAnnotations, globalAttachments, linkedDocHook.getDocAnnotations, editorAnnotations, codeAnnotations, sourceConverted, annotateSource, linkedDocHook.isActive, linkedDocHook.filepath, skillContentGeneration]);
 
   // Code-file comments are intentionally not serialized into share URLs in v1.
   // Hide share entry points once they exist so we do not silently drop feedback.

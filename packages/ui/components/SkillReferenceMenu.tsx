@@ -186,9 +186,8 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
           data-skill-menu-warning="true"
           className="px-3 py-2 border-t border-border/50 text-[11px] leading-snug text-amber-600 dark:text-amber-400"
         >
-          This skill can only be run by a person. The agent that receives your
-          feedback cannot invoke it, so referencing it will not make the agent
-          run it. You can still insert it as context.
+          This skill cannot be invoked by a model, so its instructions will be
+          included with your feedback for the agent to follow.
         </div>
       )}
     </div>
@@ -227,13 +226,13 @@ export const HumanOnlySkillNotice: React.FC<HumanOnlySkillNoticeProps> = ({ skil
     >
       {skills.length === 1 ? (
         <>
-          <span className="font-mono">{names}</span> can only be run by a person. The
-          agent cannot invoke it; it will be passed along as context only.
+          <span className="font-mono">{names}</span> cannot be invoked by a model, so
+          its instructions will be included with your feedback.
         </>
       ) : (
         <>
-          <span className="font-mono">{names}</span> can only be run by a person. The
-          agent cannot invoke them; they will be passed along as context only.
+          <span className="font-mono">{names}</span> cannot be invoked by a model, so
+          their instructions will be included with your feedback.
         </>
       )}
     </div>

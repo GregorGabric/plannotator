@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   fetchSkillCatalog,
   getCachedSkillCatalog,
+  primeSkillContentsForExport,
   resetSkillCatalogCache,
   resetSkillCatalogTransport,
+  resetSkillContentTransport,
   setSkillCatalogTransport,
+  setSkillContentTransport,
 } from './skillCatalog';
 import { skillReferenceExportBlock, type SkillCatalogEntry } from './skillReferences';
 
@@ -26,12 +29,14 @@ function stubFetch(impl: () => Promise<Response> | Response) {
 beforeEach(() => {
   resetSkillCatalogCache();
   resetSkillCatalogTransport();
+  resetSkillContentTransport();
 });
 
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetSkillCatalogCache();
   resetSkillCatalogTransport();
+  resetSkillContentTransport();
 });
 
 describe('fetchSkillCatalog', () => {
@@ -143,5 +148,117 @@ describe('skillCatalogTransport seam', () => {
   test('a throwing host transport degrades to an empty catalog', async () => {
     setSkillCatalogTransport(() => Promise.reject(new Error('host boom')));
     expect(await fetchSkillCatalog()).toEqual([]);
+  });
+});
+
+describe('primeSkillContentsForExport', () => {
+  const HUMAN_ONLY_CATALOG = [
+    { name: 'write-better', root: 'claude', humanOnly: false },
+    {
+      name: 'plannotator-review',
+      root: 'claude',
+      humanOnly: true,
+      dir: '/skills/plannotator-review',
+    },
+  ];
+
+  function stubCatalogAndContent() {
+    setSkillCatalogTransport(async () => HUMAN_ONLY_CATALOG as SkillCatalogEntry[]);
+    const requested: string[] = [];
+    setSkillContentTransport(async (name) => {
+      requested.push(name);
+      return {
+        name,
+        dir: `/skills/${name}`,
+        path: `/skills/${name}/SKILL.md`,
+        content: `# Instructions for ${name}`,
+        truncated: false,
+        humanOnly: true,
+      };
+    });
+    return requested;
+  }
+
+  test('fetches only the HUMAN-ONLY skills the texts reference, and registers them for export', async () => {
+    const requested = stubCatalogAndContent();
+    const changed = await primeSkillContentsForExport([
+      'Use /write-better and $plannotator-review.',
+      undefined,
+      'plain comment',
+    ]);
+    expect(changed).toBe(true);
+    // Lazy: the model-invocable skill is never fetched.
+    expect(requested).toEqual(['plannotator-review']);
+
+    const block = skillReferenceExportBlock('Run $plannotator-review.');
+    expect(block).toContain('--- BEGIN SKILL INSTRUCTIONS: plannotator-review ---');
+    expect(block).toContain('# Instructions for plannotator-review');
+  });
+
+  test('one request per skill per session, however often priming re-runs', async () => {
+    const requested = stubCatalogAndContent();
+    await primeSkillContentsForExport(['$plannotator-review']);
+    await primeSkillContentsForExport(['$plannotator-review again']);
+    await primeSkillContentsForExport(['$plannotator-review and /write-better']);
+    expect(requested).toEqual(['plannotator-review']);
+  });
+
+  test('no human-only references → no requests, resolves false', async () => {
+    const requested = stubCatalogAndContent();
+    expect(await primeSkillContentsForExport(['Use /write-better only.'])).toBe(false);
+    expect(requested).toEqual([]);
+  });
+
+  test('a failing content transport degrades to the name + directory fallback, never throws', async () => {
+    setSkillCatalogTransport(async () => HUMAN_ONLY_CATALOG as SkillCatalogEntry[]);
+    setSkillContentTransport(() => Promise.reject(new Error('gone')));
+    expect(await primeSkillContentsForExport(['$plannotator-review'])).toBe(false);
+
+    const block = skillReferenceExportBlock('Run $plannotator-review.');
+    expect(block).toContain('read SKILL.md in /skills/plannotator-review and follow it');
+    expect(block).not.toContain('BEGIN SKILL INSTRUCTIONS');
+  });
+
+  test('a malformed content payload is treated as no content', async () => {
+    setSkillCatalogTransport(async () => HUMAN_ONLY_CATALOG as SkillCatalogEntry[]);
+    setSkillContentTransport(async () => ({ nope: true }));
+    expect(await primeSkillContentsForExport(['$plannotator-review'])).toBe(false);
+    expect(skillReferenceExportBlock('$plannotator-review')).not.toContain(
+      'BEGIN SKILL INSTRUCTIONS',
+    );
+  });
+
+  test('a reset while a content request is outstanding keeps it from writing dead state', async () => {
+    setSkillCatalogTransport(async () => HUMAN_ONLY_CATALOG as SkillCatalogEntry[]);
+    let resolveContent!: (value: unknown) => void;
+    setSkillContentTransport(
+      () =>
+        new Promise((resolve) => {
+          resolveContent = resolve;
+        }),
+    );
+    const pending = primeSkillContentsForExport(['$plannotator-review']);
+    // The content request starts after the (async) catalog fetch resolves.
+    while (!resolveContent) await Bun.sleep(0);
+
+    resetSkillCatalogCache();
+    resolveContent({
+      name: 'plannotator-review',
+      dir: '/skills/plannotator-review',
+      path: '/skills/plannotator-review/SKILL.md',
+      content: '# ghost',
+      truncated: false,
+    });
+    await pending;
+
+    // The reset cleared the export catalog, so the block is empty…
+    expect(skillReferenceExportBlock('$plannotator-review')).toBe('');
+
+    // …and after the catalog comes back, the dead request's body must NOT
+    // have been revived into the content registry.
+    await fetchSkillCatalog();
+    const block = skillReferenceExportBlock('$plannotator-review');
+    expect(block).not.toContain('# ghost');
+    expect(block).toContain('read SKILL.md in /skills/plannotator-review and follow it');
   });
 });

@@ -13,10 +13,21 @@
  * Never throws and never rejects: any failure (endpoint missing on a host,
  * network error, malformed payload, a throwing host transport) yields an empty
  * catalog, which renders the composer's `/` and `$` as plain typing.
+ *
+ * This module also lazily fetches the SKILL.md contents of referenced
+ * HUMAN-ONLY skills (default: `GET /api/skills/content?name=`) so the export
+ * can inject their instructions — see primeSkillContentsForExport below and
+ * skillReferenceExportBlock in utils/skillReferences.ts. Same posture: its
+ * failures degrade to the name + directory fallback, never an error.
  */
 
-import type { SkillCatalogEntry, SkillRootId } from './skillReferences';
-import { setSkillCatalogForExport } from './skillReferences';
+import type { SkillCatalogEntry, SkillExportContent, SkillRootId } from './skillReferences';
+import {
+  extractSkillReferences,
+  registerSkillContentForExport,
+  resetSkillContentsForExport,
+  setSkillCatalogForExport,
+} from './skillReferences';
 
 const CATALOG_TTL_MS = 30_000;
 
@@ -28,7 +39,7 @@ export type SkillCatalogTransport = () => Promise<SkillCatalogEntry[]>;
 
 function normalizeEntry(raw: unknown): SkillCatalogEntry | null {
   if (!raw || typeof raw !== 'object') return null;
-  const { name, root, description, humanOnly } = raw as Record<string, unknown>;
+  const { name, root, description, humanOnly, dir } = raw as Record<string, unknown>;
   if (typeof name !== 'string' || !name) return null;
   const rootId: SkillRootId =
     root === 'claude' || root === 'codex' || root === 'universal' ? root : 'universal';
@@ -37,6 +48,7 @@ function normalizeEntry(raw: unknown): SkillCatalogEntry | null {
     root: rootId,
     ...(typeof description === 'string' && description ? { description } : {}),
     humanOnly: humanOnly === true,
+    ...(typeof dir === 'string' && dir ? { dir } : {}),
   };
 }
 
@@ -128,5 +140,106 @@ export function resetSkillCatalogCache(): void {
   generation++;
   cached = null;
   inflight = null;
+  contentRequests.clear();
   setSkillCatalogForExport([]);
+  resetSkillContentsForExport();
+}
+
+// ---------------------------------------------------------------------------
+// Human-only skill contents (lazy, per referenced skill)
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-override seam for the content request (see skillCatalogTransport
+ * above). Must resolve to the raw `{ name, dir, path, content, truncated }`
+ * record for one skill, or null/undefined when unavailable; failures may
+ * reject or throw — the cache layer degrades them to "no content", which
+ * exports as the name + directory fallback.
+ */
+export type SkillContentTransport = (name: string) => Promise<unknown>;
+
+const defaultContentTransport: SkillContentTransport = async (name) => {
+  const res = await fetch(`/api/skills/content?name=${encodeURIComponent(name)}`);
+  if (!res.ok) return null;
+  const data = (await res.json()) as { skill?: unknown };
+  return data.skill ?? null;
+};
+
+let contentTransport: SkillContentTransport = defaultContentTransport;
+
+export function setSkillContentTransport(next: SkillContentTransport): void {
+  contentTransport = next;
+}
+
+export function resetSkillContentTransport(): void {
+  contentTransport = defaultContentTransport;
+}
+
+function normalizeSkillContent(raw: unknown): SkillExportContent | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { content, truncated, dir, path } = raw as Record<string, unknown>;
+  if (typeof content !== 'string' || !content) return null;
+  if (typeof dir !== 'string' || !dir) return null;
+  if (typeof path !== 'string' || !path) return null;
+  return { content, truncated: truncated === true, dir, path };
+}
+
+// One request per skill name per session (a failure is cached as "no content"
+// and not retried; the export's name + directory fallback covers it). Cleared
+// by resetSkillCatalogCache alongside the catalog itself.
+const contentRequests = new Map<string, Promise<boolean>>();
+
+/**
+ * Fetch and register the SKILL.md contents for every HUMAN-ONLY skill the
+ * given comment texts reference, so skillReferenceExportBlock can inject them.
+ * Lazy by design: only referenced human-only skills are fetched — model-
+ * invocable skills export as names the agent can invoke itself, so shipping
+ * every body up front would be pure bloat.
+ *
+ * Resolves true when at least one awaited request registered content (callers
+ * use that to re-render memoized exports). Never rejects.
+ */
+export async function primeSkillContentsForExport(
+  texts: Array<string | undefined | null>,
+): Promise<boolean> {
+  try {
+    const catalog = await fetchSkillCatalog();
+    if (catalog.length === 0) return false;
+
+    const names = new Set<string>();
+    for (const text of texts) {
+      if (!text) continue;
+      for (const ref of extractSkillReferences(text, catalog)) {
+        if (ref.humanOnly) names.add(ref.name);
+      }
+    }
+    if (names.size === 0) return false;
+
+    const results = await Promise.all(
+      [...names].map((name) => {
+        let request = contentRequests.get(name);
+        if (!request) {
+          const startedIn = generation;
+          request = (async () => {
+            try {
+              const skill = normalizeSkillContent(await contentTransport(name));
+              if (!skill) return false;
+              // A reset while this request was outstanding: report what we
+              // got, but never let a dead request write shared state.
+              if (startedIn !== generation) return false;
+              registerSkillContentForExport(name, skill);
+              return true;
+            } catch {
+              return false;
+            }
+          })();
+          contentRequests.set(name, request);
+        }
+        return request;
+      }),
+    );
+    return results.some(Boolean);
+  } catch {
+    return false;
+  }
 }

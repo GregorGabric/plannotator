@@ -268,9 +268,18 @@ export interface ReferenceSkill {
   /**
    * True when SKILL.md frontmatter carries `disable-model-invocation: true` —
    * the skill can only be invoked by a human, so a model receiving feedback
-   * that references it cannot run it.
+   * that references it cannot run it. The exported feedback injects such a
+   * skill's instructions instead of just naming it (a human referencing a
+   * human-only skill IS the human invocation).
    */
   humanOnly: boolean;
+  /**
+   * Absolute path to the skill directory. Lets the exported feedback name a
+   * real location the acting agent can read even when the content endpoint
+   * later fails (skill deleted mid-session, unreadable file). Same exposure
+   * as `sourcePath` on /api/agents/skills.
+   */
+  dir: string;
 }
 
 /**
@@ -415,9 +424,83 @@ export function listReferenceSkills(): ReferenceSkill[] {
     const head = readFileHead(skill.skillMdPath, SKILL_META_HEAD_BYTES);
     if (head === null) continue;
     const meta = parseSkillFrontmatterMeta(head.text, { truncated: head.truncated });
-    skills.push({ name: skill.name, root: skill.root, ...meta });
+    skills.push({ name: skill.name, root: skill.root, ...meta, dir: skill.sourcePath });
   }
   return skills;
+}
+
+// ---------------------------------------------------------------------------
+// Reference content (human-only skill injection into exported feedback)
+// ---------------------------------------------------------------------------
+
+/**
+ * Injection bound for a referenced skill's SKILL.md body. Same value as
+ * MAX_SKILL_BODY_LEN (the "a giant SKILL.md would blow up the prompt" bound),
+ * but a separate constant: review profiles DROP an oversized skill, while
+ * reference injection TRUNCATES and says so, pointing the agent at the file.
+ */
+export const MAX_INJECTED_SKILL_CONTENT_LEN = 20_000;
+
+/** A referenced skill's SKILL.md body, prepared for feedback injection. */
+export interface ReferenceSkillContent {
+  name: string;
+  /** Absolute path to the skill directory. */
+  dir: string;
+  /** Absolute path to SKILL.md. */
+  path: string;
+  /** Frontmatter-stripped SKILL.md body, possibly truncated. */
+  content: string;
+  /** True when the body was cut at MAX_INJECTED_SKILL_CONTENT_LEN. */
+  truncated: boolean;
+  humanOnly: boolean;
+}
+
+/**
+ * Read a referenced skill's SKILL.md body for injection into exported
+ * feedback.
+ *
+ * Security: the client-supplied name is only ever MATCHED against the names
+ * produced by discoverSkills() — it is never used to build a filesystem path,
+ * so traversal sequences, separators, and absolute paths cannot reach outside
+ * the discovered roots (they simply match no skill). The explicit separator
+ * guard just fails such names fast without a discovery walk.
+ *
+ * Returns null (never throws) when the name matches no discovered skill, the
+ * file cannot be read, or the body is empty — the client then falls back to
+ * naming the skill plus its directory.
+ */
+export function readReferenceSkillContent(name: string): ReferenceSkillContent | null {
+  if (!name || /[\\/]/.test(name) || name.includes("..")) return null;
+  const skill = discoverSkills().find((s) => s.name === name);
+  if (!skill) return null;
+
+  let raw: string;
+  try {
+    raw = readFileSync(skill.skillMdPath, "utf-8");
+  } catch (err) {
+    console.error(
+      `[plannotator] Could not read skill "${name}" for reference injection: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return null;
+  }
+
+  // Frontmatter is metadata (name, description, invocation flags), not
+  // instruction — strip it, matching how review profiles consume skills.
+  const meta = parseSkillFrontmatterMeta(raw);
+  const body = stripFrontmatter(raw).trim();
+  if (!body) return null;
+
+  const truncated = body.length > MAX_INJECTED_SKILL_CONTENT_LEN;
+  return {
+    name: skill.name,
+    dir: skill.sourcePath,
+    path: skill.skillMdPath,
+    content: truncated ? body.slice(0, MAX_INJECTED_SKILL_CONTENT_LEN) : body,
+    truncated,
+    humanOnly: meta.humanOnly,
+  };
 }
 
 // ---------------------------------------------------------------------------

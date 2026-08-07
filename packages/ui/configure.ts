@@ -7,7 +7,7 @@ import { setFileTreeBackend, type FileTreeBackend } from './hooks/useFileBrowser
 import { setDraftTransport, type DraftTransport } from './hooks/useAnnotationDraft';
 import { setExternalAnnotationTransport, type ExternalAnnotationTransport } from './hooks/useExternalAnnotations';
 import { setAITransport, type AITransport } from './hooks/useAIChat';
-import { setSkillCatalogTransport, type SkillCatalogTransport } from './utils/skillCatalog';
+import { setSkillCatalogTransport, setSkillContentTransport, type SkillCatalogTransport, type SkillContentTransport } from './utils/skillCatalog';
 import { configStore } from './config';
 import type { ServerSyncFn } from './config/configStore';
 import type { ExternalAnnotationEvent, VaultNode } from './types';
@@ -29,6 +29,7 @@ export type {
   ExternalAnnotationEvent,
   AITransport,
   SkillCatalogTransport,
+  SkillContentTransport,
   ServerSyncFn,
 };
 
@@ -52,6 +53,8 @@ export interface PlannotatorUIConfig {
   aiTransport?: AITransport;
   /** Skill-reference catalog request. Default: `GET /api/skills` on the page origin. */
   skillCatalogTransport?: SkillCatalogTransport;
+  /** Human-only skill contents request for feedback injection. Default: `GET /api/skills/content?name=` on the page origin. */
+  skillContentTransport?: SkillContentTransport;
   serverSync?: ServerSyncFn;
   /** Re-hydrate settings from the installed (SYNCHRONOUS) storageBackend after install. */
   loadSettingsFromBackend?: boolean;
@@ -68,6 +71,7 @@ export function configurePlannotatorUI(config: PlannotatorUIConfig): void {
   if (config.externalAnnotationTransport) setExternalAnnotationTransport(config.externalAnnotationTransport);
   if (config.aiTransport) setAITransport(config.aiTransport);
   if (config.skillCatalogTransport) setSkillCatalogTransport(config.skillCatalogTransport);
+  if (config.skillContentTransport) setSkillContentTransport(config.skillContentTransport);
   if (config.serverSync) configStore.setServerSync(config.serverSync);
   // Re-hydrate AFTER storageBackend is installed (load-bearing order — gated last).
   if (config.loadSettingsFromBackend) configStore.loadFromBackend();

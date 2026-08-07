@@ -22,6 +22,7 @@ import {
 	handleFavicon,
 	handleImageRequest,
 	handleReferenceSkillsRequest,
+	handleReferenceSkillContentRequest,
 	readDraftGenerationFromBody,
 	handleSaveNotesRequest,
 	handleUploadRequest,
@@ -289,6 +290,8 @@ export async function startPlanReviewServer(options: {
 			handleObsidianVaultsRequest(res);
 		} else if (url.pathname === "/api/skills" && req.method === "GET") {
 			handleReferenceSkillsRequest(res);
+		} else if (url.pathname === "/api/skills/content" && req.method === "GET") {
+			handleReferenceSkillContentRequest(res, url);
 		} else if (url.pathname === "/api/reference/obsidian/files" && req.method === "GET") {
 			handleObsidianFilesRequest(res, url);
 		} else if (url.pathname === "/api/reference/obsidian/doc" && req.method === "GET") {

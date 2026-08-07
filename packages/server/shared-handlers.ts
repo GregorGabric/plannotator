@@ -15,7 +15,7 @@ import { saveDraft, loadDraft, deleteDraft, getDraftGeneration } from "./draft";
 import { FAVICON_PNG_BYTES } from "@plannotator/shared/favicon";
 import { saveToObsidian, saveToBear, saveToOctarine } from "./integrations";
 import type { ObsidianConfig, BearConfig, OctarineConfig, IntegrationResult } from "./integrations";
-import { listReferenceSkills } from "./review-skill-loader";
+import { listReferenceSkills, readReferenceSkillContent } from "./review-skill-loader";
 
 function normalizeDraftGeneration(value: unknown): number | undefined {
   if (typeof value !== "number") return undefined;
@@ -166,6 +166,28 @@ export function handleReferenceSkills(): Response {
       `[plannotator] Skill catalog failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     return Response.json({ skills: [] });
+  }
+}
+
+/**
+ * Serve a referenced skill's SKILL.md contents for feedback injection
+ * (`?name=<skill>`). Used by plan + annotate servers. The name is matched
+ * against discovered skills only — it is never used as a path — so traversal
+ * and absolute-path inputs answer 404, never a file outside the skill roots.
+ */
+export function handleReferenceSkillContent(req: Request): Response {
+  try {
+    const name = new URL(req.url).searchParams.get("name") ?? "";
+    const skill = readReferenceSkillContent(name);
+    if (!skill) {
+      return Response.json({ error: "Skill not found" }, { status: 404 });
+    }
+    return Response.json({ skill });
+  } catch (err) {
+    console.error(
+      `[plannotator] Skill content failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return Response.json({ error: "Skill content failed" }, { status: 500 });
   }
 }
 

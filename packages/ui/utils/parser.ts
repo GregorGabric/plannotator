@@ -1128,6 +1128,10 @@ export const exportAnnotations = (
     return a.startOffset - b.startOffset;
   });
 
+  // One injection per export: a human-only skill referenced by several
+  // comments has its instructions injected once (see skillReferenceExportBlock).
+  const injectedSkills = new Set<string>();
+
   let output = `# ${title}\n\n`;
 
   if (opts.sourceConverted) {
@@ -1186,7 +1190,7 @@ export const exportAnnotations = (
 
     // Skill references in the comment text (no-op unless a catalog is registered)
     if (!ann.isQuickLabel) {
-      output += skillReferenceExportBlock(ann.text);
+      output += skillReferenceExportBlock(ann.text, injectedSkills);
     }
 
     // Add attached images for this annotation
@@ -1232,6 +1236,9 @@ export const exportLinkedDocAnnotations = (
   docAnnotations: Map<string, LinkedDocAnnotationEntry>
 ): string => {
   let output = `\n# Linked Document Feedback\n\nThe following feedback is on documents referenced in the plan.\n\n`;
+
+  // One injection per export, across all linked documents.
+  const injectedSkills = new Set<string>();
 
   for (const [filepath, { annotations, globalAttachments, blocks: docBlocks, isConverted }] of docAnnotations) {
     if (annotations.length === 0 && globalAttachments.length === 0) continue;
@@ -1279,7 +1286,7 @@ export const exportLinkedDocAnnotations = (
           break;
       }
 
-      output += skillReferenceExportBlock(ann.text);
+      output += skillReferenceExportBlock(ann.text, injectedSkills);
 
       if (ann.images && ann.images.length > 0) {
         output += `**Attached images:**\n`;
@@ -1324,6 +1331,8 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
   if (annotations.length === 0) return '';
 
   let output = `\n# Code File Feedback\n\nThe following feedback is on code files referenced from the reviewed document.\n\n`;
+  // One injection per export, across all code-file comments.
+  const injectedSkills = new Set<string>();
   const sorted = [...annotations].sort((a, b) => {
     if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath);
     if (a.lineStart !== b.lineStart) return a.lineStart - b.lineStart;
@@ -1342,7 +1351,7 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
     if (ann.text) {
       output += `> ${ann.text}\n`;
     }
-    output += skillReferenceExportBlock(ann.text);
+    output += skillReferenceExportBlock(ann.text, injectedSkills);
     if (ann.images && ann.images.length > 0) {
       output += `**Attached images:**\n`;
       ann.images.forEach((img) => {

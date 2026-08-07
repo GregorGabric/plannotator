@@ -6,11 +6,14 @@ import {
   findSkillTrigger,
   insertSkillReference,
   MAX_SKILL_QUERY_LEN,
+  registerSkillContentForExport,
   resetSkillCatalogForExport,
+  resetSkillContentsForExport,
   setSkillCatalogForExport,
   skillReferenceExportBlock,
   type SkillCatalogEntry,
 } from './skillReferences';
+import { exportAnnotations } from './parser';
 
 const catalog: SkillCatalogEntry[] = [
   { name: 'write-better', root: 'claude', description: 'Improve prose', humanOnly: false },
@@ -21,6 +24,7 @@ const catalog: SkillCatalogEntry[] = [
 
 afterEach(() => {
   resetSkillCatalogForExport();
+  resetSkillContentsForExport();
 });
 
 describe('findSkillTrigger', () => {
@@ -248,25 +252,204 @@ describe('skillReferenceExportBlock', () => {
     expect(skillReferenceExportBlock('/write-better')).toBe('');
   });
 
-  test('lists referenced skills once a catalog is registered', () => {
+  test('lists referenced skills once a catalog is registered, as a request from the reviewer', () => {
     setSkillCatalogForExport(catalog);
     const block = skillReferenceExportBlock('Use /write-better and $humanizer.');
     expect(block).toBe(
-      '**Skills referenced** (use each of these skills when acting on this feedback):\n' +
+      '**Skills referenced** (the reviewer is asking you to invoke these skills when acting on this feedback):\n' +
         '- `write-better`\n' +
         '- `humanizer`\n',
     );
   });
 
-  test('marks human-invocation-only skills so the agent is not asked to invoke them', () => {
+  test('a human-only skill with no content and no dir keeps the plain context note', () => {
     setSkillCatalogForExport(catalog);
     const block = skillReferenceExportBlock('Run $plannotator-review on this.');
     expect(block).toContain('- `plannotator-review` (human-invocation-only:');
+    expect(block).not.toContain('BEGIN SKILL INSTRUCTIONS');
   });
 
   test('no references in the text → empty block', () => {
     setSkillCatalogForExport(catalog);
     expect(skillReferenceExportBlock('plain comment')).toBe('');
     expect(skillReferenceExportBlock(undefined)).toBe('');
+  });
+});
+
+describe('skillReferenceExportBlock — human-only skill injection', () => {
+  const humanOnlyCatalog: SkillCatalogEntry[] = [
+    ...catalog.filter((s) => s.name !== 'plannotator-review'),
+    {
+      name: 'plannotator-review',
+      root: 'claude',
+      humanOnly: true,
+      dir: '/home/user/.claude/skills/plannotator-review',
+    },
+  ];
+
+  function registerContent(overrides: { content?: string; truncated?: boolean } = {}) {
+    registerSkillContentForExport('plannotator-review', {
+      content: overrides.content ?? '# Review checklist\n\nOpen the review UI and check every file.',
+      truncated: overrides.truncated ?? false,
+      dir: '/home/user/.claude/skills/plannotator-review',
+      path: '/home/user/.claude/skills/plannotator-review/SKILL.md',
+    });
+  }
+
+  test('injects the verbatim SKILL.md body of a referenced human-only skill', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerContent();
+    const block = skillReferenceExportBlock('Run $plannotator-review on this.');
+
+    expect(block).toContain(
+      '- `plannotator-review` (cannot be invoked by a model; its instructions are included below at the reviewer\'s request)',
+    );
+    expect(block).toContain('--- BEGIN SKILL INSTRUCTIONS: plannotator-review ---');
+    expect(block).toContain('--- END SKILL INSTRUCTIONS: plannotator-review ---');
+    // Verbatim body, and the skill-relative path pointer with the absolute dir.
+    expect(block).toContain('# Review checklist\n\nOpen the review UI and check every file.');
+    expect(block).toContain('Skill directory: /home/user/.claude/skills/plannotator-review');
+    expect(block).toContain('Resolve any relative paths in the instructions below');
+    // Not truncated → no truncation notice.
+    expect(block).not.toContain('truncated');
+  });
+
+  test('a model-invocable skill is never injected, even with content registered', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerSkillContentForExport('write-better', {
+      content: 'should never appear',
+      truncated: false,
+      dir: '/x',
+      path: '/x/SKILL.md',
+    });
+    const block = skillReferenceExportBlock('Apply /write-better here.');
+    expect(block).toBe(
+      '**Skills referenced** (the reviewer is asking you to invoke these skills when acting on this feedback):\n' +
+        '- `write-better`\n',
+    );
+  });
+
+  test('truncated content says so explicitly and points at the file', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerContent({ content: 'partial body', truncated: true });
+    const block = skillReferenceExportBlock('Run $plannotator-review.');
+    expect(block).toContain('partial body');
+    expect(block).toContain(
+      '[Instructions truncated: this is not the full skill. Read the rest at /home/user/.claude/skills/plannotator-review/SKILL.md]',
+    );
+  });
+
+  test('no content but a known dir → falls back to naming the skill plus its directory', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    const block = skillReferenceExportBlock('Run $plannotator-review.');
+    expect(block).toContain(
+      '- `plannotator-review` (cannot be invoked by a model; its instructions could not be included, read SKILL.md in /home/user/.claude/skills/plannotator-review and follow it)',
+    );
+    expect(block).not.toContain('BEGIN SKILL INSTRUCTIONS');
+  });
+
+  test('a shared injectedNames set dedupes the injection across comments', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerContent();
+    const seen = new Set<string>();
+    const first = skillReferenceExportBlock('Run $plannotator-review.', seen);
+    const second = skillReferenceExportBlock('Also $plannotator-review here.', seen);
+    expect(first).toContain('--- BEGIN SKILL INSTRUCTIONS: plannotator-review ---');
+    expect(second).not.toContain('BEGIN SKILL INSTRUCTIONS');
+    expect(second).toContain(
+      '- `plannotator-review` (cannot be invoked by a model; its instructions are included earlier in this feedback)',
+    );
+  });
+
+  test('resetSkillContentsForExport drops registered bodies', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerContent();
+    resetSkillContentsForExport();
+    expect(skillReferenceExportBlock('Run $plannotator-review.')).not.toContain(
+      'BEGIN SKILL INSTRUCTIONS',
+    );
+  });
+});
+
+describe('global comments carry skill references through the exporters', () => {
+  const humanOnlyCatalog: SkillCatalogEntry[] = [
+    ...catalog.filter((s) => s.name !== 'plannotator-review'),
+    {
+      name: 'plannotator-review',
+      root: 'claude',
+      humanOnly: true,
+      dir: '/home/user/.claude/skills/plannotator-review',
+    },
+  ];
+
+  test('a GLOBAL_COMMENT referencing skills exports the block, including injection', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerSkillContentForExport('plannotator-review', {
+      content: '# Whole-document pass',
+      truncated: false,
+      dir: '/home/user/.claude/skills/plannotator-review',
+      path: '/home/user/.claude/skills/plannotator-review/SKILL.md',
+    });
+
+    const output = exportAnnotations(
+      [],
+      [
+        {
+          id: 'g1',
+          blockId: '',
+          startOffset: 0,
+          endOffset: 0,
+          type: 'GLOBAL_COMMENT',
+          text: 'Apply /write-better and $plannotator-review to the whole document.',
+          originalText: '',
+          createdAt: 1,
+        },
+      ],
+    );
+
+    expect(output).toContain('General feedback about the plan');
+    expect(output).toContain('**Skills referenced** (the reviewer is asking you to invoke');
+    expect(output).toContain('- `write-better`');
+    expect(output).toContain('--- BEGIN SKILL INSTRUCTIONS: plannotator-review ---');
+    expect(output).toContain('# Whole-document pass');
+  });
+
+  test('two comments referencing the same human-only skill inject it once per export', () => {
+    setSkillCatalogForExport(humanOnlyCatalog);
+    registerSkillContentForExport('plannotator-review', {
+      content: '# Whole-document pass',
+      truncated: false,
+      dir: '/home/user/.claude/skills/plannotator-review',
+      path: '/home/user/.claude/skills/plannotator-review/SKILL.md',
+    });
+
+    const output = exportAnnotations(
+      [],
+      [
+        {
+          id: 'g1',
+          blockId: '',
+          startOffset: 0,
+          endOffset: 0,
+          type: 'GLOBAL_COMMENT',
+          text: 'Apply $plannotator-review everywhere.',
+          originalText: '',
+          createdAt: 1,
+        },
+        {
+          id: 'g2',
+          blockId: '',
+          startOffset: 0,
+          endOffset: 0,
+          type: 'GLOBAL_COMMENT',
+          text: 'Really, $plannotator-review.',
+          originalText: '',
+          createdAt: 2,
+        },
+      ],
+    );
+
+    expect(output.split('--- BEGIN SKILL INSTRUCTIONS: plannotator-review ---')).toHaveLength(2);
+    expect(output).toContain('its instructions are included earlier in this feedback');
   });
 });

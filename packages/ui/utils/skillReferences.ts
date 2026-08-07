@@ -22,6 +22,8 @@ export interface SkillCatalogEntry {
   description?: string;
   /** Skill frontmatter carries `disable-model-invocation: true`: only a human can invoke it. */
   humanOnly: boolean;
+  /** Absolute path to the skill directory, when the server provides it. */
+  dir?: string;
 }
 
 export const SKILL_TRIGGER_CHARS = ['/', '$'] as const;
@@ -238,26 +240,102 @@ export function resetSkillCatalogForExport(): void {
   exportCatalog = [];
 }
 
+/**
+ * A human-only skill's SKILL.md body, fetched from the server for injection
+ * into exported feedback (see utils/skillCatalog.ts, primeSkillContentsForExport).
+ */
+export interface SkillExportContent {
+  /** Verbatim SKILL.md body (frontmatter stripped), possibly truncated. */
+  content: string;
+  /** True when the server cut the body at its injection bound. */
+  truncated: boolean;
+  /** Absolute path to the skill directory. */
+  dir: string;
+  /** Absolute path to SKILL.md. */
+  path: string;
+}
+
+// Companion registry to the export catalog: bodies of the human-only skills
+// the session has referenced, fetched lazily. Default (empty) means human-only
+// references fall back to naming the skill plus its directory.
+const exportContents = new Map<string, SkillExportContent>();
+
+export function registerSkillContentForExport(name: string, content: SkillExportContent): void {
+  exportContents.set(name, content);
+}
+
+export function resetSkillContentsForExport(): void {
+  exportContents.clear();
+}
+
 const HUMAN_ONLY_EXPORT_NOTE =
   'human-invocation-only: you cannot invoke this skill; the reviewer included it as context';
+
+/** Instruction block for one injected human-only skill. Unmistakably delimited
+ *  (BEGIN/END markers survive any markdown inside the body, unlike a fence)
+ *  and labeled so it can never read as the reviewer's own words. */
+function injectedSkillSection(name: string, body: SkillExportContent): string {
+  let out = `--- BEGIN SKILL INSTRUCTIONS: ${name} ---\n`;
+  out += `This skill cannot be invoked by a model, so its instructions are included here at the reviewer's request. Follow them when acting on this feedback.\n`;
+  out += `Skill directory: ${body.dir}\n`;
+  out += `Resolve any relative paths in the instructions below (e.g. references/, scripts/, assets/) against that absolute directory; your working directory is not the skill directory.\n\n`;
+  out += `${body.content}\n`;
+  if (body.truncated) {
+    out += `\n[Instructions truncated: this is not the full skill. Read the rest at ${body.path}]\n`;
+  }
+  out += `--- END SKILL INSTRUCTIONS: ${name} ---\n`;
+  return out;
+}
 
 /**
  * The export block for a comment's skill references, or '' when the comment
  * references none (or no catalog was registered). Appended to the comment in
  * the exported feedback so the acting agent knows which skills to apply.
- * Human-only skills are marked so the agent is not asked to invoke something
- * it cannot.
+ *
+ * Model-invocable skills export as names — the agent can fetch those itself.
+ * Human-only skills cannot be invoked by the agent, so their SKILL.md body is
+ * injected verbatim (when the session fetched it): a human referencing a
+ * human-only skill IS the human invocation. When no body is available the
+ * skill falls back to its name plus its directory, and to the plain context
+ * note when not even the directory is known. Never throws, never emits a
+ * partial block.
+ *
+ * `injectedNames` is an optional per-export dedupe: exporters thread one Set
+ * through every comment of a single export so a skill's instructions are
+ * injected once, and later references point at the earlier injection.
  */
-export function skillReferenceExportBlock(text: string | undefined): string {
+export function skillReferenceExportBlock(
+  text: string | undefined,
+  injectedNames?: Set<string>,
+): string {
   if (!text) return '';
   const refs = extractSkillReferences(text, exportCatalog);
   if (refs.length === 0) return '';
 
-  let out = `**Skills referenced** (use each of these skills when acting on this feedback):\n`;
+  const toInject: Array<{ name: string; body: SkillExportContent }> = [];
+  let out = `**Skills referenced** (the reviewer is asking you to invoke these skills when acting on this feedback):\n`;
   for (const ref of refs) {
-    out += ref.humanOnly
-      ? `- \`${ref.name}\` (${HUMAN_ONLY_EXPORT_NOTE})\n`
-      : `- \`${ref.name}\`\n`;
+    if (!ref.humanOnly) {
+      out += `- \`${ref.name}\`\n`;
+      continue;
+    }
+    const body = exportContents.get(ref.name);
+    if (body) {
+      if (injectedNames?.has(ref.name)) {
+        out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included earlier in this feedback)\n`;
+      } else {
+        injectedNames?.add(ref.name);
+        toInject.push({ name: ref.name, body });
+        out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions are included below at the reviewer's request)\n`;
+      }
+    } else if (ref.dir) {
+      out += `- \`${ref.name}\` (cannot be invoked by a model; its instructions could not be included, read SKILL.md in ${ref.dir} and follow it)\n`;
+    } else {
+      out += `- \`${ref.name}\` (${HUMAN_ONLY_EXPORT_NOTE})\n`;
+    }
+  }
+  for (const { name, body } of toInject) {
+    out += `\n${injectedSkillSection(name, body)}`;
   }
   return out;
 }
