@@ -251,11 +251,11 @@ export const MAX_REFERENCE_SKILLS = 500;
 
 /**
  * Only the head of SKILL.md is read for catalog metadata — frontmatter lives at
- * the top, and this caps I/O per skill regardless of body size. A frontmatter
- * block that somehow exceeds this bound simply yields no metadata (never an
- * error).
+ * the top, and this caps I/O per skill regardless of body size. Frontmatter
+ * that overflows even this generous bound is treated as truncated and FAILS
+ * CLOSED on the invocation flag (see parseSkillFrontmatterMeta) — never open.
  */
-const SKILL_META_HEAD_BYTES = 8192;
+const SKILL_META_HEAD_BYTES = 65_536;
 
 /** Descriptions are picker subtitles, not documents. */
 const MAX_SKILL_DESCRIPTION_LEN = 200;
@@ -273,8 +273,15 @@ export interface ReferenceSkill {
   humanOnly: boolean;
 }
 
-/** Read at most `maxBytes` from the start of a file, or null when unreadable. */
-function readFileHead(path: string, maxBytes: number): string | null {
+/**
+ * Read at most `maxBytes` from the start of a file, or null when unreadable.
+ * `truncated` reports whether the file continues past the read (the head may
+ * have cut frontmatter short — the parser must not fail open on that).
+ */
+function readFileHead(
+  path: string,
+  maxBytes: number,
+): { text: string; truncated: boolean } | null {
   let fd: number;
   try {
     fd = openSync(path, "r");
@@ -284,7 +291,7 @@ function readFileHead(path: string, maxBytes: number): string | null {
   try {
     const buf = Buffer.alloc(maxBytes);
     const bytes = readSync(fd, buf, 0, maxBytes, 0);
-    return buf.subarray(0, bytes).toString("utf-8");
+    return { text: buf.subarray(0, bytes).toString("utf-8"), truncated: bytes === maxBytes };
   } catch {
     return null;
   } finally {
@@ -293,23 +300,68 @@ function readFileHead(path: string, maxBytes: number): string | null {
 }
 
 /**
+ * Strip a trailing YAML comment from an unquoted scalar: a `#` preceded by
+ * whitespace starts a comment (`true # note` → `true`). Quoted scalars keep
+ * their content verbatim; a comment after the closing quote is dropped.
+ */
+function stripYamlScalarComment(value: string): string {
+  const quote = value[0];
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    if (close > 0) return value.slice(0, close + 1);
+    return value;
+  }
+  return value.replace(/(^|[ \t])#.*$/, "").trim();
+}
+
+/** The truthy spellings accepted for `disable-model-invocation` (YAML 1.1 bools + `1`). */
+function isYamlTruthy(value: string): boolean {
+  const v = stripYamlScalarComment(value).replace(/^["']|["']$/g, "").toLowerCase();
+  return v === "true" || v === "yes" || v === "on" || v === "1";
+}
+
+/**
  * Extract the two frontmatter fields the reference picker needs: `description`
  * and `disable-model-invocation`. A deliberate line-scan, not a YAML parser —
- * the same conservative posture as stripFrontmatter. Handles quoted scalars and
- * `>` / `|` block scalars (folded to one line); anything it cannot read yields
- * `{ humanOnly: false }` rather than an error.
+ * the same conservative posture as stripFrontmatter. Handles quoted scalars,
+ * `>` / `|` block scalars (folded to one line), and trailing `# comments` on
+ * the flag value.
+ *
+ * Failure posture is asymmetric on purpose: `description` may silently come
+ * back empty, but the invocation flag guards a safety property (a human-only
+ * skill must never be presented as model-invocable). So when `truncated` says
+ * the head read may have cut the frontmatter short and no closing `---` was
+ * seen, the scan still honors a flag line it DID see — and fails closed
+ * (`humanOnly: true`) when it saw none, since the flag could sit past the
+ * truncation point. A complete file with no frontmatter yields
+ * `{ humanOnly: false }` as before.
  */
-export function parseSkillFrontmatterMeta(raw: string): {
+export function parseSkillFrontmatterMeta(
+  raw: string,
+  options: { truncated?: boolean } = {},
+): {
   description?: string;
   humanOnly: boolean;
 } {
   const text = raw.replace(/^﻿/, "");
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/);
-  if (!match) return { humanOnly: false };
+  let block: string;
+  let failClosed = false;
+  if (match) {
+    block = match[1];
+  } else if (options.truncated && /^---\r?\n/.test(text)) {
+    // Frontmatter opened but the closing --- is beyond the head read: scan
+    // what we have, and fail closed on the flag unless a flag line was seen.
+    block = text.replace(/^---\r?\n/, "");
+    failClosed = true;
+  } else {
+    return { humanOnly: false };
+  }
 
-  const lines = match[1].split(/\r?\n/);
+  const lines = block.split(/\r?\n/);
   let description: string | undefined;
   let humanOnly = false;
+  let sawFlag = false;
 
   for (let i = 0; i < lines.length; i++) {
     const kv = lines[i].match(/^([A-Za-z0-9_-]+):[ \t]*(.*)$/);
@@ -318,8 +370,8 @@ export function parseSkillFrontmatterMeta(raw: string): {
     const value = kv[2].trim();
 
     if (key === "disable-model-invocation") {
-      const v = value.replace(/^["']|["']$/g, "").toLowerCase();
-      humanOnly = v === "true" || v === "yes";
+      sawFlag = true;
+      humanOnly = isYamlTruthy(value);
     } else if (key === "description") {
       if (value === "" || /^[>|][+-]?$/.test(value)) {
         // Block scalar: gather the following indented lines into one line.
@@ -331,11 +383,12 @@ export function parseSkillFrontmatterMeta(raw: string): {
         }
         description = parts.join(" ");
       } else {
-        description = value.replace(/^["']|["']$/g, "");
+        description = stripYamlScalarComment(value).replace(/^["']|["']$/g, "");
       }
     }
   }
 
+  if (failClosed && !sawFlag) humanOnly = true;
   if (description) description = description.slice(0, MAX_SKILL_DESCRIPTION_LEN);
   return { ...(description ? { description } : {}), humanOnly };
 }
@@ -349,13 +402,18 @@ export function parseSkillFrontmatterMeta(raw: string): {
  */
 export function listReferenceSkills(): ReferenceSkill[] {
   const skills: ReferenceSkill[] = [];
-  for (const skill of discoverSkills().slice(0, MAX_REFERENCE_SKILLS)) {
+  // Sort BEFORE capping: readdir order is filesystem-dependent, so slicing
+  // first would make which 500 survive nondeterministic across machines.
+  const discovered = discoverSkills()
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, MAX_REFERENCE_SKILLS);
+  for (const skill of discovered) {
     const head = readFileHead(skill.skillMdPath, SKILL_META_HEAD_BYTES);
     if (head === null) continue;
-    const meta = parseSkillFrontmatterMeta(head);
+    const meta = parseSkillFrontmatterMeta(head.text, { truncated: head.truncated });
     skills.push({ name: skill.name, root: skill.root, ...meta });
   }
-  return skills.sort((a, b) => a.name.localeCompare(b.name));
+  return skills;
 }
 
 // ---------------------------------------------------------------------------

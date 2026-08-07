@@ -50,9 +50,16 @@ export interface SkillTriggerContext {
  * The query runs from the trigger to the caret and must stay within skill-name
  * characters, so typing a space (or any other breaking character) ends the
  * lookup naturally.
+ *
+ * A bare `/` or `$` (empty query) is NOT a trigger. This composer is
+ * multi-line plain text where Enter means newline and Tab means leave the
+ * field; a menu that opened on every bare `/` or `$` — start of a comment, a
+ * typed `- ` bullet, `cd /`, `This costs $` — would capture those keys at
+ * exactly the moments they mean something else. The menu opens once the first
+ * query character narrows the intent to a skill lookup.
  */
 export function findSkillTrigger(text: string, caret: number): SkillTriggerContext | null {
-  if (caret < 1 || caret > text.length) return null;
+  if (caret < 2 || caret > text.length) return null;
 
   // Walk back over query characters to the nearest candidate trigger.
   let start = caret - 1;
@@ -67,6 +74,7 @@ export function findSkillTrigger(text: string, caret: number): SkillTriggerConte
   if (before !== '' && !/[\s(]/.test(before)) return null;
 
   const query = text.slice(start + 1, caret);
+  if (query.length === 0) return null;
   if (query.length > MAX_SKILL_QUERY_LEN) return null;
   if (!TOKEN_CHARS.test(query)) return null;
 
@@ -99,9 +107,25 @@ export function filterSkillCatalog(
 }
 
 /**
+ * Well-known single-segment absolute paths (Filesystem Hierarchy Standard
+ * roots). `/run`, `/tmp`, `/etc`… read as filesystem paths in prose, so a
+ * `/`-triggered token with one of these names is never extracted as a skill
+ * reference, even when a skill shares the name. `$name` remains fully
+ * available for such skills, and menu insertion switches a `/` trigger to `$`
+ * for them so an inserted reference always survives extraction.
+ */
+const RESERVED_PATH_SEGMENTS = new Set([
+  'bin', 'boot', 'dev', 'etc', 'home', 'lib', 'lib64', 'media', 'mnt', 'opt',
+  'proc', 'root', 'run', 'sbin', 'srv', 'sys', 'tmp', 'usr', 'var',
+]);
+
+/**
  * Replace the in-progress trigger token with the chosen skill (keeping the
  * trigger character the user typed) plus a trailing space, so the inserted
- * reference is always cleanly word-bounded.
+ * reference is always cleanly word-bounded. The one exception to "keep the
+ * typed trigger": a `/` trigger on a skill whose name is a well-known absolute
+ * path segment (`run`, `tmp`…) inserts `$` instead, because extraction reads
+ * `/run` as a path and would drop the reference.
  */
 export function insertSkillReference(
   text: string,
@@ -109,7 +133,11 @@ export function insertSkillReference(
   trigger: SkillTriggerContext,
   skill: SkillCatalogEntry,
 ): { text: string; caret: number } {
-  const inserted = `${trigger.trigger}${skill.name} `;
+  const triggerChar =
+    trigger.trigger === '/' && RESERVED_PATH_SEGMENTS.has(skill.name.toLowerCase())
+      ? '$'
+      : trigger.trigger;
+  const inserted = `${triggerChar}${skill.name} `;
   return {
     text: text.slice(0, trigger.start) + inserted + text.slice(caret),
     caret: trigger.start + inserted.length,
@@ -120,9 +148,13 @@ export function insertSkillReference(
  * Every skill the text references, in first-appearance order, deduped by name.
  *
  * A reference is a word-starting `/name` or `$name` whose name matches a
- * catalog entry case-insensitively AND is not followed by `/` or `\` — that
- * trailing separator marks a path (`/docs/foo`, `$HOME/bin`), never a skill
- * reference.
+ * catalog entry case-insensitively, excluding path and link forms on both
+ * sides of the token:
+ * - followed by `/` or `\` — a path continuation (`/docs/foo`, `$HOME/bin`);
+ * - followed by a shell redirect (`cat /run > out`);
+ * - preceded by `](` — a markdown link destination (`[x](/write-better)`);
+ * - a `/` token naming a well-known absolute path segment (`/run`, `/tmp`) —
+ *   see RESERVED_PATH_SEGMENTS; `$run` still counts.
  */
 export function extractSkillReferences(
   text: string,
@@ -133,14 +165,23 @@ export function extractSkillReferences(
 
   const found: SkillCatalogEntry[] = [];
   const seen = new Set<string>();
-  const re = /(^|[\s(])[$/]([A-Za-z0-9][A-Za-z0-9._-]*)/g;
+  const re = /(^|[\s(])([$/])([A-Za-z0-9][A-Za-z0-9._-]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const after = text[m.index + m[0].length];
     if (after === '/' || after === '\\') continue;
+    // Markdown link destination: `[label](/name)` is a URL, not a reference.
+    if (m[1] === '(' && text[m.index - 1] === ']') continue;
+    // Shell redirect right after the token marks a command line (`cat /run > out`).
+    const rest = text.slice(m.index + m[0].length).match(/^[ \t]*([<>])/);
+    if (rest) continue;
     // Sentence-final dots are punctuation, not part of the name ("use $humanizer.").
-    const entry =
-      byName.get(m[2].toLowerCase()) ?? byName.get(m[2].replace(/\.+$/, '').toLowerCase());
+    const name = m[3].toLowerCase();
+    const trimmedName = m[3].replace(/\.+$/, '').toLowerCase();
+    // `/run`-style well-known absolute paths never count (only for `/`).
+    if (m[2] === '/' && (RESERVED_PATH_SEGMENTS.has(name) || RESERVED_PATH_SEGMENTS.has(trimmedName)))
+      continue;
+    const entry = byName.get(name) ?? byName.get(trimmedName);
     if (!entry || seen.has(entry.name)) continue;
     seen.add(entry.name);
     found.push(entry);

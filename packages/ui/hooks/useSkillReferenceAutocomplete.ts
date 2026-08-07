@@ -45,7 +45,11 @@ export function useSkillReferenceAutocomplete(options: {
   enabled: boolean;
 }): UseSkillReferenceAutocompleteResult {
   const { text, setText, textareaRef, enabled } = options;
-  const [catalog, setCatalog] = useState<SkillCatalogEntry[]>(getCachedSkillCatalog);
+  // Seed from the memory cache only when the surface opted in — a disabled
+  // composer must stay inert even after another surface warmed the catalog.
+  const [catalog, setCatalog] = useState<SkillCatalogEntry[]>(() =>
+    enabled ? getCachedSkillCatalog() : [],
+  );
   const [caret, setCaret] = useState<number | null>(null);
   const [highlightIndex, setHighlightIndex] = useState(0);
   // Escape dismisses the menu for the trigger it was open on; the same trigger
@@ -103,6 +107,13 @@ export function useSkillReferenceAutocomplete(options: {
       const result = insertSkillReference(text, el.selectionStart, trigger, item);
       setText(result.text);
       setCaret(result.caret);
+      // Close deterministically. The DOM caret only moves in the 0ms timer
+      // below, and React's select plugin can re-read the STALE caret before
+      // then (mousedown/keydown fire onSelect), which would transiently
+      // re-open the menu on the just-replaced query. Dismissing the trigger
+      // start makes the close ordering-safe; the dismissal clears itself as
+      // soon as the trigger changes (including to null when the caret lands).
+      setDismissedStart(trigger.start);
       // Restore focus + caret after React commits the new value.
       setTimeout(() => {
         if (!el.isConnected) return;
@@ -116,6 +127,11 @@ export function useSkillReferenceAutocomplete(options: {
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
       if (!open) return false;
+      // IME composition: for Pinyin, Telex, 2-set Korean and friends the
+      // composition buffer is ASCII, so the menu can be open exactly when
+      // Enter means "commit this candidate" and the arrows drive the
+      // candidate list. Never consume keys mid-composition.
+      if (e.nativeEvent.isComposing) return false;
       if (e.metaKey || e.ctrlKey || e.altKey) return false;
       switch (e.key) {
         case 'ArrowDown':
@@ -144,8 +160,8 @@ export function useSkillReferenceAutocomplete(options: {
   );
 
   const humanOnlyReferences = useMemo(
-    () => extractSkillReferences(text, catalog).filter((s) => s.humanOnly),
-    [text, catalog],
+    () => (enabled ? extractSkillReferences(text, catalog).filter((s) => s.humanOnly) : []),
+    [enabled, text, catalog],
   );
 
   return {

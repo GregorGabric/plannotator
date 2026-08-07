@@ -402,6 +402,59 @@ describe("parseSkillFrontmatterMeta", () => {
     expect(meta.description).toBe("windows");
     expect(meta.humanOnly).toBe(true);
   });
+
+  test("a trailing YAML comment on the flag value does not flip it open", () => {
+    const meta = parseSkillFrontmatterMeta(
+      "---\ndisable-model-invocation: true # humans only\n---\nbody",
+    );
+    expect(meta.humanOnly).toBe(true);
+    expect(
+      parseSkillFrontmatterMeta("---\ndisable-model-invocation: false # note\n---\n").humanOnly,
+    ).toBe(false);
+  });
+
+  test("the common YAML truthy spellings all read as true", () => {
+    for (const v of ["true", "TRUE", "True", '"true"', "yes", "on", "1", "'yes'"]) {
+      expect(
+        parseSkillFrontmatterMeta(`---\ndisable-model-invocation: ${v}\n---\n`).humanOnly,
+      ).toBe(true);
+    }
+    for (const v of ["false", "no", "off", "0", '"false"']) {
+      expect(
+        parseSkillFrontmatterMeta(`---\ndisable-model-invocation: ${v}\n---\n`).humanOnly,
+      ).toBe(false);
+    }
+  });
+
+  test("descriptions keep quoted content but lose trailing comments", () => {
+    expect(
+      parseSkillFrontmatterMeta('---\ndescription: "Keep #this" # not this\n---\n').description,
+    ).toBe("Keep #this");
+    expect(
+      parseSkillFrontmatterMeta("---\ndescription: plain text # comment\n---\n").description,
+    ).toBe("plain text");
+  });
+
+  test("truncated unterminated frontmatter fails CLOSED on the flag", () => {
+    // No closing --- inside the head read. A flag line that WAS read is
+    // honored; a flag that may sit past the truncation point defaults to
+    // human-only, never to model-invocable.
+    const truncated = { truncated: true };
+    expect(
+      parseSkillFrontmatterMeta("---\nname: x\ndescription: d", truncated).humanOnly,
+    ).toBe(true);
+    expect(
+      parseSkillFrontmatterMeta("---\ndisable-model-invocation: false\nname: x", truncated)
+        .humanOnly,
+    ).toBe(false);
+    expect(
+      parseSkillFrontmatterMeta("---\ndisable-model-invocation: true\nname: x", truncated)
+        .humanOnly,
+    ).toBe(true);
+    // A complete (untruncated) file with an unterminated --- block is a body,
+    // not frontmatter — no fail-closed.
+    expect(parseSkillFrontmatterMeta("---\nnot frontmatter, a rule").humanOnly).toBe(false);
+  });
 });
 
 describe("listReferenceSkills — the comment-reference catalog", () => {
@@ -445,15 +498,25 @@ describe("listReferenceSkills — the comment-reference catalog", () => {
     expect(listReferenceSkills()).toEqual([]);
   });
 
-  test("caps discovery at MAX_REFERENCE_SKILLS", () => {
+  test("caps discovery at MAX_REFERENCE_SKILLS, keeping the alphabetically-first names", () => {
     const root = join(home, ".claude", "skills");
-    for (let i = 0; i < MAX_REFERENCE_SKILLS + 25; i++) {
+    // Written in REVERSE name order so a slice-before-sort implementation
+    // (which survives on filesystems whose readdir order is creation order)
+    // would keep the wrong end of the list.
+    for (let i = MAX_REFERENCE_SKILLS + 24; i >= 0; i--) {
       writeMetaSkill(root, `skill-${String(i).padStart(4, "0")}`);
     }
-    expect(listReferenceSkills().length).toBe(MAX_REFERENCE_SKILLS);
+    const skills = listReferenceSkills();
+    expect(skills.length).toBe(MAX_REFERENCE_SKILLS);
+    // Sort happens BEFORE the cap: which 500 survive must not depend on
+    // readdir order.
+    expect(skills[0].name).toBe("skill-0000");
+    expect(skills[skills.length - 1].name).toBe(
+      `skill-${String(MAX_REFERENCE_SKILLS - 1).padStart(4, "0")}`,
+    );
   });
 
-  test("frontmatter past the 8KB head read yields no metadata but keeps the skill", () => {
+  test("large frontmatter within the head read keeps its metadata (flag honored)", () => {
     const root = join(home, ".claude", "skills");
     const dir = join(root, "big-frontmatter");
     mkdirSync(dir, { recursive: true });
@@ -464,7 +527,36 @@ describe("listReferenceSkills — the comment-reference catalog", () => {
     );
     const skills = listReferenceSkills();
     expect(skills.map((s) => s.name)).toEqual(["big-frontmatter"]);
-    // The closing --- never appears inside the head read, so the flag is unknown → false.
+    expect(skills[0].humanOnly).toBe(true);
+  });
+
+  test("frontmatter past the head read fails CLOSED, never model-invocable", () => {
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, "giant-frontmatter");
+    mkdirSync(dir, { recursive: true });
+    // The closing --- and the flag both sit past the 64KB head read. The old
+    // behavior read this as humanOnly: false — the unsafe direction. It must
+    // fail closed instead.
+    const padding = `comment-${"y".repeat(70_000)}`;
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\nname: giant-frontmatter\npadding: ${padding}\ndisable-model-invocation: true\n---\nbody`,
+    );
+    const skills = listReferenceSkills();
+    expect(skills.map((s) => s.name)).toEqual(["giant-frontmatter"]);
+    expect(skills[0].humanOnly).toBe(true);
+  });
+
+  test("a flag read before the truncation point is honored even in giant frontmatter", () => {
+    const root = join(home, ".claude", "skills");
+    const dir = join(root, "flag-early");
+    mkdirSync(dir, { recursive: true });
+    const padding = `comment-${"y".repeat(70_000)}`;
+    writeFileSync(
+      join(dir, "SKILL.md"),
+      `---\ndisable-model-invocation: false\npadding: ${padding}\n---\nbody`,
+    );
+    const skills = listReferenceSkills();
     expect(skills[0].humanOnly).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import { setFileTreeBackend, type FileTreeBackend } from './hooks/useFileBrowser
 import { setDraftTransport, type DraftTransport } from './hooks/useAnnotationDraft';
 import { setExternalAnnotationTransport, type ExternalAnnotationTransport } from './hooks/useExternalAnnotations';
 import { setAITransport, type AITransport } from './hooks/useAIChat';
+import { setSkillCatalogTransport, type SkillCatalogTransport } from './utils/skillCatalog';
 import { configStore } from './config';
 import type { ServerSyncFn } from './config/configStore';
 import type { ExternalAnnotationEvent, VaultNode } from './types';
@@ -27,6 +28,7 @@ export type {
   ExternalAnnotationTransport,
   ExternalAnnotationEvent,
   AITransport,
+  SkillCatalogTransport,
   ServerSyncFn,
 };
 
@@ -48,6 +50,8 @@ export interface PlannotatorUIConfig {
    */
   externalAnnotationTransport?: ExternalAnnotationTransport<ExternalAnnotationBase>;
   aiTransport?: AITransport;
+  /** Skill-reference catalog request. Default: `GET /api/skills` on the page origin. */
+  skillCatalogTransport?: SkillCatalogTransport;
   serverSync?: ServerSyncFn;
   /** Re-hydrate settings from the installed (SYNCHRONOUS) storageBackend after install. */
   loadSettingsFromBackend?: boolean;
@@ -63,6 +67,7 @@ export function configurePlannotatorUI(config: PlannotatorUIConfig): void {
   if (config.draftTransport) setDraftTransport(config.draftTransport);
   if (config.externalAnnotationTransport) setExternalAnnotationTransport(config.externalAnnotationTransport);
   if (config.aiTransport) setAITransport(config.aiTransport);
+  if (config.skillCatalogTransport) setSkillCatalogTransport(config.skillCatalogTransport);
   if (config.serverSync) configStore.setServerSync(config.serverSync);
   // Re-hydrate AFTER storageBackend is installed (load-bearing order — gated last).
   if (config.loadSettingsFromBackend) configStore.loadFromBackend();

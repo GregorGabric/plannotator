@@ -34,8 +34,21 @@ describe('findSkillTrigger', () => {
     expect(findSkillTrigger('see (/re', 8)).toMatchObject({ trigger: '/', query: 're' });
   });
 
-  test('a bare trigger opens with an empty query', () => {
-    expect(findSkillTrigger('/', 1)).toEqual({ start: 0, trigger: '/', query: '' });
+  test('a bare trigger (empty query) is NOT a trigger — Enter/Tab must stay newline/blur', () => {
+    // The whole-catalog-on-bare-slash behavior hijacked Enter and Tab in a
+    // multi-line composer: "This costs $" + Enter, "cd /" + Tab, a "- " bullet.
+    expect(findSkillTrigger('/', 1)).toBeNull();
+    expect(findSkillTrigger('$', 1)).toBeNull();
+    expect(findSkillTrigger('This costs $', 12)).toBeNull();
+    expect(findSkillTrigger('cd /', 4)).toBeNull();
+    expect(findSkillTrigger('- /', 3)).toBeNull();
+    expect(findSkillTrigger('line\n/', 6)).toBeNull();
+    expect(findSkillTrigger('see (/', 6)).toBeNull();
+  });
+
+  test('the menu opens at the first query character', () => {
+    expect(findSkillTrigger('This costs $h', 13)).toMatchObject({ trigger: '$', query: 'h' });
+    expect(findSkillTrigger('/w', 2)).toMatchObject({ trigger: '/', query: 'w' });
   });
 
   test('never triggers mid-word: paths, and/or, currency stay plain typing', () => {
@@ -95,6 +108,15 @@ describe('insertSkillReference', () => {
     expect(result.text).toBe('use $write-better  and more');
     expect(result.caret).toBe('use $write-better '.length);
   });
+
+  test('a / trigger on a reserved path-segment name inserts $ so extraction keeps it', () => {
+    const runSkill: SkillCatalogEntry = { name: 'run', root: 'claude', humanOnly: false };
+    const text = 'use /ru';
+    const trigger = findSkillTrigger(text, 7)!;
+    const result = insertSkillReference(text, 7, trigger, runSkill);
+    expect(result.text).toBe('use $run ');
+    expect(extractSkillReferences(result.text, [runSkill]).map((s) => s.name)).toEqual(['run']);
+  });
 });
 
 describe('extractSkillReferences', () => {
@@ -123,6 +145,48 @@ describe('extractSkillReferences', () => {
   test('a trailing path separator marks a path, not a reference', () => {
     expect(extractSkillReferences('see /code-review/notes.md', catalog)).toEqual([]);
     expect(extractSkillReferences('see $code-review\\notes', catalog)).toEqual([]);
+  });
+
+  test('a well-known single-segment absolute path is a path even when a skill shares the name', () => {
+    const withRun: SkillCatalogEntry[] = [
+      ...catalog,
+      { name: 'run', root: 'claude', humanOnly: false },
+    ];
+    expect(extractSkillReferences('the daemon writes to /run', withRun)).toEqual([]);
+    expect(extractSkillReferences('cat /run > out', withRun)).toEqual([]);
+    // The $ form stays available for such skills.
+    expect(extractSkillReferences('use $run here', withRun).map((s) => s.name)).toEqual(['run']);
+  });
+
+  test('a markdown link destination is a URL, not a reference', () => {
+    expect(extractSkillReferences('[x](/write-better)', catalog)).toEqual([]);
+    expect(extractSkillReferences('![img](/write-better)', catalog)).toEqual([]);
+  });
+
+  test('a shell redirect right after the token marks a command line', () => {
+    expect(extractSkillReferences('run /code-review > out.txt', catalog)).toEqual([]);
+    expect(extractSkillReferences('feed /code-review < in.txt', catalog)).toEqual([]);
+  });
+
+  test('already-clean forms stay clean', () => {
+    const withRun: SkillCatalogEntry[] = [
+      ...catalog,
+      { name: 'run', root: 'claude', humanOnly: false },
+    ];
+    for (const text of [
+      'packages/write-better/foo',
+      '~/run/foo',
+      './run',
+      'https://x.com/run',
+      '"$write-better"',
+      'and/or',
+      '**/*.ts',
+      '1/2/2026',
+      '$PATH',
+      '$(pwd)',
+    ]) {
+      expect(extractSkillReferences(text, withRun)).toEqual([]);
+    }
   });
 
   test('empty catalog or empty text → no references', () => {

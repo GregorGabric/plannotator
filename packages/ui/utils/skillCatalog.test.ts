@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
   fetchSkillCatalog,
   getCachedSkillCatalog,
   resetSkillCatalogCache,
+  resetSkillCatalogTransport,
+  setSkillCatalogTransport,
 } from './skillCatalog';
-import { skillReferenceExportBlock } from './skillReferences';
+import { skillReferenceExportBlock, type SkillCatalogEntry } from './skillReferences';
 
 const realFetch = globalThis.fetch;
 
@@ -17,9 +19,19 @@ function stubFetch(impl: () => Promise<Response> | Response) {
   return () => calls;
 }
 
+// Reset BEFORE each test as well as after: other suites in the same process
+// (e.g. packages/editor mounting App, which primes the catalog) may leave a
+// cached value or an outstanding request behind. The reset invalidates both,
+// so these tests hold in any file order.
+beforeEach(() => {
+  resetSkillCatalogCache();
+  resetSkillCatalogTransport();
+});
+
 afterEach(() => {
   globalThis.fetch = realFetch;
   resetSkillCatalogCache();
+  resetSkillCatalogTransport();
 });
 
 describe('fetchSkillCatalog', () => {
@@ -64,6 +76,72 @@ describe('fetchSkillCatalog', () => {
 
   test('malformed payload → empty catalog', async () => {
     stubFetch(() => Response.json({ nope: true }));
+    expect(await fetchSkillCatalog()).toEqual([]);
+  });
+});
+
+describe('resetSkillCatalogCache', () => {
+  test('invalidates an outstanding request: the next fetch consults the new backend', async () => {
+    // A request is left inflight (as App.tsx's primeSkillCatalog does)…
+    let resolveOld!: (r: Response) => void;
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        resolveOld = resolve;
+      })) as unknown as typeof fetch;
+    const oldPromise = fetchSkillCatalog();
+
+    // …then the cache is reset and a different backend is stubbed.
+    resetSkillCatalogCache();
+    stubFetch(() => Response.json({ skills: [{ name: 'fresh', root: 'claude' }] }));
+
+    const skills = await fetchSkillCatalog();
+    expect(skills.map((s) => s.name)).toEqual(['fresh']);
+
+    // The old request finally lands: it must not overwrite the newer value
+    // or the export registry.
+    resolveOld(Response.json({ skills: [{ name: 'stale', root: 'claude' }] }));
+    await oldPromise;
+    expect(getCachedSkillCatalog().map((s) => s.name)).toEqual(['fresh']);
+    expect(skillReferenceExportBlock('use $fresh')).toContain('`fresh`');
+    expect(skillReferenceExportBlock('use $stale')).toBe('');
+  });
+
+  test('a request outstanding at reset resolves without reviving dead cache state', async () => {
+    let resolveOld!: (r: Response) => void;
+    globalThis.fetch = (() =>
+      new Promise<Response>((resolve) => {
+        resolveOld = resolve;
+      })) as unknown as typeof fetch;
+    const oldPromise = fetchSkillCatalog();
+
+    resetSkillCatalogCache();
+    resolveOld(Response.json({ skills: [{ name: 'ghost', root: 'claude' }] }));
+    await oldPromise;
+
+    expect(getCachedSkillCatalog()).toEqual([]);
+    expect(skillReferenceExportBlock('use $ghost')).toBe('');
+  });
+});
+
+describe('skillCatalogTransport seam', () => {
+  test('a host transport replaces the default fetch, with the same normalization', async () => {
+    const calls = stubFetch(() => Response.json({ skills: [{ name: 'via-fetch', root: 'claude' }] }));
+    setSkillCatalogTransport(async () => [
+      { name: 'host-skill', root: 'claude', humanOnly: false },
+      { name: '', root: 'claude', humanOnly: false } as SkillCatalogEntry, // dropped
+    ]);
+
+    const skills = await fetchSkillCatalog();
+    expect(skills.map((s) => s.name)).toEqual(['host-skill']);
+    expect(calls()).toBe(0); // fetch never consulted
+
+    resetSkillCatalogTransport();
+    resetSkillCatalogCache();
+    expect((await fetchSkillCatalog()).map((s) => s.name)).toEqual(['via-fetch']);
+  });
+
+  test('a throwing host transport degrades to an empty catalog', async () => {
+    setSkillCatalogTransport(() => Promise.reject(new Error('host boom')));
     expect(await fetchSkillCatalog()).toEqual([]);
   });
 });

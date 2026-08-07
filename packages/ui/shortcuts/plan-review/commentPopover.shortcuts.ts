@@ -21,7 +21,7 @@ export const commentPopoverShortcuts = defineShortcutScope({
       description: 'Reference an agent skill (opens the skill menu)',
       bindings: ['/', '$'],
       section: 'Annotations',
-      hint: 'Type at the start of a word in the comment editor. Escape dismisses the menu; Enter inserts the highlighted skill.',
+      hint: 'Type / or $ plus the first letters of a skill name at the start of a word in the comment editor. Escape dismisses the menu; Enter inserts the highlighted skill.',
       displayOrder: 50,
     },
   },

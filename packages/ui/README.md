@@ -24,6 +24,7 @@ configurePlannotatorUI({
   draftTransport,
   externalAnnotationTransport, // live/agent comments
   aiTransport,
+  skillCatalogTransport,       // skill-reference catalog for comment composers
   serverSync,
 });
 ```
