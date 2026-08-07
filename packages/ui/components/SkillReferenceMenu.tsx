@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SkillCatalogEntry } from '../utils/skillReferences';
 
 /** Which skill root a row came from, shown as the right-aligned source column. */
@@ -15,10 +15,56 @@ interface SkillReferenceMenuProps {
   onSelect: (index: number) => void;
 }
 
+/** Vertical gap between the composer wrapper and the menu (mb-1.5 / mt-1.5 = 6px). */
+const MENU_GAP = 6;
+/** Breathing room kept between the menu and the viewport edge. */
+const MENU_VIEWPORT_MARGIN = 8;
+/** Upper bound on the scrollable list height — the former fixed `max-h-64`. */
+const MAX_LIST_HEIGHT = 256;
+
+interface MenuPlacement {
+  direction: 'above' | 'below';
+  maxListHeight: number;
+}
+
 /**
- * Dropdown for skill references inside a comment composer. Rendered above the
- * textarea (absolute within a relative wrapper). Each row: icon, bold name,
- * dimmed inline description (ellipsis-truncated), right-aligned source root.
+ * Adaptive placement, the same viewport-measurement idiom CommentPopover's
+ * `computePosition` uses (space vs `window.innerHeight`). The menu PREFERS
+ * opening above the composer — that keeps the text being typed, the action
+ * row, and the human-only notice unobstructed, and matches how chat-composer
+ * autocompletes behave — and flips below when the list does not fit above but
+ * does fit below (the popover near the top of the viewport: the exact case
+ * where the old fixed `bottom-full` menu ran off the top of the screen).
+ * When neither side fits the whole list, the side with more room wins and the
+ * list is clamped to it, so the menu never extends past a viewport edge.
+ */
+function computeMenuPlacement(
+  anchorRect: Pick<DOMRect, 'top' | 'bottom'>,
+  naturalListHeight: number,
+  chromeHeight: number,
+  viewportHeight: number,
+): MenuPlacement {
+  const spaceAbove = anchorRect.top - MENU_GAP - MENU_VIEWPORT_MARGIN - chromeHeight;
+  const spaceBelow = viewportHeight - anchorRect.bottom - MENU_GAP - MENU_VIEWPORT_MARGIN - chromeHeight;
+  const needed = Math.min(naturalListHeight, MAX_LIST_HEIGHT);
+  const direction: MenuPlacement['direction'] =
+    needed <= spaceAbove ? 'above'
+    : needed <= spaceBelow ? 'below'
+    : spaceAbove >= spaceBelow ? 'above'
+    : 'below';
+  const available = direction === 'above' ? spaceAbove : spaceBelow;
+  return {
+    direction,
+    maxListHeight: Math.max(0, Math.min(MAX_LIST_HEIGHT, Math.round(available))),
+  };
+}
+
+/**
+ * Dropdown for skill references inside a comment composer. Rendered adjacent
+ * to the textarea (absolute within a relative wrapper), opening above or
+ * below depending on available viewport space (see computeMenuPlacement), and
+ * clamped so it never runs off screen. Each row: icon, bold name, dimmed
+ * inline description (ellipsis-truncated), right-aligned source root.
  * Human-invocation-only skills stay listed and selectable but render dimmed
  * with a badge, and activating one surfaces a plain-language warning footer.
  *
@@ -32,7 +78,50 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
   activeIndex,
   onSelect,
 }) => {
+  const menuRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<MenuPlacement>({
+    direction: 'above',
+    maxListHeight: MAX_LIST_HEIGHT,
+  });
+
+  const measure = useCallback(() => {
+    const menuEl = menuRef.current;
+    const listEl = listRef.current;
+    // The menu is a direct child of the composer's `relative` wrapper — the
+    // same box the `bottom-full` / `top-full` CSS anchors to.
+    const anchor = menuEl?.parentElement;
+    if (!menuEl || !listEl || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    // Non-list height the menu carries (border, warning footer when shown).
+    const chrome = Math.max(0, menuEl.offsetHeight - listEl.offsetHeight);
+    // scrollHeight reports full content height even while clamped.
+    const next = computeMenuPlacement(rect, listEl.scrollHeight, chrome, window.innerHeight);
+    setPlacement((prev) =>
+      prev.direction === next.direction && prev.maxListHeight === next.maxListHeight
+        ? prev
+        : next,
+    );
+  }, []);
+
+  // Re-measure on EVERY commit: the popover re-renders on drag moves, flips,
+  // filtering (item-count changes), and warning-footer toggles, and each of
+  // those can change the geometry without any window event firing. The
+  // setState above is equality-guarded, so this converges instead of looping.
+  useLayoutEffect(() => {
+    measure();
+  });
+
+  // Same listeners CommentPopover's own position tracking uses: capture-phase
+  // scroll (the document scrolls under the anchored popover) plus resize.
+  useEffect(() => {
+    window.addEventListener('scroll', measure, true);
+    window.addEventListener('resize', measure);
+    return () => {
+      window.removeEventListener('scroll', measure, true);
+      window.removeEventListener('resize', measure);
+    };
+  }, [measure]);
 
   useEffect(() => {
     if (activeIndex === null) return;
@@ -45,11 +134,20 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
 
   return (
     <div
+      ref={menuRef}
       data-skill-menu="true"
+      data-skill-menu-placement={placement.direction}
       data-popover-layer="true"
-      className="absolute bottom-full left-0 right-0 mb-1.5 z-[110] bg-popover border border-border rounded-xl shadow-2xl overflow-hidden"
+      className={`absolute left-0 right-0 z-[110] bg-popover border border-border rounded-xl shadow-2xl overflow-hidden ${
+        placement.direction === 'above' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+      }`}
     >
-      <div ref={listRef} className="max-h-64 overflow-y-auto p-1.5 flex flex-col gap-px">
+      <div
+        ref={listRef}
+        data-skill-menu-list="true"
+        className="overflow-y-auto p-1.5 flex flex-col gap-px"
+        style={{ maxHeight: placement.maxListHeight }}
+      >
         {items.map((item, index) => (
           <button
             key={item.name}
