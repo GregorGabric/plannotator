@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { SkillCatalogEntry } from '../utils/skillReferences';
 
 /** Which skill root a row came from, shown as the right-aligned source column. */
@@ -65,8 +65,14 @@ function computeMenuPlacement(
  * below depending on available viewport space (see computeMenuPlacement), and
  * clamped so it never runs off screen. Each row: icon, bold name, dimmed
  * inline description (ellipsis-truncated), right-aligned source root.
- * Human-invocation-only skills stay listed and selectable but render dimmed
- * with a badge, and activating one surfaces a plain-language warning footer.
+ * Human-invocation-only skills stay listed and selectable at full strength,
+ * carrying only a quiet "human-only" pill after the name — the state is a
+ * property of the skill, not an error. The plain-language explanation (a model
+ * cannot invoke it, so its instructions ride along with the feedback) is
+ * disclosed progressively: it appears as a muted footer while such a row is
+ * active (keyboard) or pointer-hovered, and is otherwise kept screen-reader
+ * accessible via an sr-only description that human-only rows reference with
+ * aria-describedby. Hover reveal is purely visual and never activates a row.
  *
  * Activation is KEYBOARD-ONLY (see useSkillReferenceAutocomplete): the menu
  * floats directly over the composer, exactly where the mouse rests while
@@ -80,10 +86,20 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
 }) => {
   const menuRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const humanOnlyNoteId = useId();
+  // Visual-only pointer hover, for progressively disclosing the human-only
+  // footer to mouse users. NEVER feeds activeIndex — hover must not arm Enter.
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [placement, setPlacement] = useState<MenuPlacement>({
     direction: 'above',
     maxListHeight: MAX_LIST_HEIGHT,
   });
+
+  // The list identity changes on every re-filter; a stale hover index would
+  // point at whichever row slid under the resting cursor.
+  useEffect(() => {
+    setHoverIndex(null);
+  }, [items]);
 
   const measure = useCallback(() => {
     const menuEl = menuRef.current;
@@ -93,7 +109,8 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
     const anchor = menuEl?.parentElement;
     if (!menuEl || !listEl || !anchor) return;
     const rect = anchor.getBoundingClientRect();
-    // Non-list height the menu carries (border, warning footer when shown).
+    // Non-list height the menu carries (border, human-only footer when
+    // disclosed; the sr-only variant is absolutely positioned and adds none).
     const chrome = Math.max(0, menuEl.offsetHeight - listEl.offsetHeight);
     // scrollHeight reports full content height even while clamped.
     const next = computeMenuPlacement(rect, listEl.scrollHeight, chrome, window.innerHeight);
@@ -105,8 +122,8 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
   }, []);
 
   // Re-measure on EVERY commit: the popover re-renders on drag moves, flips,
-  // filtering (item-count changes), and warning-footer toggles, and each of
-  // those can change the geometry without any window event firing. The
+  // filtering (item-count changes), and human-only footer disclosure, and each
+  // of those can change the geometry without any window event firing. The
   // setState above is equality-guarded, so this converges instead of looping.
   useLayoutEffect(() => {
     measure();
@@ -131,6 +148,12 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
   }, [activeIndex]);
 
   const active = activeIndex !== null ? items[activeIndex] : undefined;
+  const hovered = hoverIndex !== null ? items[hoverIndex] : undefined;
+  const hasHumanOnly = items.some((item) => item.humanOnly);
+  // Progressive disclosure: the explanation surfaces while a human-only row is
+  // active (keyboard) or hovered (pointer); otherwise it stays sr-only so
+  // assistive tech can always reach it through aria-describedby.
+  const humanOnlyDisclosed = active?.humanOnly === true || hovered?.humanOnly === true;
 
   return (
     <div
@@ -154,21 +177,26 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
             type="button"
             data-skill-item={item.name}
             data-skill-item-active={index === activeIndex ? 'true' : undefined}
+            data-skill-item-human-only={item.humanOnly ? 'true' : undefined}
+            aria-describedby={item.humanOnly ? humanOnlyNoteId : undefined}
             // Insert on pointerdown so the textarea never loses focus. A
             // click is explicit selection; hover deliberately does NOT
-            // activate the row (see the component docblock).
+            // activate the row (see the component docblock) — enter/leave
+            // below only drive the visual footer disclosure.
             onPointerDown={(e) => {
               e.preventDefault();
               onSelect(index);
             }}
+            onPointerEnter={() => setHoverIndex(index)}
+            onPointerLeave={() => setHoverIndex((prev) => (prev === index ? null : prev))}
             className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-[13px] leading-snug transition-colors ${
               index === activeIndex ? 'bg-muted' : 'hover:bg-muted/50'
-            } ${item.humanOnly ? 'opacity-60' : ''}`}
+            }`}
           >
             <SkillIcon />
             <span className="shrink-0 font-semibold text-foreground">{item.name}</span>
             {item.humanOnly && (
-              <span className="shrink-0 px-1 py-px rounded border border-border/60 text-[9px] uppercase tracking-wide text-muted-foreground">
+              <span className="shrink-0 px-1.5 py-px rounded-full bg-muted text-[9px] font-medium tracking-wide text-muted-foreground/80">
                 human-only
               </span>
             )}
@@ -181,10 +209,15 @@ export const SkillReferenceMenu: React.FC<SkillReferenceMenuProps> = ({
           </button>
         ))}
       </div>
-      {active?.humanOnly && (
+      {hasHumanOnly && (
         <div
-          data-skill-menu-warning="true"
-          className="px-3 py-2 border-t border-border/50 text-[11px] leading-snug text-amber-600 dark:text-amber-400"
+          id={humanOnlyNoteId}
+          data-skill-menu-disclosure={humanOnlyDisclosed ? 'true' : 'hidden'}
+          className={
+            humanOnlyDisclosed
+              ? 'px-3 py-2 border-t border-border/40 text-[11px] leading-snug text-muted-foreground'
+              : 'sr-only'
+          }
         >
           This skill cannot be invoked by a model, so its instructions will be
           included with your feedback for the agent to follow.
@@ -215,26 +248,53 @@ interface HumanOnlySkillNoticeProps {
   skills: SkillCatalogEntry[];
 }
 
-/** Persistent composer notice while human-only skill references are present. */
+/**
+ * Composer note while human-only skill references are present. Quiet by
+ * design: the user already chose to insert the reference (and saw the menu's
+ * disclosure while choosing), so the resting state is a single muted summary
+ * line rather than a standing explanation. The full plain-language sentence
+ * is one native disclosure away — <details>/<summary> keeps the expansion
+ * reachable by pointer, keyboard (the summary is focusable; Enter/Space
+ * toggles), and assistive tech alike. It pairs with the dotted-underline
+ * marker the composer overlay paints on human-only tokens.
+ */
 export const HumanOnlySkillNotice: React.FC<HumanOnlySkillNoticeProps> = ({ skills }) => {
   if (skills.length === 0) return null;
   const names = skills.map((s) => s.name).join(', ');
   return (
-    <div
-      data-skill-human-only-notice="true"
-      className="mt-1 px-1 text-[11px] leading-snug text-amber-600 dark:text-amber-400"
-    >
-      {skills.length === 1 ? (
-        <>
-          <span className="font-mono">{names}</span> cannot be invoked by a model, so
-          its instructions will be included with your feedback.
-        </>
-      ) : (
-        <>
-          <span className="font-mono">{names}</span> cannot be invoked by a model, so
-          their instructions will be included with your feedback.
-        </>
-      )}
-    </div>
+    <details data-skill-human-only-notice="true" className="group mt-1 px-1">
+      <summary className="list-none [&::-webkit-details-marker]:hidden inline-flex cursor-pointer select-none items-center gap-1 rounded text-[10px] text-muted-foreground/80 transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+        <DisclosureChevron />
+        Includes skill instructions
+      </summary>
+      <p className="mt-0.5 pl-3.5 text-[11px] leading-snug text-muted-foreground">
+        {skills.length === 1 ? (
+          <>
+            <span className="font-mono">{names}</span> cannot be invoked by a model, so
+            its instructions will be included with your feedback.
+          </>
+        ) : (
+          <>
+            <span className="font-mono">{names}</span> cannot be invoked by a model, so
+            their instructions will be included with your feedback.
+          </>
+        )}
+      </p>
+    </details>
   );
 };
+
+const DisclosureChevron: React.FC = () => (
+  <svg
+    className="w-2.5 h-2.5 shrink-0 transition-transform group-open:rotate-90"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9 18 6-6-6-6" />
+  </svg>
+);

@@ -318,16 +318,54 @@ describe('CommentPopover skill references — no-preselection keyboard state mac
   );
 
   test.skipIf(!hasDom)(
-    'the human-only warning shows only while a human-only row is ACTIVE',
+    'the human-only explanation is disclosed only on engagement, but stays reachable by AT',
     async () => {
       await mountPopover();
       const el = textarea();
       await type(el, '$plannotator-rev');
       expect(menu()).not.toBeNull();
-      // Nothing active: no warning, even though the only row is human-only.
-      expect(document.querySelector('[data-skill-menu-warning]')).toBeNull();
+      // Nothing active: the explanation is not VISIBLE, even though the only
+      // row is human-only...
+      expect(document.querySelector('[data-skill-menu-disclosure="true"]')).toBeNull();
+      // ...but it is in the DOM (sr-only) and the row references it, so the
+      // state is exposed to assistive tech, not just as a visual badge.
+      const note = document.querySelector('[data-skill-menu-disclosure]');
+      expect(note).not.toBeNull();
+      expect(note!.className).toContain('sr-only');
+      expect(note!.textContent).toContain('cannot be invoked by a model');
+      expect(note!.textContent).toContain('included with your feedback');
+      const row = document.querySelector('[data-skill-item="plannotator-review"]')!;
+      expect(row.getAttribute('data-skill-item-human-only')).toBe('true');
+      expect(row.getAttribute('aria-describedby')).toBe(note!.id);
+      // Keyboard activation discloses it visibly.
       await press(el, 'ArrowDown');
-      expect(document.querySelector('[data-skill-menu-warning]')).not.toBeNull();
+      expect(document.querySelector('[data-skill-menu-disclosure="true"]')).not.toBeNull();
+    },
+  );
+
+  test.skipIf(!hasDom)(
+    'pointer hover over a human-only row discloses the explanation WITHOUT arming Enter',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'This costs $');
+      const row = document.querySelector('[data-skill-item="plannotator-review"]')!;
+      await act(async () => {
+        row.dispatchEvent(new Event('pointerover', { bubbles: true }));
+      });
+      // The disclosure is a visual affordance only: no activation, and Enter
+      // still means newline (the no-preselection invariant holds under hover).
+      expect(document.querySelector('[data-skill-menu-disclosure="true"]')).not.toBeNull();
+      expect(activeRow()).toBeNull();
+      const enter = await press(el, 'Enter');
+      expect(enter.defaultPrevented).toBe(false);
+      expect(el.value).toBe('This costs $');
+      // Leaving the row folds the explanation back to sr-only.
+      await act(async () => {
+        row.dispatchEvent(new Event('pointerout', { bubbles: true }));
+      });
+      expect(document.querySelector('[data-skill-menu-disclosure="true"]')).toBeNull();
+      expect(document.querySelector('[data-skill-menu-disclosure]')).not.toBeNull();
     },
   );
 
@@ -342,6 +380,8 @@ describe('CommentPopover skill references — no-preselection keyboard state mac
     expect(token).not.toBeNull();
     expect(token!.getAttribute('data-skill-ref-token')).toBe('humanizer');
     expect(token!.textContent).toBe('$humanizer');
+    // Model-invocable tokens carry no human-only marker.
+    expect(token!.hasAttribute('data-skill-ref-human-only')).toBe(false);
     // The overlay is presentation-only and must never intercept the pointer.
     const overlay = document.querySelector('[data-skill-ref-overlay]');
     expect(overlay).not.toBeNull();
@@ -367,8 +407,26 @@ describe('CommentPopover skill references — no-preselection keyboard state mac
     },
   );
 
-  test.skipIf(!hasDom)('the human-only notice appears for opted-in surfaces', async () => {
-    await mountPopover({ initialText: 'use $plannotator-review please' });
-    expect(document.querySelector('[data-skill-human-only-notice]')).not.toBeNull();
-  });
+  test.skipIf(!hasDom)(
+    'the human-only notice renders as a quiet native disclosure with the full explanation inside',
+    async () => {
+      await mountPopover({ initialText: 'use $plannotator-review please' });
+      const notice = document.querySelector('[data-skill-human-only-notice]');
+      expect(notice).not.toBeNull();
+      // A native <details> disclosure: reachable by pointer, keyboard, and AT
+      // alike, collapsed to a single quiet summary line at rest.
+      expect(notice!.tagName.toLowerCase()).toBe('details');
+      const summary = notice!.querySelector('summary');
+      expect(summary).not.toBeNull();
+      expect(summary!.textContent).toContain('Includes skill instructions');
+      // The accurate full sentence is the disclosed content.
+      expect(notice!.textContent).toContain('plannotator-review');
+      expect(notice!.textContent).toContain('cannot be invoked by a model');
+      expect(notice!.textContent).toContain('included with your feedback');
+      // The token itself carries the quiet inline marker.
+      const token = document.querySelector('[data-skill-ref-token="plannotator-review"]');
+      expect(token).not.toBeNull();
+      expect(token!.getAttribute('data-skill-ref-human-only')).toBe('true');
+    },
+  );
 });

@@ -608,11 +608,20 @@ const ComposerTextarea: React.FC<ComposerTextareaProps> = ({
   tokens.forEach((token, i) => {
     if (token.start < pos || token.end > value.length) return; // stale tokens for a different value
     if (token.start > pos) segments.push(value.slice(pos, token.start));
+    // Human-only tokens carry a quiet dotted underline as their inline marker
+    // (text-decoration never affects glyph layout, so overlay alignment is
+    // safe). The accessible explanation lives in HumanOnlySkillNotice below
+    // the textarea — this overlay is aria-hidden.
     segments.push(
       <span
         key={`${token.start}-${i}`}
         data-skill-ref-token={token.entry.name}
-        className="text-primary bg-primary/10 rounded-[3px]"
+        data-skill-ref-human-only={token.entry.humanOnly ? 'true' : undefined}
+        className={`text-primary bg-primary/10 rounded-[3px] ${
+          token.entry.humanOnly
+            ? 'underline decoration-dotted decoration-primary/60 underline-offset-2'
+            : ''
+        }`}
       >
         {value.slice(token.start, token.end)}
       </span>,
