@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import {
   extractSkillReferences,
   filterSkillCatalog,
+  findSkillReferenceTokens,
   findSkillTrigger,
   insertSkillReference,
   MAX_SKILL_QUERY_LEN,
@@ -34,19 +35,20 @@ describe('findSkillTrigger', () => {
     expect(findSkillTrigger('see (/re', 8)).toMatchObject({ trigger: '/', query: 're' });
   });
 
-  test('a bare trigger (empty query) is NOT a trigger — Enter/Tab must stay newline/blur', () => {
-    // The whole-catalog-on-bare-slash behavior hijacked Enter and Tab in a
-    // multi-line composer: "This costs $" + Enter, "cd /" + Tab, a "- " bullet.
-    expect(findSkillTrigger('/', 1)).toBeNull();
-    expect(findSkillTrigger('$', 1)).toBeNull();
-    expect(findSkillTrigger('This costs $', 12)).toBeNull();
-    expect(findSkillTrigger('cd /', 4)).toBeNull();
-    expect(findSkillTrigger('- /', 3)).toBeNull();
-    expect(findSkillTrigger('line\n/', 6)).toBeNull();
-    expect(findSkillTrigger('see (/', 6)).toBeNull();
+  test('a bare trigger (empty query) IS a trigger — the full catalog opens', () => {
+    // Enter/Tab safety no longer lives here: with nothing preselected in the
+    // menu, an open menu consumes NO keys until the user activates a row
+    // (see useSkillReferenceAutocomplete + the CommentPopover DOM tests).
+    expect(findSkillTrigger('/', 1)).toEqual({ start: 0, trigger: '/', query: '' });
+    expect(findSkillTrigger('$', 1)).toEqual({ start: 0, trigger: '$', query: '' });
+    expect(findSkillTrigger('This costs $', 12)).toEqual({ start: 11, trigger: '$', query: '' });
+    expect(findSkillTrigger('cd /', 4)).toEqual({ start: 3, trigger: '/', query: '' });
+    expect(findSkillTrigger('- /', 3)).toMatchObject({ trigger: '/', query: '' });
+    expect(findSkillTrigger('line\n/', 6)).toMatchObject({ trigger: '/', query: '' });
+    expect(findSkillTrigger('see (/', 6)).toMatchObject({ trigger: '/', query: '' });
   });
 
-  test('the menu opens at the first query character', () => {
+  test('typing a query character narrows the same trigger', () => {
     expect(findSkillTrigger('This costs $h', 13)).toMatchObject({ trigger: '$', query: 'h' });
     expect(findSkillTrigger('/w', 2)).toMatchObject({ trigger: '/', query: 'w' });
   });
@@ -163,9 +165,24 @@ describe('extractSkillReferences', () => {
     expect(extractSkillReferences('![img](/write-better)', catalog)).toEqual([]);
   });
 
-  test('a shell redirect right after the token marks a command line', () => {
-    expect(extractSkillReferences('run /code-review > out.txt', catalog)).toEqual([]);
-    expect(extractSkillReferences('feed /code-review < in.txt', catalog)).toEqual([]);
+  test('informal arrows and comparisons around a token do NOT drop it (redirect rule removed)', () => {
+    // The old shell-redirect exclusion produced false negatives on ordinary
+    // prose; its motivating case (`cat /run > out`) is already covered by the
+    // reserved-path rule, so it was dropped.
+    expect(
+      extractSkillReferences('use /humanizer <- this one', catalog).map((s) => s.name),
+    ).toEqual(['humanizer']);
+    expect(
+      extractSkillReferences('quality: /write-better > everything else', catalog).map(
+        (s) => s.name,
+      ),
+    ).toEqual(['write-better']);
+    expect(
+      extractSkillReferences('ranked /write-better < /humanizer', catalog).map((s) => s.name),
+    ).toEqual(['write-better', 'humanizer']);
+    expect(extractSkillReferences('run /code-review > out.txt', catalog).map((s) => s.name)).toEqual(
+      ['code-review'],
+    );
   });
 
   test('already-clean forms stay clean', () => {
@@ -192,6 +209,37 @@ describe('extractSkillReferences', () => {
   test('empty catalog or empty text → no references', () => {
     expect(extractSkillReferences('/write-better', [])).toEqual([]);
     expect(extractSkillReferences('', catalog)).toEqual([]);
+  });
+});
+
+describe('findSkillReferenceTokens', () => {
+  test('reports exact spans for the composer highlight overlay', () => {
+    const text = 'Apply /write-better here.';
+    const tokens = findSkillReferenceTokens(text, catalog);
+    expect(tokens).toHaveLength(1);
+    expect(text.slice(tokens[0].start, tokens[0].end)).toBe('/write-better');
+    expect(tokens[0].entry.name).toBe('write-better');
+  });
+
+  test('repeated references produce one token each (no dedupe)', () => {
+    const text = '/humanizer then $humanizer again';
+    const tokens = findSkillReferenceTokens(text, catalog);
+    expect(tokens.map((t) => text.slice(t.start, t.end))).toEqual([
+      '/humanizer',
+      '$humanizer',
+    ]);
+  });
+
+  test('a sentence-final period stays outside the span', () => {
+    const text = 'use $humanizer.';
+    const tokens = findSkillReferenceTokens(text, catalog);
+    expect(text.slice(tokens[0].start, tokens[0].end)).toBe('$humanizer');
+  });
+
+  test('non-references produce no tokens', () => {
+    expect(findSkillReferenceTokens('packages/code-review and [x](/write-better)', catalog)).toEqual([]);
+    expect(findSkillReferenceTokens('', catalog)).toEqual([]);
+    expect(findSkillReferenceTokens('/write-better', [])).toEqual([]);
   });
 });
 

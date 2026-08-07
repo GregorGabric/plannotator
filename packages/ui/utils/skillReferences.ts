@@ -51,15 +51,16 @@ export interface SkillTriggerContext {
  * characters, so typing a space (or any other breaking character) ends the
  * lookup naturally.
  *
- * A bare `/` or `$` (empty query) is NOT a trigger. This composer is
- * multi-line plain text where Enter means newline and Tab means leave the
- * field; a menu that opened on every bare `/` or `$` — start of a comment, a
- * typed `- ` bullet, `cd /`, `This costs $` — would capture those keys at
- * exactly the moments they mean something else. The menu opens once the first
- * query character narrows the intent to a skill lookup.
+ * A bare `/` or `$` (empty query) IS a trigger: it opens the full catalog,
+ * matching how slash/skill menus behave in the host agents. The safety story
+ * for a multi-line composer where Enter means newline and Tab means leave the
+ * field lives in the MENU, not here: while the menu is open with NO row
+ * explicitly activated (arrow keys), every key behaves exactly as if the menu
+ * were closed — "This costs $" + Enter is a newline, "cd /" + Tab leaves the
+ * field. See useSkillReferenceAutocomplete.
  */
 export function findSkillTrigger(text: string, caret: number): SkillTriggerContext | null {
-  if (caret < 2 || caret > text.length) return null;
+  if (caret < 1 || caret > text.length) return null;
 
   // Walk back over query characters to the nearest candidate trigger.
   let start = caret - 1;
@@ -74,7 +75,6 @@ export function findSkillTrigger(text: string, caret: number): SkillTriggerConte
   if (before !== '' && !/[\s(]/.test(before)) return null;
 
   const query = text.slice(start + 1, caret);
-  if (query.length === 0) return null;
   if (query.length > MAX_SKILL_QUERY_LEN) return null;
   if (!TOKEN_CHARS.test(query)) return null;
 
@@ -144,27 +144,40 @@ export function insertSkillReference(
   };
 }
 
+/** One skill-reference occurrence in a text, with its exact span. */
+export interface SkillReferenceToken {
+  /** Index of the trigger character. */
+  start: number;
+  /** Index just past the last name character (excludes trailing punctuation). */
+  end: number;
+  entry: SkillCatalogEntry;
+}
+
 /**
- * Every skill the text references, in first-appearance order, deduped by name.
+ * Every skill-reference occurrence in the text, in order, WITH positions and
+ * without dedupe — this is what the composer's highlight overlay paints, so a
+ * name referenced twice highlights twice.
  *
  * A reference is a word-starting `/name` or `$name` whose name matches a
- * catalog entry case-insensitively, excluding path and link forms on both
- * sides of the token:
+ * catalog entry case-insensitively, excluding path and link forms:
  * - followed by `/` or `\` — a path continuation (`/docs/foo`, `$HOME/bin`);
- * - followed by a shell redirect (`cat /run > out`);
  * - preceded by `](` — a markdown link destination (`[x](/write-better)`);
  * - a `/` token naming a well-known absolute path segment (`/run`, `/tmp`) —
  *   see RESERVED_PATH_SEGMENTS; `$run` still counts.
+ *
+ * There is deliberately NO shell-redirect exclusion (`cat /run > out`): the
+ * motivating case is already covered by the reserved-path rule, and excluding
+ * on a following `<`/`>` produced false negatives on ordinary prose
+ * ("use /animate <- this one", "quality: /write-better > everything else").
  */
-export function extractSkillReferences(
+export function findSkillReferenceTokens(
   text: string,
   catalog: SkillCatalogEntry[],
-): SkillCatalogEntry[] {
+): SkillReferenceToken[] {
   if (!text || catalog.length === 0) return [];
   const byName = new Map(catalog.map((s) => [s.name.toLowerCase(), s]));
 
-  const found: SkillCatalogEntry[] = [];
-  const seen = new Set<string>();
+  const tokens: SkillReferenceToken[] = [];
   const re = /(^|[\s(])([$/])([A-Za-z0-9][A-Za-z0-9._-]*)/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
@@ -172,19 +185,37 @@ export function extractSkillReferences(
     if (after === '/' || after === '\\') continue;
     // Markdown link destination: `[label](/name)` is a URL, not a reference.
     if (m[1] === '(' && text[m.index - 1] === ']') continue;
-    // Shell redirect right after the token marks a command line (`cat /run > out`).
-    const rest = text.slice(m.index + m[0].length).match(/^[ \t]*([<>])/);
-    if (rest) continue;
     // Sentence-final dots are punctuation, not part of the name ("use $humanizer.").
     const name = m[3].toLowerCase();
-    const trimmedName = m[3].replace(/\.+$/, '').toLowerCase();
+    const trimmed = m[3].replace(/\.+$/, '');
+    const trimmedName = trimmed.toLowerCase();
     // `/run`-style well-known absolute paths never count (only for `/`).
     if (m[2] === '/' && (RESERVED_PATH_SEGMENTS.has(name) || RESERVED_PATH_SEGMENTS.has(trimmedName)))
       continue;
-    const entry = byName.get(name) ?? byName.get(trimmedName);
-    if (!entry || seen.has(entry.name)) continue;
-    seen.add(entry.name);
-    found.push(entry);
+    const exact = byName.get(name);
+    const entry = exact ?? byName.get(trimmedName);
+    if (!entry) continue;
+    const start = m.index + m[1].length;
+    const nameLen = exact ? m[3].length : trimmed.length;
+    tokens.push({ start, end: start + 1 + nameLen, entry });
+  }
+  return tokens;
+}
+
+/**
+ * Every skill the text references, in first-appearance order, deduped by name.
+ * Same matching rules as findSkillReferenceTokens above.
+ */
+export function extractSkillReferences(
+  text: string,
+  catalog: SkillCatalogEntry[],
+): SkillCatalogEntry[] {
+  const found: SkillCatalogEntry[] = [];
+  const seen = new Set<string>();
+  for (const token of findSkillReferenceTokens(text, catalog)) {
+    if (seen.has(token.entry.name)) continue;
+    seen.add(token.entry.name);
+    found.push(token.entry);
   }
   return found;
 }

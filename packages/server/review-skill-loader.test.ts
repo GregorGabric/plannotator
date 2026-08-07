@@ -451,9 +451,25 @@ describe("parseSkillFrontmatterMeta", () => {
       parseSkillFrontmatterMeta("---\ndisable-model-invocation: true\nname: x", truncated)
         .humanOnly,
     ).toBe(true);
-    // A complete (untruncated) file with an unterminated --- block is a body,
-    // not frontmatter — no fail-closed.
-    expect(parseSkillFrontmatterMeta("---\nnot frontmatter, a rule").humanOnly).toBe(false);
+  });
+
+  test("unterminated frontmatter in a COMPLETE file also fails CLOSED", () => {
+    // A file under the head-read bound whose frontmatter opens but never
+    // closes: the flag line is sitting in plain sight, so honor it when
+    // present and fail closed when absent — same posture as the truncated
+    // case. (Previously this path returned humanOnly false.)
+    expect(parseSkillFrontmatterMeta("---\nnot frontmatter, a rule").humanOnly).toBe(true);
+    expect(
+      parseSkillFrontmatterMeta("---\nname: x\ndescription: d").humanOnly,
+    ).toBe(true);
+    expect(
+      parseSkillFrontmatterMeta("---\ndisable-model-invocation: true\nname: x").humanOnly,
+    ).toBe(true);
+    expect(
+      parseSkillFrontmatterMeta("---\ndisable-model-invocation: false\nname: x").humanOnly,
+    ).toBe(false);
+    // No leading --- at all: a plain body, never fail-closed.
+    expect(parseSkillFrontmatterMeta("just a body\n---\n").humanOnly).toBe(false);
   });
 });
 

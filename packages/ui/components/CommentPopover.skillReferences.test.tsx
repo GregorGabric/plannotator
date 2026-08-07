@@ -1,12 +1,15 @@
 /**
  * Skill-reference keyboard state machine, against the REAL CommentPopover.
  *
- * This is where the trigger/keyboard defects hid: a bare `/` or `$` opening
- * the whole catalog and capturing Enter ("This costs $" + Enter must be a
- * newline, "cd /" + Tab must leave the field), and a missing isComposing
- * guard (IME candidate commits must never insert a skill). Covers: empty vs
- * non-empty query for Enter/Tab/Escape, composition, highlight bounding, and
- * the skillReferences={false} inertness of the human-only notice.
+ * The load-bearing invariant here is NO PRESELECTION: the menu opens on a
+ * bare `/` or `$` (full catalog), but with NOTHING active — and while nothing
+ * is active, every key behaves exactly as if the menu were not open. An
+ * adversarial review PROVED the failure this prevents: "This costs $" + Enter
+ * inserted a skill instead of a newline, "cd /" + Tab inserted a skill
+ * instead of blurring. A row activates ONLY via arrow keys (never hover); a
+ * click inserts directly without ever arming Enter. Also covers: IME
+ * composition, disarm-on-typing, Escape semantics, the highlight overlay, and
+ * skillReferences={false} inertness.
  *
  * DOM-gated (DOM_TESTS=1), same harness as Viewer.consumer.test.tsx.
  */
@@ -128,100 +131,225 @@ function menu(): Element | null {
   return document.querySelector('[data-skill-menu]');
 }
 
-describe('CommentPopover skill references — keyboard state machine', () => {
-  test.skipIf(!hasDom)('a bare $ never opens the menu; Enter stays a newline', async () => {
-    await mountPopover();
-    const el = textarea();
-    await type(el, 'This costs $');
-    expect(menu()).toBeNull();
-    const enter = await press(el, 'Enter');
-    expect(enter.defaultPrevented).toBe(false); // the newline goes through
-    expect(el.value).toBe('This costs $'); // nothing inserted
-  });
+function activeRow(): Element | null {
+  return document.querySelector('[data-skill-item-active]');
+}
 
-  test.skipIf(!hasDom)('a bare / never opens the menu; Tab stays a focus move', async () => {
+describe('CommentPopover skill references — no-preselection keyboard state machine', () => {
+  test.skipIf(!hasDom)(
+    'THE regression: bare $ opens the full catalog with NOTHING active; Enter stays a newline',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'This costs $');
+      expect(menu()).not.toBeNull(); // bare trigger opens the catalog
+      expect(document.querySelectorAll('[data-skill-item]').length).toBe(catalog.length);
+      expect(activeRow()).toBeNull(); // and nothing is preselected
+      const enter = await press(el, 'Enter');
+      expect(enter.defaultPrevented).toBe(false); // the newline goes through
+      expect(el.value).toBe('This costs $'); // no skill text appeared
+    },
+  );
+
+  test.skipIf(!hasDom)('bare / opens the menu; Tab still leaves the field', async () => {
     await mountPopover();
     const el = textarea();
     await type(el, 'cd /');
-    expect(menu()).toBeNull();
+    expect(menu()).not.toBeNull();
+    expect(activeRow()).toBeNull();
     const tab = await press(el, 'Tab');
     expect(tab.defaultPrevented).toBe(false);
     expect(el.value).toBe('cd /');
   });
 
-  test.skipIf(!hasDom)('a one-character query opens the menu and Enter inserts', async () => {
+  test.skipIf(!hasDom)(
+    'a typed query filters but still preselects nothing; Enter stays a newline',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'use /an');
+      expect(menu()).not.toBeNull();
+      expect(activeRow()).toBeNull();
+      const enter = await press(el, 'Enter');
+      expect(enter.defaultPrevented).toBe(false);
+      expect(el.value).toBe('use /an');
+    },
+  );
+
+  test.skipIf(!hasDom)('ArrowDown activates the FIRST row; Enter then inserts it', async () => {
     await mountPopover();
     const el = textarea();
     await type(el, 'use /an');
-    expect(menu()).not.toBeNull();
+    await press(el, 'ArrowDown');
+    expect(activeRow()?.getAttribute('data-skill-item')).toBe('animate');
     const enter = await press(el, 'Enter');
     expect(enter.defaultPrevented).toBe(true);
     expect(el.value).toBe('use /animate ');
     expect(menu()).toBeNull();
   });
 
-  test.skipIf(!hasDom)('Tab inserts too when the menu is open', async () => {
+  test.skipIf(!hasDom)('ArrowUp from nothing-active activates the LAST row', async () => {
+    await mountPopover();
+    const el = textarea();
+    await type(el, '$');
+    await press(el, 'ArrowUp');
+    expect(activeRow()?.getAttribute('data-skill-item')).toBe('plannotator-review');
+  });
+
+  test.skipIf(!hasDom)('Tab inserts once a row is active', async () => {
     await mountPopover();
     const el = textarea();
     await type(el, '$hum');
-    expect(menu()).not.toBeNull();
+    await press(el, 'ArrowDown');
     await press(el, 'Tab');
     expect(el.value).toBe('$humanizer ');
   });
 
-  test.skipIf(!hasDom)('Enter during IME composition never inserts (candidate commit)', async () => {
-    await mountPopover();
-    const el = textarea();
-    await type(el, 'use /an');
-    expect(menu()).not.toBeNull();
-    const enter = await press(el, 'Enter', { isComposing: true });
-    expect(enter.defaultPrevented).toBe(false);
-    expect(el.value).toBe('use /an'); // no skill inserted
-    expect(menu()).not.toBeNull(); // menu untouched
-
-    // Arrows mid-composition drive the IME candidate list, not the menu.
-    const down = await press(el, 'ArrowDown', { isComposing: true });
-    expect(down.defaultPrevented).toBe(false);
-  });
-
-  test.skipIf(!hasDom)('Escape dismisses the open menu without closing the composer', async () => {
+  test.skipIf(!hasDom)('typing after activation DISARMS the active row', async () => {
     await mountPopover();
     const el = textarea();
     await type(el, '/an');
+    await press(el, 'ArrowDown');
+    expect(activeRow()).not.toBeNull();
+    await type(el, '/ani'); // keep filtering the same trigger
     expect(menu()).not.toBeNull();
-    await press(el, 'Escape');
-    expect(menu()).toBeNull();
-    expect(closed).toBe(0);
-    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
-
-    // With the menu closed, Escape closes the composer as before.
-    await press(el, 'Escape');
-    expect(closed).toBe(1);
-  });
-
-  test.skipIf(!hasDom)('highlight stays on a real row as filtering shrinks the list', async () => {
-    await mountPopover();
-    const el = textarea();
-    await type(el, '/ann'); // annotate-helper (prefix) + plannotator-review (substring)
-    expect(document.querySelectorAll('[data-skill-item]').length).toBe(2);
-    await press(el, 'ArrowDown'); // highlight row 1 (plannotator-review)
-    await type(el, '/annotate'); // filters down to annotate-helper only
-    expect(document.querySelectorAll('[data-skill-item]').length).toBe(1);
-    await press(el, 'Enter'); // bounded back to row 0 — must not insert out of range
-    expect(el.value).toBe('/annotate-helper ');
-  });
-
-  test.skipIf(!hasDom)('ArrowDown moves the highlight and Enter inserts that row', async () => {
-    await mountPopover();
-    const el = textarea();
-    await type(el, '/ann');
-    await press(el, 'ArrowDown'); // → plannotator-review
-    await press(el, 'Enter');
-    expect(el.value).toBe('/plannotator-review ');
+    expect(activeRow()).toBeNull(); // the activation referred to the old list
+    const enter = await press(el, 'Enter');
+    expect(enter.defaultPrevented).toBe(false);
+    expect(el.value).toBe('/ani');
   });
 
   test.skipIf(!hasDom)(
-    'skillReferences={false} stays inert even with a warm catalog (no human-only notice)',
+    'pointer hover over a row NEVER arms Enter (the mouse rests where the menu renders)',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'This costs $');
+      const row = document.querySelector('[data-skill-item="animate"]')!;
+      await act(async () => {
+        row.dispatchEvent(new Event('pointermove', { bubbles: true }));
+        row.dispatchEvent(new Event('pointerenter', { bubbles: true }));
+        row.dispatchEvent(new Event('pointerover', { bubbles: true }));
+      });
+      expect(activeRow()).toBeNull();
+      const enter = await press(el, 'Enter');
+      expect(enter.defaultPrevented).toBe(false); // newline goes through
+      expect(el.value).toBe('This costs $'); // no skill text appeared
+    },
+  );
+
+  test.skipIf(!hasDom)('a pointer CLICK inserts directly', async () => {
+    await mountPopover();
+    const el = textarea();
+    await type(el, 'use $');
+    const row = document.querySelector('[data-skill-item="humanizer"]')!;
+    await act(async () => {
+      row.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
+    });
+    expect(el.value).toBe('use $humanizer ');
+    expect(menu()).toBeNull();
+  });
+
+  test.skipIf(!hasDom)(
+    'Enter during IME composition never inserts, even with an active row',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'use /an');
+      await press(el, 'ArrowDown');
+      expect(activeRow()).not.toBeNull();
+      const enter = await press(el, 'Enter', { isComposing: true });
+      expect(enter.defaultPrevented).toBe(false);
+      expect(el.value).toBe('use /an'); // no skill inserted
+      expect(menu()).not.toBeNull(); // menu untouched
+
+      // Arrows mid-composition drive the IME candidate list, not the menu.
+      const down = await press(el, 'ArrowDown', { isComposing: true });
+      expect(down.defaultPrevented).toBe(false);
+    },
+  );
+
+  test.skipIf(!hasDom)(
+    'Escape on an unengaged bare-trigger menu passes through and closes the composer',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'This costs $');
+      expect(menu()).not.toBeNull();
+      await press(el, 'Escape');
+      expect(closed).toBe(1); // one press, as if the menu were not open
+    },
+  );
+
+  test.skipIf(!hasDom)(
+    'Escape after typing a query dismisses the menu; the composer stays open',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, '/an');
+      expect(menu()).not.toBeNull();
+      await press(el, 'Escape');
+      expect(menu()).toBeNull();
+      expect(closed).toBe(0);
+      expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+
+      // With the menu dismissed, Escape closes the composer as before.
+      await press(el, 'Escape');
+      expect(closed).toBe(1);
+    },
+  );
+
+  test.skipIf(!hasDom)(
+    'Escape with an active row clears it and dismisses; the composer stays open',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, 'use $'); // bare trigger, then engage via arrows
+      await press(el, 'ArrowDown');
+      expect(activeRow()).not.toBeNull();
+      await press(el, 'Escape');
+      expect(menu()).toBeNull();
+      expect(closed).toBe(0);
+      // The dismissed trigger does not reopen while the caret sits on it.
+      const enter = await press(el, 'Enter');
+      expect(enter.defaultPrevented).toBe(false);
+      expect(el.value).toBe('use $');
+    },
+  );
+
+  test.skipIf(!hasDom)(
+    'the human-only warning shows only while a human-only row is ACTIVE',
+    async () => {
+      await mountPopover();
+      const el = textarea();
+      await type(el, '$plannotator-rev');
+      expect(menu()).not.toBeNull();
+      // Nothing active: no warning, even though the only row is human-only.
+      expect(document.querySelector('[data-skill-menu-warning]')).toBeNull();
+      await press(el, 'ArrowDown');
+      expect(document.querySelector('[data-skill-menu-warning]')).not.toBeNull();
+    },
+  );
+
+  test.skipIf(!hasDom)('inserted references render highlighted in the composer overlay', async () => {
+    await mountPopover();
+    const el = textarea();
+    await type(el, 'use $hum');
+    await press(el, 'ArrowDown');
+    await press(el, 'Enter');
+    expect(el.value).toBe('use $humanizer ');
+    const token = document.querySelector('[data-skill-ref-token]');
+    expect(token).not.toBeNull();
+    expect(token!.getAttribute('data-skill-ref-token')).toBe('humanizer');
+    expect(token!.textContent).toBe('$humanizer');
+    // The overlay is presentation-only and must never intercept the pointer.
+    const overlay = document.querySelector('[data-skill-ref-overlay]');
+    expect(overlay).not.toBeNull();
+    expect(overlay!.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  test.skipIf(!hasDom)(
+    'skillReferences={false} stays inert even with a warm catalog (no menu, no overlay, no notice)',
     async () => {
       await fetchSkillCatalog(); // warm the shared memory cache
       await mountPopover({
@@ -230,6 +358,10 @@ describe('CommentPopover skill references — keyboard state machine', () => {
       });
       const el = textarea();
       expect(document.querySelector('[data-skill-human-only-notice]')).toBeNull();
+      expect(document.querySelector('[data-skill-ref-overlay]')).toBeNull();
+      expect(el.classList.contains('pn-ref-input')).toBe(false);
+      await type(el, 'use $');
+      expect(menu()).toBeNull();
       await type(el, 'use $plannotator-rev');
       expect(menu()).toBeNull();
     },

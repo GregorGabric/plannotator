@@ -329,16 +329,19 @@ function isYamlTruthy(value: string): boolean {
  *
  * Failure posture is asymmetric on purpose: `description` may silently come
  * back empty, but the invocation flag guards a safety property (a human-only
- * skill must never be presented as model-invocable). So when `truncated` says
- * the head read may have cut the frontmatter short and no closing `---` was
- * seen, the scan still honors a flag line it DID see — and fails closed
- * (`humanOnly: true`) when it saw none, since the flag could sit past the
- * truncation point. A complete file with no frontmatter yields
- * `{ humanOnly: false }` as before.
+ * skill must never be presented as model-invocable). So whenever frontmatter
+ * OPENED but no closing `---` was seen — whether the head read truncated the
+ * file or the file itself never terminates the block — the scan still honors
+ * a flag line it DID see, and fails closed (`humanOnly: true`) when it saw
+ * none: the flag could sit past the truncation point, and an unterminated
+ * block in a complete file means the frontmatter cannot be trusted at all.
+ * A complete file with no leading `---` yields `{ humanOnly: false }` as
+ * before. (`options.truncated` is kept for callers but no longer gates the
+ * fail-closed path.)
  */
 export function parseSkillFrontmatterMeta(
   raw: string,
-  options: { truncated?: boolean } = {},
+  _options: { truncated?: boolean } = {},
 ): {
   description?: string;
   humanOnly: boolean;
@@ -349,9 +352,10 @@ export function parseSkillFrontmatterMeta(
   let failClosed = false;
   if (match) {
     block = match[1];
-  } else if (options.truncated && /^---\r?\n/.test(text)) {
-    // Frontmatter opened but the closing --- is beyond the head read: scan
-    // what we have, and fail closed on the flag unless a flag line was seen.
+  } else if (/^---\r?\n/.test(text)) {
+    // Frontmatter opened but never closed (truncated head read OR a complete
+    // file with an unterminated block): scan what we have, and fail closed on
+    // the flag unless a flag line was seen.
     block = text.replace(/^---\r?\n/, "");
     failClosed = true;
   } else {
