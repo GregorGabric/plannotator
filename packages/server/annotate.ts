@@ -20,7 +20,7 @@ import { handleFileBrowserFilesStream } from "./reference-watch";
 import { resolveUserPath, warmFileListCache } from "@plannotator/shared/resolve-file";
 import { contentHash, deleteDraft } from "./draft";
 import { getPlanVersion, getVersionCount, listVersions } from "@plannotator/shared/storage";
-import { computeAnnotateHistory, deriveAnnotateHistorySlug, type AnnotateHistoryResult } from "@plannotator/shared/annotate-history";
+import { computeAnnotateHistory, deriveAnnotateHistorySlug, persistAnnotateSubmission, type AnnotateHistoryResult } from "@plannotator/shared/annotate-history";
 import { htmlDiff } from "@plannotator/shared/html-diff";
 import { disabledSourceSave, type SourceSaveRequest } from "@plannotator/shared/source-save";
 import { getAnnotateReferenceRootPaths } from "@plannotator/shared/annotate-reference-roots-node";
@@ -234,6 +234,48 @@ export async function startAnnotateServer(
       ? `folder:${resolvePath(folderPath)}`
       : renderHtml && rawHtml ? rawHtml : markdown;
   const draftKey = contentHash(draftSource);
+
+  // Durable submit records (#678): the caller consuming waitForDecision() may
+  // be gone (agent-side timeout) by the time the reviewer clicks submit —
+  // settling the promise then deleting the draft would leave the submitted
+  // feedback existing nowhere. persistAnnotateSubmission writes the record to
+  // {DATA_DIR}/history/{project}/{slug}/submissions/{timestamp}.md (next to
+  // the file's annotate version history) BEFORE the draft delete.
+  //
+  // annotateHistory opt-out policy: PLANNOTATOR_ANNOTATE_HISTORY=0 means "do
+  // not write annotated content to the data dir", and submitted feedback
+  // quotes that content, so the record is skipped and the legacy submit
+  // behavior (draft deleted) is preserved unchanged. A missing/timed-out
+  // consumer is not detectable in-process (the server cannot know its caller
+  // stopped reading), so there is no narrower condition to key off.
+  //
+  // Returns whether the draft delete may proceed: true when the record was
+  // written, when there was no user content to lose, or when the user opted
+  // out of persistence; false only when a durable write was expected and
+  // failed — the draft then stays behind as the recovery copy.
+  const submissionSessionPath =
+    mode === "annotate-folder" && folderPath
+      ? resolvePath(folderPath)
+      : /^https?:\/\//i.test(filePath)
+        ? filePath
+        : resolvePath(filePath);
+  const persistSubmittedDecision = (
+    feedback: string,
+    annotations: unknown[],
+    approved: boolean,
+  ): boolean => {
+    if (!feedback.trim() && annotations.length === 0) return true; // contentless (e.g. bare approve)
+    if (!annotateHistoryEnabled) return true; // opt-out: stateless annotate sessions
+    return (
+      persistAnnotateSubmission({
+        project: annotateProjectName,
+        sessionPath: submissionSessionPath,
+        feedback,
+        annotations,
+        approved,
+      }) !== null
+    );
+  };
   const externalAnnotations = createExternalAnnotationHandler("plan");
   const aiRuntime = resolveAIEnabled() ? await createAIRuntime() : null;
   const htmlAssets = createHtmlAssetRegistry();
@@ -845,7 +887,14 @@ export async function startAnnotateServer(
                     : undefined,
             });
             if (!approvalWon) return alreadyDecided();
-            deleteDraft(draftKey, readDraftGenerationFromBody(body));
+            // Approve-with-notes carries user content — make it durable before
+            // the draft (the reviewer's only other copy) is deleted (#678).
+            const approvalDurable = persistSubmittedDecision(
+              (body.feedback as string | undefined) || "",
+              (body.annotations as unknown[] | undefined) || [],
+              true,
+            );
+            if (approvalDurable) deleteDraft(draftKey, readDraftGenerationFromBody(body));
             clientLease.cancel();
             return Response.json({ ok: true });
           }
@@ -868,7 +917,15 @@ export async function startAnnotateServer(
                 feedbackScope: body.feedbackScope,
               });
               if (!feedbackWon) return alreadyDecided();
-              deleteDraft(draftKey, readDraftGenerationFromBody(body));
+              // Make the submitted feedback durable BEFORE deleting the draft:
+              // the decision promise's consumer may have timed out, and this
+              // record is then the only surviving copy (#678).
+              const feedbackDurable = persistSubmittedDecision(
+                body.feedback || "",
+                body.annotations || [],
+                false,
+              );
+              if (feedbackDurable) deleteDraft(draftKey, readDraftGenerationFromBody(body));
               clientLease.cancel();
 
               return Response.json({ ok: true });
