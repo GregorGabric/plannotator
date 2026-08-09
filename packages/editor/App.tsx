@@ -49,6 +49,7 @@ import { buildDefaultPrompt, useAIChat } from '@plannotator/ui/hooks/useAIChat';
 import { getUIPreferences, type UIPreferences, type PlanWidth } from '@plannotator/ui/utils/uiPreferences';
 import { getEditorMode, saveEditorMode } from '@plannotator/ui/utils/editorMode';
 import { getInputMethod, saveInputMethod } from '@plannotator/ui/utils/inputMethod';
+import { getHtmlChromeState, saveHtmlChromeState } from '@plannotator/ui/utils/htmlChrome';
 import { useInputMethodSwitch } from '@plannotator/ui/hooks/useInputMethodSwitch';
 import { usePrintMode } from '@plannotator/ui/hooks/usePrintMode';
 import { requestVimDocumentFocus } from '@plannotator/ui/hooks/useVimDocumentFocus';
@@ -443,7 +444,12 @@ const App: React.FC = () => {
   const [convertHtml, setConvertHtml] = useState(false);
   // Hide the floating HTML annotation controls (toolstrip + action cluster) so the
   // user can read the rendered page unobstructed. Selections/annotations are unaffected.
+  // First-ever HTML session opens minimal (everything hidden); afterwards the user's
+  // last chrome state is restored from the persisted cookie (see utils/htmlChrome.ts).
   const [htmlToolsHidden, setHtmlToolsHidden] = useState(false);
+  // Gate for the chrome-persistence writer: only start saving once the persisted
+  // state has been applied, so a pre-restore render can't clobber the cookie.
+  const htmlChromeRestoredRef = useRef(false);
   // Every overlay the document surface paints over a rendered HTML page — the
   // toolstrip and the collapsed sidebar tab flags — drops out together, so the
   // page really gets the whole viewport. The header's "Show tools" button stays
@@ -1586,7 +1592,13 @@ const App: React.FC = () => {
     initialSidebarPreferenceAppliedRef.current = true;
     if (archive.archiveMode || goalSetupMode || annotateSource === 'folder') return;
     if (renderAs === 'html') {
-      sidebar.close();
+      // Restore the chrome the user last left an HTML session with (first-ever
+      // run: everything hidden, sidebar closed — a minimal "just the page" paint).
+      const chrome = getHtmlChromeState();
+      setHtmlToolsHidden(chrome.toolsHidden);
+      if (chrome.sidebarOpen) sidebar.open();
+      else sidebar.close();
+      htmlChromeRestoredRef.current = true;
       return;
     }
     if (uiPrefs.tocEnabled && hasTocEntries) {
@@ -1605,6 +1617,15 @@ const App: React.FC = () => {
     uiPrefs.tocEnabled,
     wideModeType,
   ]);
+
+  // Persist the chrome the user leaves an HTML session in (tools visibility +
+  // sidebar open), so the next raw-HTML session opens exactly as they left this
+  // one. Gated on the restore having run — a pre-restore render must not save
+  // the transient defaults over the user's remembered state.
+  useEffect(() => {
+    if (!isHtmlSurface || !htmlChromeRestoredRef.current) return;
+    saveHtmlChromeState({ toolsHidden: htmlToolsHidden, sidebarOpen: sidebar.isOpen });
+  }, [isHtmlSurface, htmlToolsHidden, sidebar.isOpen]);
 
   const ensureShareLink = useCallback(async (): Promise<string | null> => {
     const existing = shortShareUrl || shareUrl;
@@ -2405,8 +2426,21 @@ const App: React.FC = () => {
 
   const handleInputMethodChange = (method: InputMethod) => {
     setInputMethod(method);
-    saveInputMethod(method);
+    // Surface-scoped persistence: an explicit choice made on the HTML surface
+    // sticks for HTML sessions only; markdown keeps its own preference.
+    saveInputMethod(method, isHtmlSurface ? 'html' : 'markdown');
   };
+
+  // Raw-HTML surfaces resolve their own input-method preference (default:
+  // Pinpoint — see utils/inputMethod.ts for the persistence decision). Applied
+  // whenever the surface flips (session load or linked-doc navigation), so a
+  // markdown-era "drag" cookie never suppresses the HTML default.
+  const prevSurfaceRef = useRef(isHtmlSurface);
+  useEffect(() => {
+    if (prevSurfaceRef.current === isHtmlSurface) return;
+    prevSurfaceRef.current = isHtmlSurface;
+    setInputMethod(getInputMethod(isHtmlSurface ? 'html' : 'markdown'));
+  }, [isHtmlSurface]);
 
   // Alt/Option key: hold to temporarily switch, double-tap to toggle
   useInputMethodSwitch(inputMethod, handleInputMethodChange);
