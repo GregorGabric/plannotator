@@ -1591,16 +1591,9 @@ const App: React.FC = () => {
 
     initialSidebarPreferenceAppliedRef.current = true;
     if (archive.archiveMode || goalSetupMode || annotateSource === 'folder') return;
-    if (renderAs === 'html') {
-      // Restore the chrome the user last left an HTML session with (first-ever
-      // run: everything hidden, sidebar closed — a minimal "just the page" paint).
-      const chrome = getHtmlChromeState();
-      setHtmlToolsHidden(chrome.toolsHidden);
-      if (chrome.sidebarOpen) sidebar.open();
-      else sidebar.close();
-      htmlChromeRestoredRef.current = true;
-      return;
-    }
+    // HTML chrome is owned by the surface-transition effect below, which also
+    // covers linked .html docs opened from a markdown session.
+    if (renderAs === 'html') return;
     if (uiPrefs.tocEnabled && hasTocEntries) {
       sidebar.open('toc');
     }
@@ -1618,10 +1611,42 @@ const App: React.FC = () => {
     wideModeType,
   ]);
 
+  // Restore-on-entry: every time the session transitions ONTO an HTML surface
+  // (a root raw-HTML session, or a linked .html doc opened from markdown),
+  // apply the chrome the user last left an HTML session with (first-ever run:
+  // everything hidden, sidebar closed — a minimal "just the page" paint).
+  // Re-restoring on each entry is also what keeps a markdown surface's sidebar
+  // state from leaking into the HTML cookie on the way back.
+  const prevHtmlChromeSurfaceRef = useRef(false);
+  useEffect(() => {
+    if (isLoading || isLoadingShared) return;
+    if (wideModeType !== null) return;
+    const wasHtml = prevHtmlChromeSurfaceRef.current;
+    prevHtmlChromeSurfaceRef.current = isHtmlSurface;
+    if (!isHtmlSurface || wasHtml) return;
+    if (archive.archiveMode || goalSetupMode || annotateSource === 'folder') return;
+    const chrome = getHtmlChromeState();
+    setHtmlToolsHidden(chrome.toolsHidden);
+    if (chrome.sidebarOpen) sidebar.open();
+    else sidebar.close();
+    htmlChromeRestoredRef.current = true;
+  }, [
+    annotateSource,
+    archive.archiveMode,
+    goalSetupMode,
+    isHtmlSurface,
+    isLoading,
+    isLoadingShared,
+    sidebar.close,
+    sidebar.open,
+    wideModeType,
+  ]);
+
   // Persist the chrome the user leaves an HTML session in (tools visibility +
   // sidebar open), so the next raw-HTML session opens exactly as they left this
   // one. Gated on the restore having run — a pre-restore render must not save
-  // the transient defaults over the user's remembered state.
+  // the transient defaults over the user's remembered state — and on being ON
+  // the HTML surface, so a linked markdown doc's sidebar use never writes here.
   useEffect(() => {
     if (!isHtmlSurface || !htmlChromeRestoredRef.current) return;
     saveHtmlChromeState({ toolsHidden: htmlToolsHidden, sidebarOpen: sidebar.isOpen });

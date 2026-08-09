@@ -80,6 +80,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const MAX_ANCHOR_SELECTOR_LENGTH = 1024;
 const MAX_ANCHOR_TAG_LENGTH = 64;
 const MAX_ANCHOR_TEXT_LENGTH = 400;
+// Selection text is page-controlled too (a pinpoint click posts the element's
+// entire textContent), so it gets the same treatment: truncated here — not
+// rejected, a legitimate huge selection still annotates — before it can reach
+// React state, drafts, exported feedback, or a share URL. Mirrors
+// MAX_SELECTION_TEXT in bridge-script.ts; this side is the authoritative one.
+export const MAX_SELECTION_TEXT_LENGTH = 10000;
 
 /** Validate a bridge-posted element anchor. Exported for protocol tests. */
 export function parseHtmlElementAnchor(value: unknown): HtmlElementAnchor | null {
@@ -121,7 +127,9 @@ export function parseBridgeMessage(value: unknown): BridgeMessage | null {
       if (typeof value.text !== "string" || !rect) return null;
       return {
         type: value.type,
-        text: value.text,
+        text: value.text.length > MAX_SELECTION_TEXT_LENGTH
+          ? value.text.slice(0, MAX_SELECTION_TEXT_LENGTH)
+          : value.text,
         rect,
         modeOverride: parseEditorMode(value.modeOverride),
         anchor: parseHtmlElementAnchor(value.anchor) ?? undefined,

@@ -828,19 +828,35 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(target.contains(mark)).toBe(true);
     postBridge({ type: "plannotator-bridge-remove-mark", id: "pin-restore" });
 
-    // Text drift under a resolvable anchor: no inline mark, but a numbered pin
-    // badge on the element (still counts as restored).
+    // Text drift under a STABLE anchor (#id): the element still identifies
+    // itself, so when the text is gone everywhere it gets a numbered pin badge
+    // (still counts as restored).
     postBridge({
       type: "plannotator-bridge-find-and-mark",
       id: "pin-badge",
       originalText: "Text that no longer exists anywhere",
       annotationType: "comment",
-      anchor: { selector: anchor.selector, tagName: "p" },
+      anchor: { selector: "#hero", tagName: "div" },
     });
     const badge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
     if (!badge) throw new Error("pin badge missing");
     expect(badge.textContent).toBe("1");
     expect(document.querySelector('[data-bind-id="pin-badge"]')).toBeNull();
+
+    // A weak anchor with NO text snapshot is rejected outright (a missing
+    // snapshot is a rejection, not an exemption): restoration falls back to
+    // the document-wide text search instead of trusting the element.
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "pin-no-snapshot",
+      originalText: "Second paragraph",
+      annotationType: "comment",
+      anchor: { selector: anchor.selector, tagName: "p" },
+    });
+    const fallbackMark = document.querySelector('[data-bind-id="pin-no-snapshot"]');
+    expect(fallbackMark?.textContent).toBe("Second paragraph");
+    expect(target.contains(fallbackMark)).toBe(false);
+    postBridge({ type: "plannotator-bridge-remove-mark", id: "pin-no-snapshot" });
 
     // Fail-closed anchors: a weak selector whose text snapshot no longer
     // matches must not resolve (falls back to document-wide text search).
@@ -862,6 +878,47 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       method: "drag",
     });
     expect(document.body.hasAttribute("data-plannotator-pinpoint-cursor")).toBe(false);
+    document.body.replaceChildren();
+  });
+
+  test("behavioral-attribute anchors never bypass the text check", () => {
+    // Regenerated page: the button kept its role but its meaning flipped; the
+    // annotated text moved into a sibling paragraph. The role anchor must NOT
+    // resolve (role names behavior, not content) — the annotation follows the
+    // text via the document-wide search, and no pin lands on the button.
+    document.body.innerHTML = [
+      '<button role="button">Delete everything</button>',
+      "<p>Save draft</p>",
+    ].join("");
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "role-anchor",
+      originalText: "Save draft",
+      annotationType: "comment",
+      anchor: { selector: 'button[role="button"]', tagName: "button", text: "Save draft" },
+    });
+    const mark = document.querySelector('[data-bind-id="role-anchor"]');
+    expect(mark?.textContent).toBe("Save draft");
+    expect(document.querySelector("button")?.contains(mark)).toBe(false);
+    expect(document.querySelector("p")?.contains(mark)).toBe(true);
+    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+
+    // data-* attributes ARE author-controlled identity: a data-testid anchor
+    // whose text drifted still resolves, and with the text gone everywhere the
+    // element gets the pin badge.
+    document.body.innerHTML = '<div data-testid="stats">New numbers</div>';
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "data-anchor",
+      originalText: "Old numbers",
+      annotationType: "comment",
+      anchor: { selector: 'div[data-testid="stats"]', tagName: "div", text: "Old numbers" },
+    });
+    expect(document.querySelector('[data-bind-id="data-anchor"]')).toBeNull();
+    const dataBadge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
+    expect(dataBadge).not.toBeNull();
+    postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
   });
 });

@@ -315,6 +315,16 @@ export const BRIDGE_SCRIPT = `(function() {
     setTimeout(handleSelection, 10);
   });
 
+  // The page fully controls element text, so everything posted as a selection
+  // is bounded here before it crosses the bridge (the parent enforces the same
+  // cap on its side of the trust boundary). One pinpoint click on a huge
+  // <pre>/<table> must not ship megabytes into drafts, feedback, or share URLs.
+  var MAX_SELECTION_TEXT = 10000;
+
+  function capSelectionText(text) {
+    return text.length > MAX_SELECTION_TEXT ? text.slice(0, MAX_SELECTION_TEXT) : text;
+  }
+
   function handleSelection(modeOverride, extras) {
     var sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) {
@@ -330,7 +340,7 @@ export const BRIDGE_SCRIPT = `(function() {
     }
     skipNextClear = false; // a real text selection happened
     var range = sel.getRangeAt(0);
-    var text = sel.toString().trim();
+    var text = capSelectionText(sel.toString().trim());
     if (!text) return false;
 
     var rect = range.getBoundingClientRect();
@@ -423,19 +433,28 @@ export const BRIDGE_SCRIPT = `(function() {
       var restoreType = e.data.annotationType || 'comment';
       var anchorEl = resolveAnchorElement(e.data.anchor);
       var found = false;
-      if (anchorEl) {
+      var isSvgAnchor = anchorEl && (anchorEl.ownerSVGElement || anchorEl.tagName.toLowerCase() === 'svg');
+      if (isSvgAnchor) {
         // SVG content never takes an inline <mark> (it would un-render the
-        // text) — an SVG anchor is always a pin.
-        if (!anchorEl.ownerSVGElement && anchorEl.tagName.toLowerCase() !== 'svg') {
-          found = findTextAndMark(e.data.id, e.data.originalText, restoreType, anchorEl);
-        }
-        if (!found) {
-          registerPin(e.data.id, anchorEl, e.data.anchor);
-          found = true;
-        }
+        // text) — a resolved SVG anchor is always a pin, and the HTML-oriented
+        // text search below could only mis-mark unrelated HTML text.
+        registerPin(e.data.id, anchorEl, e.data.anchor);
+        found = true;
+      }
+      if (!found && anchorEl) {
+        found = findTextAndMark(e.data.id, e.data.originalText, restoreType, anchorEl);
       }
       if (!found) {
+        // Document-wide text search runs BEFORE the pin fallback: if the
+        // annotated text moved elsewhere in a regenerated page, the annotation
+        // follows the text rather than badging the stale container.
         found = findTextAndMark(e.data.id, e.data.originalText, restoreType);
+      }
+      if (!found && anchorEl) {
+        // Element still resolves but its text is gone everywhere: badge the
+        // element itself as the last resort.
+        registerPin(e.data.id, anchorEl, e.data.anchor);
+        found = true;
       }
       parent.postMessage({
         type: PREFIX + 'mark-applied',
@@ -997,7 +1016,11 @@ export const BRIDGE_SCRIPT = `(function() {
       if (uniquelySelects(candidate, el)) return candidate;
       current = parentEl;
     }
-    return path.length ? path.join(' > ') : null;
+    // Reaching here means every candidate — including the full body-rooted
+    // path — failed the uniqueness query. A known-ambiguous selector must not
+    // ship as an anchor: no anchor (text-search restoration) beats one that
+    // can bind to the wrong element after a re-render.
+    return null;
   }
 
   function buildElementAnchor(el) {
@@ -1011,10 +1034,26 @@ export const BRIDGE_SCRIPT = `(function() {
     };
   }
 
-  function anchorHasStableIdentity(selector) {
-    var segments = selector.split(' > ');
-    var last = segments[segments.length - 1] || '';
-    return last.indexOf('#') === 0 || last.indexOf('[') >= 0;
+  // Stable identity: the selector IS the resolved element's own #id or data-*
+  // rung, re-derived from the element itself and compared whole — never parsed
+  // out of the selector string (an attribute value containing ' > ' or '#'
+  // would fool a string parse). Behavioral attributes (role, href, aria-label,
+  // name, alt) identify what an element does, not what it says, so they never
+  // exempt an anchor from the text check: a regenerated page keeps its
+  // role="button" while the button's meaning changes completely.
+  var STABLE_IDENTITY_ATTRS = ['data-annotate', 'data-testid', 'data-test'];
+
+  function anchorHasStableIdentity(selector, el) {
+    var canEscape = typeof CSS !== 'undefined' && CSS.escape;
+    if (el.id && canEscape && selector === '#' + CSS.escape(el.id)) return true;
+    var tag = el.tagName.toLowerCase();
+    for (var i = 0; i < STABLE_IDENTITY_ATTRS.length; i++) {
+      var name = STABLE_IDENTITY_ATTRS[i];
+      var value = el.getAttribute && el.getAttribute(name);
+      if (!value) continue;
+      if (selector === tag + '[' + name + '=' + escapeAttrValue(value.trim()) + ']') return true;
+    }
+    return false;
   }
 
   function resolveAnchorElement(anchor) {
@@ -1028,12 +1067,13 @@ export const BRIDGE_SCRIPT = `(function() {
     if (matches.length !== 1) return null;
     var el = matches[0];
     if (el.tagName.toLowerCase() !== anchor.tagName.toLowerCase()) return null;
-    if (
-      !anchorHasStableIdentity(anchor.selector)
-      && typeof anchor.text === 'string' && anchor.text
-      && anchorTextSnapshot(el) !== anchor.text
-    ) {
-      return null;
+    if (!anchorHasStableIdentity(anchor.selector, el)) {
+      // Weak (positional / class / behavioral-attribute) anchor: the captured
+      // text snapshot must exist and still match, or the anchor is rejected and
+      // restoration falls back to text search. A missing or empty snapshot is a
+      // rejection, not an exemption.
+      if (typeof anchor.text !== 'string' || !anchor.text) return null;
+      if (anchorTextSnapshot(el) !== anchor.text) return null;
     }
     return el;
   }
@@ -1082,7 +1122,7 @@ export const BRIDGE_SCRIPT = `(function() {
       if (!posted) clearPendingPin();
       return posted;
     }
-    var elText = (el.textContent || '').trim();
+    var elText = capSelectionText((el.textContent || '').trim());
     if (!elText) { clearPendingPin(); return false; }
     var r = el.getBoundingClientRect();
     pendingSelection = { element: true };

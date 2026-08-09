@@ -100,6 +100,27 @@ describe.if(hasDom)('parseBridgeMessage selection additions', () => {
     expect(parsed).toMatchObject({ text: 'Hello', pinpoint: false });
     expect((parsed as { anchor?: unknown }).anchor).toBeUndefined();
   });
+
+  test('selection text is truncated at the parse boundary, not rejected', () => {
+    // The page controls element text entirely, so one pinpoint click on a huge
+    // <pre> could otherwise ship an unbounded string into React state, drafts,
+    // exported feedback, and share URLs.
+    const cap = hookModule!.MAX_SELECTION_TEXT_LENGTH;
+    const parsed = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-selection',
+      text: 'x'.repeat(cap + 590_000),
+      rect,
+    });
+    expect(parsed).not.toBeNull();
+    expect((parsed as { text: string }).text.length).toBe(cap);
+    // At or under the cap passes through untouched.
+    const exact = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-selection',
+      text: 'y'.repeat(cap),
+      rect,
+    });
+    expect((exact as { text: string }).text).toBe('y'.repeat(cap));
+  });
 });
 
 describe.if(hasDom)('pinpoint click-to-pin flow', () => {
