@@ -155,6 +155,78 @@ describe("pi annotate server: durable submit records (#678)", () => {
 		}
 	});
 
+	test("previously-stateless modes stay stateless: annotate-last and URL sessions write no record", async () => {
+		// Before #678 these modes never touched the data dir; the durable record
+		// must not widen the documented annotateHistory contract to them.
+		const lastProject = uniqueProject("last-message");
+		const lastServer = await startAnnotateServer({
+			markdown: `# Agent message ${lastProject}\n\nQuoted agent output.\n`,
+			filePath: "last-message",
+			htmlContent: "<html></html>",
+			project: lastProject,
+			mode: "annotate-last",
+		});
+		try {
+			const response = await fetch(`${lastServer.url}/api/feedback`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ feedback: "Quoting the agent: do Y instead.", annotations: [] }),
+			});
+			expect(response.status).toBe(200);
+			expect(existsSync(join(getPlannotatorDataDir(), "history", lastProject))).toBe(false);
+		} finally {
+			lastServer.stop();
+		}
+
+		const urlProject = uniqueProject("url");
+		const urlServer = await startAnnotateServer({
+			markdown: `# Fetched page ${urlProject}\n\nPage content.\n`,
+			filePath: "https://example.com/some/page",
+			htmlContent: "<html></html>",
+			project: urlProject,
+		});
+		try {
+			const response = await fetch(`${urlServer.url}/api/feedback`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ feedback: "The fetched page says Z.", annotations: [] }),
+			});
+			expect(response.status).toBe(200);
+			expect(existsSync(join(getPlannotatorDataDir(), "history", urlProject))).toBe(false);
+		} finally {
+			urlServer.stop();
+		}
+	});
+
+	test("a malformed feedback body degrades to legacy behavior, never a 500", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "plannotator-pi-submit-malformed-"));
+		const docPath = join(dir, "doc.md");
+		const project = uniqueProject("malformed");
+		const server = await startServer(project, docPath);
+
+		try {
+			await fetch(`${server.url}/api/draft`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ annotations: [{ id: "a1" }] }),
+			});
+
+			const response = await fetch(`${server.url}/api/feedback`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ feedback: 42, annotations: [] }),
+			});
+			expect(response.status).toBe(200);
+			// Legacy behavior: draft deleted, no record (nothing persistable).
+			const draft = await fetch(`${server.url}/api/draft`);
+			expect(draft.status).toBe(404);
+			expect(existsSync(submissionsDir(project, docPath))).toBe(false);
+		} finally {
+			server.stop();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("annotateHistory disabled: no content is written and the draft is deleted (legacy behavior)", async () => {
 		process.env.PLANNOTATOR_ANNOTATE_HISTORY = "0";
 		const dir = mkdtempSync(join(tmpdir(), "plannotator-pi-submit-optout-"));

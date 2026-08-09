@@ -288,12 +288,17 @@ export async function startAnnotateServer(options: {
 	// when rendering HTML. Only single local files (not URLs/folders/messages).
 	const annotateProjectName = options.project ?? "_unknown";
 	const annotateHistoryEnabled = resolveAnnotateHistory(loadConfig());
+	// Single local file sessions are the only ones the annotate-history contract
+	// covers: URL / folder / agent-message sessions never write session content
+	// to the data dir. Both the version history below and the durable submit
+	// records share this gate.
+	const singleFileLocalAnnotate =
+		(options.mode || "annotate") === "annotate" && !/^https?:\/\//i.test(options.filePath);
 	let annotateHistory: AnnotateHistoryResult | null = null;
 	{
 		const historyContent = options.renderHtml && options.rawHtml ? options.rawHtml : options.markdown;
 		const eligible =
-			(options.mode || "annotate") === "annotate" &&
-			!/^https?:\/\//i.test(options.filePath) &&
+			singleFileLocalAnnotate &&
 			historyContent.length > 0 &&
 			annotateHistoryEnabled;
 		// History is an enhancement, never a gate: a read-only/full data dir
@@ -338,29 +343,35 @@ export async function startAnnotateServer(options: {
 	// consumer is not detectable in-process (the server cannot know its caller
 	// stopped reading), so there is no narrower condition to key off.
 	//
+	// Scope: identical to the version-history gate above — single local files
+	// only. annotate-last / URL / folder sessions were stateless before this
+	// record existed and STAY stateless: their submissions quote agent messages
+	// or fetched pages, which the documented annotateHistory contract never
+	// covered writing to disk.
+	//
 	// Returns whether the draft delete may proceed: true when the record was
-	// written, when there was no user content to lose, or when the user opted
-	// out of persistence; false only when a durable write was expected and
+	// written, when there was no user content to lose, or when the session
+	// does not persist; false only when a durable write was expected and
 	// failed — the draft then stays behind as the recovery copy.
-	const submissionSessionPath =
-		options.mode === "annotate-folder" && options.folderPath
-			? resolvePath(options.folderPath)
-			: /^https?:\/\//i.test(options.filePath)
-				? options.filePath
-				: resolvePath(options.filePath);
 	const persistSubmittedDecision = (
-		feedback: string,
-		annotations: unknown[],
+		feedback: unknown,
+		annotations: unknown,
 		approved: boolean,
 	): boolean => {
-		if (!feedback.trim() && annotations.length === 0) return true; // contentless (e.g. bare approve)
+		// Defensive: /api/feedback does not type-validate its body (unlike
+		// /api/approve), and a malformed value must degrade to the legacy
+		// behavior (settle + delete draft + 200), never throw into a 500.
+		const feedbackText = typeof feedback === "string" ? feedback : "";
+		const annotationList = Array.isArray(annotations) ? annotations : [];
+		if (!feedbackText.trim() && annotationList.length === 0) return true; // contentless (e.g. bare approve)
 		if (!annotateHistoryEnabled) return true; // opt-out: stateless annotate sessions
+		if (!singleFileLocalAnnotate) return true; // stateless modes stay stateless
 		return (
 			persistAnnotateSubmission({
 				project: annotateProjectName,
-				sessionPath: submissionSessionPath,
-				feedback,
-				annotations,
+				sessionPath: resolvePath(options.filePath),
+				feedback: feedbackText,
+				annotations: annotationList,
 				approved,
 			}) !== null
 		);

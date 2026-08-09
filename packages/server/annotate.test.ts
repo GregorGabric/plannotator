@@ -1612,6 +1612,83 @@ describe("annotate server: durable submit records (#678)", () => {
     }
   });
 
+  test("previously-stateless modes stay stateless: annotate-last and URL sessions write no record", async () => {
+    // Before #678 these modes never touched the data dir; the durable record
+    // must not widen the documented annotateHistory contract to them — their
+    // submissions quote agent messages or fetched pages.
+    const lastProject = uniqueProject("last-message");
+    const lastServer = await startAnnotateServer({
+      markdown: `# Agent message ${lastProject}\n\nQuoted agent output.\n`,
+      filePath: "last-message",
+      htmlContent: MINIMAL_HTML,
+      project: lastProject,
+      mode: "annotate-last",
+    });
+    try {
+      const response = await fetch(`${lastServer.url}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: "Quoting the agent: do Y instead.", annotations: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(existsSync(join(getPlannotatorDataDir(), "history", lastProject))).toBe(false);
+    } finally {
+      lastServer.stop();
+    }
+
+    const urlProject = uniqueProject("url");
+    const urlServer = await startAnnotateServer({
+      markdown: `# Fetched page ${urlProject}\n\nPage content.\n`,
+      filePath: "https://example.com/some/page",
+      htmlContent: MINIMAL_HTML,
+      project: urlProject,
+    });
+    try {
+      const response = await fetch(`${urlServer.url}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: "The fetched page says Z.", annotations: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(existsSync(join(getPlannotatorDataDir(), "history", urlProject))).toBe(false);
+    } finally {
+      urlServer.stop();
+    }
+  });
+
+  test("a malformed feedback body degrades to legacy behavior, never a 500", async () => {
+    // /api/feedback does no body type validation; pre-#678 a non-string
+    // feedback flowed through settle() untouched and returned 200. The
+    // durable-record guard must not turn that into a thrown 500.
+    const dir = mkdtempSync(join(tmpdir(), "plannotator-submit-malformed-"));
+    const docPath = join(dir, "doc.md");
+    const project = uniqueProject("malformed");
+    const server = await startServer(project, docPath);
+
+    try {
+      await fetch(`${server.url}/api/draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ annotations: [{ id: "a1" }] }),
+      });
+
+      const response = await fetch(`${server.url}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: 42, annotations: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      // Legacy behavior: draft deleted, no record (nothing persistable).
+      const draft = await fetch(`${server.url}/api/draft`);
+      expect(draft.status).toBe(404);
+      expect(existsSync(submissionsDir(project, docPath))).toBe(false);
+    } finally {
+      server.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a failed durable write keeps the draft as the recovery copy", async () => {
     const dir = mkdtempSync(join(tmpdir(), "plannotator-submit-unwritable-"));
     const docPath = join(dir, "doc.md");
