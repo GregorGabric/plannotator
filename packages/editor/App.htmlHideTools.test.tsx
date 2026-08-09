@@ -181,6 +181,34 @@ describe.if(hasDom)("HTML annotate chrome (minimal-first render + persistence)",
     expect(sidebarTabs()).not.toBeNull();
   });
 
+  test("the restore commit never writes stale pre-restore values to the cookie", async () => {
+    // The chrome writer runs in the same commit as the restore effect, before
+    // the restored state has landed. If it saved there, a returning user's
+    // remembered state would be transiently inverted in the cookie — and a
+    // page ending between the two writes would freeze the inversion. Instrument
+    // every chrome write: no write may ever carry a state other than the
+    // remembered one, because this session never changes any chrome.
+    const chromeWrites: string[] = [];
+    setStorageBackend({
+      getItem: (key) => memory.get(key) ?? null,
+      setItem: (key, value) => {
+        if (key === "plannotator-html-chrome") chromeWrites.push(value);
+        memory.set(key, value);
+      },
+      removeItem: (key) => void memory.delete(key),
+    });
+    seedAnnouncementsSeen();
+    const remembered = JSON.stringify({ toolsHidden: false, sidebarOpen: true });
+    memory.set("plannotator-html-chrome", remembered);
+    await mountHtmlAnnotate("Hide tools");
+    await settle();
+
+    for (const write of chromeWrites) {
+      expect(JSON.parse(write)).toEqual(JSON.parse(remembered));
+    }
+    expect(memory.get("plannotator-html-chrome")).toBe(remembered);
+  });
+
   test("a 'user showed tools' state persists across a fresh mount", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();

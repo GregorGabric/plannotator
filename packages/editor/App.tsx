@@ -450,6 +450,9 @@ const App: React.FC = () => {
   // Gate for the chrome-persistence writer: only start saving once the persisted
   // state has been applied, so a pre-restore render can't clobber the cookie.
   const htmlChromeRestoredRef = useRef(false);
+  // The restore's own commit still renders pre-restore values; the writer
+  // consumes this flag to skip that exact run (see the save effect).
+  const skipNextHtmlChromeSaveRef = useRef(false);
   // Every overlay the document surface paints over a rendered HTML page — the
   // toolstrip and the collapsed sidebar tab flags — drops out together, so the
   // page really gets the whole viewport. The header's "Show tools" button stays
@@ -1626,6 +1629,7 @@ const App: React.FC = () => {
     if (!isHtmlSurface || wasHtml) return;
     if (archive.archiveMode || goalSetupMode || annotateSource === 'folder') return;
     const chrome = getHtmlChromeState();
+    skipNextHtmlChromeSaveRef.current = true;
     setHtmlToolsHidden(chrome.toolsHidden);
     if (chrome.sidebarOpen) sidebar.open();
     else sidebar.close();
@@ -1649,6 +1653,17 @@ const App: React.FC = () => {
   // the HTML surface, so a linked markdown doc's sidebar use never writes here.
   useEffect(() => {
     if (!isHtmlSurface || !htmlChromeRestoredRef.current) return;
+    // The restore effect flips htmlChromeRestoredRef synchronously, but its
+    // state updates land a commit LATER — a save in the restore commit itself
+    // would still see pre-restore values and clobber the remembered state
+    // (self-corrected next flush, but a page ending in between would freeze
+    // the inverted value). Skip exactly that one run. If the restore changed
+    // any state, the changed deps re-run this effect and save then; if it
+    // changed nothing, the cookie already holds exactly those values.
+    if (skipNextHtmlChromeSaveRef.current) {
+      skipNextHtmlChromeSaveRef.current = false;
+      return;
+    }
     saveHtmlChromeState({ toolsHidden: htmlToolsHidden, sidebarOpen: sidebar.isOpen });
   }, [isHtmlSurface, htmlToolsHidden, sidebar.isOpen]);
 
