@@ -267,8 +267,18 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       const win = iframeRef.current?.contentWindow;
       if (!win) return;
       const live = liveSessionRef.current;
-      if (live) win.postMessage({ ...msg, token: live.token }, live.origin);
-      else win.postMessage(msg, "*");
+      if (live) {
+        // Browsers silently drop posts whose targetOrigin does not match the
+        // receiving window (mid-navigation frames); some DOM environments
+        // throw instead, so align with the browser semantics explicitly.
+        try {
+          win.postMessage({ ...msg, token: live.token }, live.origin);
+        } catch {
+          // Dropped, matching browser behavior for unmatched target origins.
+        }
+      } else {
+        win.postMessage(msg, "*");
+      }
     }, []);
 
     // Host theming is opt-in per document (Plannotator-generated artifacts tag

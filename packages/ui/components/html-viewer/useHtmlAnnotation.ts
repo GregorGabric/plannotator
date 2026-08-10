@@ -138,7 +138,14 @@ function postToIframe(
 ) {
   if (live) {
     // Live proxied-app sessions: token on every message, concrete targetOrigin.
-    iframe?.contentWindow?.postMessage({ ...msg, token: live.token }, live.origin);
+    // Browsers silently DROP a post whose targetOrigin does not match the
+    // receiving window (mid-navigation frames); some DOM environments throw
+    // instead, so align with the browser semantics explicitly.
+    try {
+      iframe?.contentWindow?.postMessage({ ...msg, token: live.token }, live.origin);
+    } catch {
+      // Dropped, matching browser behavior for unmatched target origins.
+    }
     return;
   }
   iframe?.contentWindow?.postMessage(msg, "*");

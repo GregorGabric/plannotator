@@ -279,6 +279,12 @@ Input type detected:
              e.g. `.livemd`) join this set and render as markdown, frontmatter stripped.
   .html/.htm → file read, rendered as raw HTML by default (or converted to markdown with --markdown)
   https://   → fetched via Jina Reader (default) or fetch+Turndown (--no-jina)
+  http://localhost:* (also 127.x and [::1])
+             → LIVE app annotation by default when a quick probe returns HTML:
+               the running app is mirrored through a loopback reverse proxy and
+               annotated in place (see "Live app annotation" below). --static
+               forces the classic conversion pipeline; --app forces live mode
+               and fails loudly when it cannot apply.
   folder/    → file browser opened, files converted on demand
         ↓
 Annotate server starts (reuses plan editor HTML with mode:"annotate")
@@ -309,6 +315,18 @@ Strict decisions use one newline-terminated JSON record on stdout and, when requ
 ### Abandoned strict gate sessions
 
 Local direct structured gates (`--gate --json`, not `--hook`, not remote) advertise a client lease in `/api/plan` and serve `/api/annotate/client-lease` (SSE, `ANNOTATE_CLIENT_LEASE_STREAM_PATH`). Each open stream is one connected review surface; the server heartbeats every 5s and, once at least one client has connected, starts a 30s reconnect grace when the last one disconnects. A reconnect inside the grace continues the same review; expiry resolves the gate as the same `dismissed` decision an explicit Close produces, except that it keeps the saved annotation draft so an abandoned review can still be recovered. Approve, feedback, explicit exit, and server stop all cancel a pending expiry. Whichever producer settles the session first wins: every one of them (each connected surface and the expiry itself) goes through a single one-shot settlement, so a decision arriving after the session already resolved is rejected with `409` rather than deleting the draft and reporting success for an outcome the caller never received. Page lifecycle events are deliberately not used: `pagehide`/`beforeunload` also fire on reload and navigation, so they cannot distinguish abandonment from a reconnect. A session that never receives its first client never auto-dismisses, so browser-launch failures still need a caller-side timeout, and remote/shared sessions keep the capability off because tunnel disconnects would read as abandonment — as do `--tailscale`-published sessions, which force local mode but are reached through the serve proxy, whose disconnects would read the same way.
+
+### Live app annotation (annotate-app)
+
+Phase 1 of the live local app annotation feature (spec: `adr/research/SPIKE-local-app-annotation-20260810.md`, section 7). `plannotator annotate http://localhost:5173` probes the loopback URL (3s timeout, `accept: text/html`) and, when the probe returns an HTML page, starts server mode `"annotate-app"` instead of converting the page: a dedicated loopback reverse proxy (`packages/server/live-proxy.ts`) mirrors the whole dev-server origin on its own `127.0.0.1` port, injects `<script src="/__plannotator__/bridge.js">` into every HTML response (streaming, exactly once per document), and passes WebSockets through so HMR keeps working. The editor renders the proxied app full-viewport in an unsandboxed iframe and drives the same pinpoint annotation experience the srcdoc surface provides. `--static` forces the classic conversion; `--app` forces live and errors on non-loopback, https, unreachable, or non-HTML targets.
+
+**Phase gate:** the feature ships on the Bun server + Claude Code CLI path only. The OpenCode and Pi slash-command parsers are untouched this phase; their URL targets keep static conversion. The Pi `node:http` server mirror is a documented exception to the both-servers rule until a later phase.
+
+**Session shape:** pinpoint-only at launch (vim and drag selection are disabled in live mode; both write into or fight the app's own DOM). Multi-page sessions are supported in one server session: annotations carry `pageUrl` (pathname + search, capped at 2048), restore filters to the current page, the export groups feedback under per-page headings while numbering stays global, and the bridge reports SPA navigations via a coalesced `page-change` message. Version history, durable submission records, URL sharing, portable HTML export, Obsidian/Bear save, and the annotate agent terminal are all off, exactly like URL sessions. Drafts, feedback, approve, gates, and the client lease work unchanged.
+
+**Security posture:** the proxy binds `127.0.0.1` unconditionally and validates the `Host` header before touching upstream (DNS-rebinding blunting); `PLANNOTATOR_URL_HOST` is never applied to the proxy origin. App CSP on HTML responses is dropped and replaced with a `frame-ancestors` policy listing exactly the editor origins (amending an arbitrary CSP for an injected script is unpredictable; dev servers rarely ship one; `<meta http-equiv>` CSP is a documented non-goal). The injected bridge authenticates both message directions with a per-session token plus origin checks; the parent side keeps every existing size cap. Remote mode is a hard-off with three independent layers and no override env var: the CLI exits with a startup failure suggesting `--static`, `startAnnotateServer` throws, and the proxy bind never follows `PLANNOTATOR_REMOTE`.
+
+**Known limitations (documented, not bugs):** hardcoded absolute origins in the app, origin-pinned CORS to secondary APIs, and OAuth `redirect_uri` flows land outside the proxy; frame-busting apps break the wrapper; content-encoded HTML that survives the encoding strip renders without the bridge; cross-page annotation clicks do not navigate. Manual smoke loop: `scripts/live-annotate-smoke.sh` (not CI).
 
 ## Archive Flow
 
@@ -431,7 +449,7 @@ During normal plan review, an Archive sidebar tab provides the same browsing via
 
 | Endpoint              | Method | Purpose                                    |
 | --------------------- | ------ | ------------------------------------------ |
-| `/api/plan`           | GET    | Returns `{ plan, origin, mode: "annotate", filePath, sourceInfo?, gate, renderAs?, rawHtml?, previousPlan?, versionInfo?, diffCurrent?, diffHtml? }`. The last four power the per-file version diff: `previousPlan`/`versionInfo`/`diffCurrent` for the markdown diff, `diffHtml` (the previous→current page rendered with inline `<ins>`/`<del>`) for `--render-html` files. |
+| `/api/plan`           | GET    | Returns `{ plan, origin, mode: "annotate", filePath, sourceInfo?, gate, renderAs?, rawHtml?, previousPlan?, versionInfo?, diffCurrent?, diffHtml? }`. The last four power the per-file version diff: `previousPlan`/`versionInfo`/`diffCurrent` for the markdown diff, `diffHtml` (the previous→current page rendered with inline `<ins>`/`<del>`) for `--render-html` files. Live app sessions return `{ mode: "annotate-app", appUrl, targetUrl, liveToken, sharingEnabled: false, ... }` instead: no rawHtml, no version fields (see "Live app annotation"). |
 | `/api/plan/version`   | GET    | Fetch a specific stored version of the annotated file (`?v=N`) |
 | `/api/plan/versions`  | GET    | List all stored versions of the annotated file |
 | `/api/feedback`       | POST   | Submit annotations (body: feedback, annotations) |
