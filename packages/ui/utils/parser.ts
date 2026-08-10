@@ -1106,9 +1106,16 @@ const blockEndLine = (block: Block): number => {
 const additionalTargetsExportBlock = (ann: any): string => {
   const targets = ann?.htmlAdditionalTargets;
   if (!Array.isArray(targets) || targets.length === 0) return '';
-  let block = `**Also applies to ${targets.length} more element${targets.length > 1 ? 's' : ''}:**\n`;
+  // Leading blank line: the preceding comment line is a `> blockquote`, and
+  // markdown lazy continuation would otherwise fold this block into it.
+  let block = `\n**Also applies to ${targets.length} more element${targets.length > 1 ? 's' : ''}:**\n`;
   targets.forEach((target: any) => {
-    const label = typeof target?.label === 'string' && target.label ? `[${target.label}] ` : '';
+    // Labels and texts are page-controlled (aria-label etc.). The DTO
+    // boundary already collapses label whitespace; do it here again (defense
+    // in depth) so persisted pre-fix data can never smuggle newlines — and
+    // with them fake markdown structure — into agent-read feedback.
+    const rawLabel = typeof target?.label === 'string' ? target.label.replace(/\s+/g, ' ').trim() : '';
+    const label = rawLabel ? `[${rawLabel}] ` : '';
     const raw = typeof target?.text === 'string' ? target.text : '';
     const excerpt = raw.replace(/\s+/g, ' ').trim();
     const clipped = excerpt.length > 120 ? `${excerpt.slice(0, 120)}…` : excerpt;

@@ -310,12 +310,52 @@ describe.if(hasDom)('multi-target bridge message validation (trust boundary)', (
       type: 'plannotator-bridge-pointer',
       x: 12,
       y: 34,
-    })).toEqual({ type: 'plannotator-bridge-pointer', x: 12, y: 34 });
+      shift: true,
+    })).toEqual({ type: 'plannotator-bridge-pointer', x: 12, y: 34, shift: true });
+    // shift is a strict boolean: absent or truthy-but-not-true reads false.
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-pointer',
+      x: 12,
+      y: 34,
+    })).toEqual({ type: 'plannotator-bridge-pointer', x: 12, y: 34, shift: false });
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-pointer',
+      x: 12,
+      y: 34,
+      shift: 1,
+    })).toEqual({ type: 'plannotator-bridge-pointer', x: 12, y: 34, shift: false });
     expect(hookModule!.parseBridgeMessage({
       type: 'plannotator-bridge-pointer',
       x: Infinity,
       y: 1,
     })).toBeNull();
+  });
+
+  test('hostile labels with newlines are collapsed at the trust boundary (D2)', () => {
+    const parsed = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-4',
+      label: 'Save\n## INJECTED HEADING',
+      text: 'Save',
+    }) as { label?: string };
+    expect(parsed.label).toBe('Save ## INJECTED HEADING');
+    const selection = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-selection',
+      text: 'Save',
+      rect: { top: 1, left: 1, width: 10, height: 10 },
+      pinpoint: true,
+      targetKey: 'ht-1',
+      targetLabel: '  a\r\n\tb  ',
+    }) as { targetLabel?: string };
+    expect(selection.targetLabel).toBe('a b');
+    // Whitespace-only labels vanish instead of becoming empty brackets.
+    const blank = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-5',
+      label: ' \n\t ',
+      text: 'x',
+    }) as { label?: string };
+    expect(blank.label).toBeUndefined();
   });
 
   test('selection: targetKey validated, targetLabel truncated', () => {
@@ -342,7 +382,10 @@ describe.if(hasDom)('multi-target bridge message validation (trust boundary)', (
 });
 
 describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () => {
-  async function mountViewer(onAdd: (ann: Annotation) => void) {
+  async function mountViewer(
+    onAdd: (ann: Annotation) => void,
+    mode: 'selection' | 'quickLabel' = 'selection',
+  ) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
     const HtmlViewer = htmlViewerModule.HtmlViewer;
     const host = document.createElement('div');
@@ -357,13 +400,22 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
           onAddAnnotation={onAdd}
           onSelectAnnotation={() => {}}
           selectedAnnotationId={null}
-          mode="selection"
+          mode={mode}
           inputMethod="pinpoint"
         />,
       );
     });
     const iframe = host.querySelector<HTMLIFrameElement>('iframe');
     if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    // Record everything the parent posts INTO the iframe (arm-multi-select,
+    // remove-target echoes, ...) by wrapping contentWindow.postMessage.
+    const postedToIframe: Array<Record<string, unknown>> = [];
+    const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+    (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+      ((data: unknown, ...rest: unknown[]) => {
+        if (data && typeof data === 'object') postedToIframe.push(data as Record<string, unknown>);
+        return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+      }) as typeof iframe.contentWindow.postMessage;
     const post = async (data: Record<string, unknown>) => {
       await act(async () => {
         window.dispatchEvent(new MessageEvent('message', {
@@ -372,7 +424,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
         }));
       });
     };
-    return { post };
+    return { post, postedToIframe };
   }
 
   const rect = { top: 10, left: 10, width: 120, height: 24 };
@@ -541,7 +593,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
   });
 
   test('adds are ignored when no pinpoint draft is open (drag selections stay single-target)', async () => {
-    const { post } = await mountViewer(() => {});
+    const { post, postedToIframe } = await mountViewer(() => {});
     // Drag selection (no pinpoint flag): opens the toolbar, arms nothing.
     await post({
       type: 'plannotator-bridge-selection',
@@ -550,5 +602,67 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     });
     await post(addedTarget('ht-9', 'Stray'));
     expect(chips().length).toBe(0);
+    expect(postedToIframe.some((m) => m.type === 'plannotator-bridge-arm-multi-select')).toBe(false);
+  });
+
+  test('the composer flow arms the bridge with the primary key (D1)', async () => {
+    const armed = await mountViewer(() => {});
+    await armed.post(primarySelection());
+    expect(armed.postedToIframe).toContainEqual({
+      type: 'plannotator-bridge-arm-multi-select',
+      key: 'ht-1',
+    });
+  });
+
+  test('quickLabel-mode drafts never arm the bridge and never build chips (D1)', async () => {
+    // quickLabel mode: the pinpoint draft opens the label picker, which the
+    // parent does NOT mirror as targets — so it must never arm the bridge,
+    // and stray adds must not build chips.
+    const quick = await mountViewer(() => {}, 'quickLabel');
+    await quick.post(primarySelection());
+    expect(document.querySelector('[data-comment-popover]')).toBe(null);
+    expect(
+      quick.postedToIframe.some((m) => m.type === 'plannotator-bridge-arm-multi-select'),
+    ).toBe(false);
+    await quick.post(addedTarget('ht-2', 'Create'));
+    expect(chips().length).toBe(0);
+  });
+
+  test('a forged multi-target-removed still echoes remove-target to resync the bridge (D4)', async () => {
+    const added: Annotation[] = [];
+    const { post, postedToIframe } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    await post(addedTarget('ht-2', 'Create'));
+    expect(chips().length).toBe(2);
+
+    // Hostile page forges the removal of the primary — the bridge never
+    // performed it. The parent promotes AND echoes remove-target so the
+    // bridge converges on the same promotion (idempotent if it already had).
+    await post({ type: 'plannotator-bridge-multi-target-removed', key: 'ht-1' });
+    expect(chips().length).toBe(1);
+    expect(chips()[0]!.getAttribute('data-target-chip')).toBe('ht-2');
+    expect(postedToIframe).toContainEqual({
+      type: 'plannotator-bridge-remove-target',
+      key: 'ht-1',
+    });
+  });
+
+  test('bridge pointer messages with shift drive the composer yield (D3)', async () => {
+    const { post } = await mountViewer(() => {});
+    await post(primarySelection());
+    const popover = document.querySelector<HTMLElement>('[data-comment-popover]');
+    if (!popover) throw new Error('composer missing');
+    expect(popover.className).toContain('pn-composer-yieldable');
+    expect(popover.className).not.toContain('pn-composer-yield-over');
+
+    // Pointer over the composer (happy-dom rects are 0x0 at the origin) with
+    // shift held — relayed FROM THE BRIDGE, no parent keydown involved.
+    await post({ type: 'plannotator-bridge-pointer', x: 0, y: 0, shift: true });
+    expect(popover.className).toContain('pn-composer-yield-over');
+
+    // Shift released (still reported by the bridge): the composer restores.
+    await post({ type: 'plannotator-bridge-pointer', x: 0, y: 0, shift: false });
+    expect(popover.className).not.toContain('pn-composer-yield-over');
+    expect(popover.className).not.toContain('pn-composer-yield-near');
   });
 });

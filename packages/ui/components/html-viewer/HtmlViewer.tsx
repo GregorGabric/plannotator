@@ -266,7 +266,16 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     }, []);
 
     const handleBridgePointer = useCallback(
-      (x: number, y: number) => {
+      (x: number, y: number, shift: boolean) => {
+        // The bridge is the only observer of Shift while the pointer lives
+        // inside the sandbox (parent keydowns don't fire there, and window
+        // blur clears our local flag when focus enters the iframe) — so the
+        // relayed shift state arms/disarms the yield directly.
+        shiftHeldRef.current = shift;
+        if (!shift) {
+          setComposerYield("none");
+          return;
+        }
         const iframeRect = iframeRef.current?.getBoundingClientRect();
         if (!iframeRect) return;
         handleYieldPointer(iframeRect.left + x, iframeRect.top + y);

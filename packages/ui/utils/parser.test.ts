@@ -1777,6 +1777,24 @@ describe("exportAnnotations — multi-target raw-HTML comments", () => {
     expect(output.indexOf("Primary chip")).toBeLessThan(output.indexOf("Also applies"));
     expect(output).toContain('- [Button] "Create"');
     expect(output).toContain('- [rowchip] "adopted by 1"'); // whitespace collapsed
+    // A blank line separates the block from the `> comment` blockquote above,
+    // or markdown lazy continuation folds it INTO the quote.
+    expect(output).toContain('> Unify these\n\n**Also applies');
+  });
+
+  test("hostile labels with newlines cannot inject markdown structure into the export", () => {
+    // Labels come from page-controlled attributes (aria-label). The DTO
+    // boundary collapses whitespace, but persisted pre-fix drafts bypass it —
+    // the exporter must collapse again so no line in agent-read feedback
+    // starts with attacker-controlled markdown.
+    const output = exportAnnotations([], [htmlAnn({
+      htmlAdditionalTargets: [
+        { label: "Save\n## INJECTED HEADING", text: "Save\n# ALSO INJECTED" },
+      ],
+    })]);
+    expect(output).toContain('- [Save ## INJECTED HEADING] "Save # ALSO INJECTED"');
+    expect(output).not.toContain("\n## INJECTED");
+    expect(output).not.toContain("\n# ALSO");
   });
 
   test("long excerpts are clipped and label-less targets still list", () => {

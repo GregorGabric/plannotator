@@ -1382,7 +1382,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     return document.querySelectorAll("[data-plannotator-pinpoint-box][data-pinned]").length;
   }
 
-  async function startMultiDraft(): Promise<{
+  async function startMultiDraft(options?: { arm?: boolean }): Promise<{
     primaryKey: string;
     keys: Map<string, string>; // className -> target key
   }> {
@@ -1397,9 +1397,15 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(selections[0]!.pinpoint).toBe(true);
     expect(typeof selections[0]!.targetKey).toBe("string");
     expect(selections[0]!.targetLabel).toBe("Paragraph");
+    const primaryKey = String(selections[0]!.targetKey);
+    // The parent arms multi-select only when its comment composer mirrors the
+    // draft — replayed here unless the test wants an UNARMED draft.
+    if (options?.arm !== false) {
+      postBridge({ type: "plannotator-bridge-arm-multi-select", key: primaryKey });
+    }
     const keys = new Map<string, string>();
-    keys.set("alpha", String(selections[0]!.targetKey));
-    return { primaryKey: String(selections[0]!.targetKey), keys };
+    keys.set("alpha", primaryKey);
+    return { primaryKey, keys };
   }
 
   test("shift-click adds targets to the SAME draft and toggles them off again", async () => {
@@ -1540,6 +1546,90 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.replaceChildren();
   });
 
+  test("UNARMED pinpoint drafts refuse the shift-toggle (D1: quickLabel-style modes)", async () => {
+    // The parent only mirrors targets while the comment composer owns the
+    // draft; quickLabel/redline drafts never send arm-multi-select. A
+    // shift-click on such a draft must NOT accumulate bridge-side targets the
+    // saved annotation would not carry — it behaves as a plain click.
+    document.body.innerHTML = MULTI_MARKUP;
+    await startMultiDraft({ arm: false });
+    const beta = document.querySelector<HTMLElement>("p.beta")!;
+
+    const messages = await collectMessages(
+      ["plannotator-bridge-multi-target-added", "plannotator-bridge-selection"],
+      () => clickAt(beta, 40, 40, true),
+    );
+    // No multi-target-added; the shift-click replaced the draft instead.
+    expect(messages.length).toBe(1);
+    expect(messages[0]!.type).toBe("plannotator-bridge-selection");
+    expect(messages[0]!.text).toBe("Beta text");
+    expect(pinnedBoxCount()).toBe(1); // only the (new) primary's main box
+
+    // Committing registers nothing beyond the new primary — no orphan pins.
+    postBridge({
+      type: "plannotator-bridge-create-mark",
+      id: "unarmed-commit",
+      annotationType: "comment",
+    });
+    expect(
+      document.querySelectorAll("[data-plannotator-pin-badge]").length,
+    ).toBeLessThanOrEqual(1);
+
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
+    document.body.replaceChildren();
+  });
+
+  test("a stale or mismatched arm key never arms a draft", async () => {
+    document.body.innerHTML = MULTI_MARKUP;
+    await startMultiDraft({ arm: false });
+    postBridge({ type: "plannotator-bridge-arm-multi-select", key: "not-the-primary" });
+    const messages = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => clickAt(document.querySelector("p.beta")!, 40, 40, true),
+    );
+    expect(messages.length).toBe(0);
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
+    document.body.replaceChildren();
+  });
+
+  test("remove-target is idempotent and resyncs a forged primary removal (D4)", async () => {
+    document.body.innerHTML = MULTI_MARKUP;
+    const { primaryKey } = await startMultiDraft();
+    const added = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => clickAt(document.querySelector("p.beta")!, 40, 40, true),
+    );
+    const betaKey = String(added[0]!.key);
+    expect(pinnedBoxCount()).toBe(2);
+
+    // Forged-removal scenario: the parent believed the primary was removed
+    // (hostile multi-target-removed) and echoes remove-target back. The
+    // bridge, which never removed it, now performs the SAME promotion —
+    // both sides converge on beta as the primary.
+    postBridge({ type: "plannotator-bridge-remove-target", key: primaryKey });
+    expect(pinnedBoxCount()).toBe(1);
+
+    // Idempotency: the same removal again (double echo) is a no-op.
+    postBridge({ type: "plannotator-bridge-remove-target", key: primaryKey });
+    expect(pinnedBoxCount()).toBe(1);
+
+    // Committing pins the promoted element (beta), matching the parent model.
+    postBridge({
+      type: "plannotator-bridge-create-mark",
+      id: "resync-commit",
+      annotationType: "comment",
+    });
+    const badge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
+    expect(badge).not.toBeNull();
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
+    void betaKey;
+    document.body.replaceChildren();
+  });
+
   test("parent-initiated remove-target mirrors without echoing back", async () => {
     document.body.innerHTML = MULTI_MARKUP;
     await startMultiDraft();
@@ -1572,8 +1662,14 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.innerHTML = `<div id="cap-stage">${paragraphs.join("")}</div>`;
     postBridge({ type: "plannotator-bridge-set-vim-mode", enabled: false });
     postBridge({ type: "plannotator-bridge-set-input-method", method: "pinpoint" });
-    clickAt(document.querySelector("p.cap-0")!, 10, 10, false); // primary
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const primarySelections = await collectMessages(
+      ["plannotator-bridge-selection"],
+      () => clickAt(document.querySelector("p.cap-0")!, 10, 10, false), // primary
+    );
+    postBridge({
+      type: "plannotator-bridge-arm-multi-select",
+      key: String(primarySelections[0]!.targetKey),
+    });
 
     const added = await collectMessages(
       ["plannotator-bridge-multi-target-added"],

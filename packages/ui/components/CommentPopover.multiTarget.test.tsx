@@ -164,6 +164,30 @@ describe.if(hasDom)('CommentPopover multi-target seams', () => {
     expect(focused.defaultPrevented).toBe(false);
   });
 
+  test('stray keys insert at the remembered caret, not end-of-text', async () => {
+    await mountPopover({ targetChips: CHIPS, captureStrayKeys: true });
+    const el = textarea();
+    // Type 'held' through React, then park the caret between 'he' and 'ld'.
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+    await act(async () => {
+      setter?.call(el, 'held');
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    el.selectionStart = el.selectionEnd = 2;
+    el.blur();
+
+    const stray = new KeyboardEvent('keydown', { key: 'X', bubbles: true, cancelable: true });
+    await act(async () => {
+      document.body.dispatchEvent(stray);
+    });
+    expect(stray.defaultPrevented).toBe(true);
+    expect(el.value).toBe('heXld');
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+    });
+    expect(el.selectionStart).toBe(3);
+  });
+
   test('yieldState drives fade and click-through classes with a reduced-motion-aware style', async () => {
     await mountPopover({ targetChips: CHIPS, yieldState: 'none' });
     expect(popoverEl().className).toContain('pn-composer-yieldable');

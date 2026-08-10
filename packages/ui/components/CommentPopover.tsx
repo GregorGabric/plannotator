@@ -243,19 +243,19 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
 
   // Focus choreography (multi-select): after a shift-click adds/removes a
   // target, focus returns to the textarea so typing continues uninterrupted.
+  // Focus only — the caret stays wherever the user left it mid-edit.
   const refocusSeenRef = useRef(refocusToken);
   useEffect(() => {
     if (refocusToken === undefined || refocusToken === refocusSeenRef.current) return;
     refocusSeenRef.current = refocusToken;
-    const el = textareaRef.current;
-    if (!el) return;
-    el.focus();
-    el.selectionStart = el.selectionEnd = el.value.length;
+    textareaRef.current?.focus();
   }, [refocusToken]);
 
   // First-keystroke guard: while the draft is open, a printable keydown that
   // lands nowhere (focus fell back to <body> after an iframe interaction)
-  // routes into the textarea instead of vanishing.
+  // routes into the textarea instead of vanishing. Capture phase, so a
+  // parent-level global shortcut cannot both fire and have its character
+  // appended; the character lands at the textarea's remembered caret.
   useEffect(() => {
     if (!captureStrayKeys) return;
     const handler = (e: KeyboardEvent) => {
@@ -271,14 +271,16 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
       if (!el || document.activeElement === el) return;
       e.preventDefault();
       const key = e.key;
-      setText((prev) => prev + key);
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? start;
+      setText((prev) => prev.slice(0, start) + key + prev.slice(end));
       el.focus();
       requestAnimationFrame(() => {
-        el.selectionStart = el.selectionEnd = el.value.length;
+        el.selectionStart = el.selectionEnd = start + 1;
       });
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
   }, [captureStrayKeys]);
 
   // Composer yield (multi-select): fade near the pointer, click-through over
@@ -412,15 +414,18 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
         <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" />
 
         {/* Dialog card */}
+        {/* The expanded dialog deliberately does not yield: it is an explicit
+            full-screen compose surface, and its backdrop wrapper (which carries
+            data-comment-popover) spans the viewport, so proximity is
+            meaningless there. */}
         <div
           ref={popoverRef}
-          className={`relative w-full max-w-xl bg-popover border border-border rounded-xl shadow-2xl flex flex-col${yieldClass}`}
+          className="relative w-full max-w-xl bg-popover border border-border rounded-xl shadow-2xl flex flex-col"
           style={{
             animation: 'comment-dialog-in 0.15s ease-out',
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
-          {yieldStyleBlock}
           <style>{`
             @keyframes comment-dialog-in {
               from { opacity: 0; transform: scale(0.95); }

@@ -304,7 +304,12 @@ export const BRIDGE_SCRIPT = `(function() {
   var pendingPinAnchor = null; // serialized anchor for the pending pin
   var pendingPinKey = null; // target key for the primary pinpoint target (multi-select)
   var pendingPinLabel = null; // semantic label captured for the primary target
-  var pendingPinViaPinpoint = false; // multi-select only arms for pinpoint-click drafts
+  var pendingPinViaPinpoint = false; // pinpoint drafts survive scroll-out (see postSelectionRect)
+  // Multi-select is ARMED EXPLICITLY by the parent (arm-multi-select), and only
+  // when the comment composer owns the draft. The bridge must never accept a
+  // shift-toggle the parent would not mirror (e.g. quickLabel-mode drafts):
+  // what the user sees pinned and what the annotation saves must never diverge.
+  var multiSelectArmed = false;
   // Shift-click multi-select: additional elements joined to the SAME draft
   // comment while the composer is open. Each entry owns a pinned outline box.
   var pendingMultiTargets = []; // { key, el, anchor, label, text, box }
@@ -541,9 +546,24 @@ export const BRIDGE_SCRIPT = `(function() {
       restoreVimSemanticTarget();
     }
 
+    else if (type === PREFIX + 'arm-multi-select') {
+      // Parent arms shift-multi-select for the draft it is mirroring in the
+      // comment composer. The key must name the CURRENT primary so a stale
+      // arm from a previous draft can never arm a new one.
+      if (
+        pendingPinEl
+        && pendingPinViaPinpoint
+        && typeof e.data.key === 'string'
+        && e.data.key === pendingPinKey
+      ) {
+        multiSelectArmed = true;
+      }
+    }
+
     else if (type === PREFIX + 'remove-target') {
-      // Parent-initiated removal (chip X button): the parent already updated
-      // its own list, so no echo — both sides promote deterministically.
+      // Parent-initiated removal (chip X button), or the parent's echo of a
+      // bridge-side removal. Idempotent: an already-removed key is a no-op,
+      // which also resyncs the two sides after a forged removal message.
       removeMultiTargetByKey(typeof e.data.key === 'string' ? e.data.key : '', false);
     }
 
@@ -1053,9 +1073,11 @@ export const BRIDGE_SCRIPT = `(function() {
     // Hit-test at the pointer (e.target only backstops engines without
     // elementFromPoint) so the same code path serves the scroll re-hit-test.
     updatePinpointHover(e.clientX, e.clientY, e.target);
-    if (pendingPinEl && pendingPinViaPinpoint) {
-      // Composer yield needs the pointer even while it is inside this iframe.
-      schedulePointerRelay(e.clientX, e.clientY);
+    if (pendingPinEl && multiSelectArmed) {
+      // Composer yield needs the pointer even while it is inside this iframe;
+      // the shift state rides along because the parent cannot observe
+      // modifiers held while focus/pointer live in the sandbox.
+      schedulePointerRelay(e.clientX, e.clientY, e.shiftKey);
       // Shift-hover preview: outline what the next shift-click would toggle.
       if (e.shiftKey) updateMultiHover(e.clientX, e.clientY, e.target);
       else hideMultiHoverBox();
@@ -1355,6 +1377,7 @@ export const BRIDGE_SCRIPT = `(function() {
     pendingPinKey = null;
     pendingPinLabel = null;
     pendingPinViaPinpoint = false;
+    multiSelectArmed = false;
     hidePinpointBox();
   }
 
@@ -1573,8 +1596,8 @@ export const BRIDGE_SCRIPT = `(function() {
   // composer fades / becomes click-through as the pointer approaches it).
   var pointerRelayRaf = 0;
   var pointerRelayPos = null;
-  function schedulePointerRelay(x, y) {
-    pointerRelayPos = { x: x, y: y };
+  function schedulePointerRelay(x, y, shift) {
+    pointerRelayPos = { x: x, y: y, shift: !!shift };
     if (pointerRelayRaf) return;
     pointerRelayRaf = requestAnimationFrame(function() {
       pointerRelayRaf = 0;
@@ -1582,7 +1605,8 @@ export const BRIDGE_SCRIPT = `(function() {
       parent.postMessage({
         type: PREFIX + 'pointer',
         x: pointerRelayPos.x,
-        y: pointerRelayPos.y
+        y: pointerRelayPos.y,
+        shift: pointerRelayPos.shift
       }, '*');
     });
   }
@@ -1660,9 +1684,11 @@ export const BRIDGE_SCRIPT = `(function() {
     // checked by IDENTITY, not selector, so a page element spoofing
     // [data-plannotator-pin-badge] stays an ordinary annotatable target.
     if (isViewerOverlayNode(e.target)) return;
-    // Shift-click while a pinpoint draft is open: toggle the element in/out of
-    // the SAME draft comment instead of replacing the selection.
-    if (e.shiftKey && pendingPinEl && pendingPinViaPinpoint && pendingSelection) {
+    // Shift-click while an ARMED pinpoint draft is open: toggle the element
+    // in/out of the SAME draft comment instead of replacing the selection.
+    // Unarmed drafts (modes the parent does not mirror, e.g. quickLabel)
+    // treat shift-click exactly like a plain click.
+    if (e.shiftKey && pendingPinEl && multiSelectArmed && pendingSelection) {
       e.preventDefault();
       e.stopPropagation();
       hideMultiHoverBox();
