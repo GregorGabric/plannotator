@@ -2449,9 +2449,14 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       expect(markersFor("vis-ann").length).toBe(0);
       slide.style.visibility = "";
 
+      // opacity:0 deliberately does NOT hide the marker: it is the standard
+      // invisible-hit-target pattern (transparent input over a styled
+      // control) where the annotation legitimately sits over the visible
+      // control — and computed opacity doesn't inherit, so an opacity gate
+      // wouldn't catch faded containers' descendants anyway.
       slide.style.opacity = "0";
       postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
-      expect(markersFor("vis-ann").length).toBe(0);
+      expect(markersFor("vis-ann").length).toBe(1);
       slide.style.opacity = "";
 
       postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
@@ -2669,6 +2674,14 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       fixedEl.style.position = "";
       postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
       expect(markersFor("fixed-ann").length).toBe(0);
+
+      // contain:layout makes the clipper a fixed containing block: its
+      // overflow clipping then APPLIES to the fixed target again (5a).
+      fixedEl.style.position = "fixed";
+      wrap.style.contain = "layout";
+      postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+      expect(markersFor("fixed-ann").length).toBe(0);
+      wrap.style.contain = "";
     });
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
@@ -2910,6 +2923,44 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
         (Range.prototype as { getClientRects: typeof originalGetClientRects }).getClientRects =
           originalGetClientRects;
       }
+    });
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    document.body.replaceChildren();
+  });
+
+  test("dedup keeps the VISIBLE marker when a hidden sibling target shares the element (5b)", () => {
+    document.body.innerHTML =
+      '<div id="m10-a">First</div><div data-testid="m10-b">Second</div>';
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "dedup-vis",
+      originalText: "Text that exists nowhere on this page",
+      annotationType: "comment",
+      anchor: { selector: "#m10-a", tagName: "div", point: { x: 0.05, y: 0.5 } },
+      additionalAnchors: [
+        { selector: 'div[data-testid="m10-b"]', tagName: "div", point: { x: 0.75, y: 0.5 } },
+      ],
+    });
+    // Both anchors re-resolve to ONE merged element inside a clipper that
+    // hides the FIRST target's point but not the second's: dedup must run
+    // among PLACED markers, keeping the visible one — not consume the
+    // element's slot on the hidden first target and render nothing.
+    document.body.innerHTML =
+      '<div id="m10-wrap"><div id="m10-a" data-testid="m10-b">Merged</div></div>';
+    const wrap = document.querySelector<HTMLElement>("#m10-wrap")!;
+    const merged = document.querySelector<HTMLElement>("#m10-a")!;
+    wrap.style.overflow = "hidden";
+    withLayout(() => {
+      wrap.getBoundingClientRect = () => rectOf(100, 0, 100, 100);
+      merged.getBoundingClientRect = () => rectOf(0, 0, 200, 50);
+      bumpDomGeneration();
+      postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+      const dedupMarkers = markersFor("dedup-vis");
+      expect(dedupMarkers.length).toBe(1);
+      // The SECOND target's point (x 0.75 -> 150px) survived; y 25 clamps
+      // to the 29px viewport inset (rendering-only clamp).
+      expect(dedupMarkers[0]!.style.left).toBe("150px");
+      expect(dedupMarkers[0]!.style.top).toBe("29px");
     });
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();

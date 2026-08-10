@@ -1493,6 +1493,15 @@ export const BRIDGE_SCRIPT = `(function() {
       || willChange.indexOf('perspective') >= 0
       || willChange.indexOf('filter') >= 0
     ) return true;
+    var containValue = ' ' + (style.contain || '') + ' ';
+    if (
+      containValue.indexOf(' layout ') >= 0
+      || containValue.indexOf(' paint ') >= 0
+      || containValue.indexOf(' strict ') >= 0
+      || containValue.indexOf(' content ') >= 0
+    ) return true;
+    var containerType = style.containerType || '';
+    if (containerType === 'size' || containerType === 'inline-size') return true;
     return false;
   }
 
@@ -1566,12 +1575,18 @@ export const BRIDGE_SCRIPT = `(function() {
   }
 
   // Unresolved-for-display: a target whose box exists but is invisible
-  // (visibility:hidden/collapse, display:none, opacity:0) keeps a full-size
-  // rect, so without this gate markers, focus rects, and highlights would
-  // render over whatever visible content stacks in the same box (e.g.
-  // carousel slides toggled via visibility). display:none targets already
-  // report empty client rects, but visibility and opacity do not. Checked
-  // per reconcile frame, only for targets that passed the cheaper gates.
+  // (visibility:hidden/collapse, display:none) keeps a full-size rect, so
+  // without this gate markers, focus rects, and highlights would render over
+  // whatever visible content stacks in the same box (e.g. carousel slides
+  // toggled via visibility). display:none targets already report empty
+  // client rects, but visibility does not. Checked per reconcile frame, only
+  // for targets that passed the cheaper gates.
+  //
+  // Deliberately NO opacity:0 leg: computed opacity does not inherit, so a
+  // container faded to opacity:0 leaves descendants at computed 1 and would
+  // not be caught anyway — while the legitimate invisible-hit-target pattern
+  // (<input type=file style="opacity:0;position:absolute;inset:0"> over a
+  // styled control) SHOULD keep its marker exactly over the visible control.
   function targetStyleHidden(el) {
     if (!el || !layoutActive()) return false;
     var style = null;
@@ -1579,8 +1594,6 @@ export const BRIDGE_SCRIPT = `(function() {
     if (!style) return false;
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return true;
     if (style.display === 'none') return true;
-    var opacity = parseFloat(style.opacity);
-    if (!isNaN(opacity) && opacity === 0) return true;
     return false;
   }
 
@@ -1854,9 +1867,12 @@ export const BRIDGE_SCRIPT = `(function() {
         ? annNumbers.get(record.id)
         : fallbackNumbers.get(record.id);
       var focused = focusedAnnotationId === record.id;
-      // One marker per RESOLVED element per record: two anchors of one
-      // annotation re-resolving to the same element must not render two
-      // coincident same-number markers that then spread apart.
+      // One PLACED marker per resolved element per record: two anchors of
+      // one annotation re-resolving to the same element must not render two
+      // coincident same-number markers that then spread apart. Dedup runs
+      // among placed (visible) markers only — a target whose own point is
+      // clipped away must not consume the element's slot and suppress a
+      // sibling target whose point IS visible.
       var seenRecordElements = [];
       for (var targetIndex = 0; targetIndex < record.targets.length; targetIndex++) {
         var target = record.targets[targetIndex];
@@ -1867,11 +1883,6 @@ export const BRIDGE_SCRIPT = `(function() {
             markers.push({ key: markerKey, id: record.id, number: number, hidden: true });
             continue;
           }
-          if (seenRecordElements.indexOf(el) >= 0) {
-            markers.push({ key: markerKey, id: record.id, number: number, hidden: true });
-            continue;
-          }
-          seenRecordElements.push(el);
           var rect = el.getBoundingClientRect();
           var zeroSize = layoutActive() && !(rect.width || 0) && !(rect.height || 0);
           var styleHidden = !zeroSize && targetStyleHidden(el);
@@ -1881,7 +1892,9 @@ export const BRIDGE_SCRIPT = `(function() {
             rect.left + point.x * (rect.width || 0),
             rect.top + point.y * (rect.height || 0)
           );
+          if (placed && seenRecordElements.indexOf(el) >= 0) placed = null;
           if (placed) {
+            seenRecordElements.push(el);
             markers.push({ key: markerKey, id: record.id, number: number, x: placed.x, y: placed.y });
             if (focused) {
               // The focus flash is a painted rect too: clip-test it like
