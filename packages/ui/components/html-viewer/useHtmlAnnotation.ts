@@ -252,7 +252,10 @@ export function parseBridgeMessage(value: unknown): BridgeMessage | null {
         ? { type: value.type, key: value.key }
         : null;
     case `${PREFIX}mark-click`:
-      return typeof value.id === "string"
+      // The id is page-controlled like every other bridge string: cap it like
+      // the bridge's own sync validation does (256) so a hostile page cannot
+      // ship an unbounded string into parent state via a forged mark-click.
+      return typeof value.id === "string" && value.id.length <= 256
         ? { type: value.type, id: value.id }
         : null;
     case `${PREFIX}resize`:

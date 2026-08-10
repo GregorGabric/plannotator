@@ -48,6 +48,12 @@ import {
 
 const PREFIX = "plannotator-bridge-";
 
+// Mirror of the bridge's MAX_SYNC_ANNOTATIONS: the bridge truncates the
+// synced numbering list at this bound, so the sender truncates AFTER the
+// stable sort too — the first 512 numbers then agree on both sides instead
+// of the bridge silently dropping an arbitrary tail.
+const MAX_SYNC_ANNOTATIONS = 512;
+
 function readThemeTokens(): Record<string, string> {
   const style = getComputedStyle(document.documentElement);
   const tokens: Record<string, string> = {};
@@ -447,6 +453,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       const ordered = annotations
         .filter((ann) => ann.type !== AnnotationType.GLOBAL_COMMENT)
         .sort((a, b) => a.createdA - b.createdA)
+        .slice(0, MAX_SYNC_ANNOTATIONS)
         .map((ann, index) => ({ id: ann.id, number: index + 1 }));
       iframeRef.current?.contentWindow?.postMessage(
         { type: `${PREFIX}sync-annotations`, annotations: ordered },
