@@ -45,6 +45,18 @@ describe.if(hasDom)('parseHtmlElementAnchor (validated DTO)', () => {
       .toEqual({ selector: 'main', tagName: 'main' });
   });
 
+  test('accepts a shape-signature snapshot for text-less elements', () => {
+    // Text-less elements (icon buttons) store a '[[pn-shape]]'-prefixed
+    // signature in the text field; it rides through the same validated DTO
+    // and the same 400-char cap as ordinary text snapshots.
+    const shape = '[[pn-shape]]span|icon-close|0|2x2';
+    expect(hookModule!.parseHtmlElementAnchor({
+      selector: 'span.icon-close',
+      tagName: 'span',
+      text: shape,
+    })).toEqual({ selector: 'span.icon-close', tagName: 'span', text: shape });
+  });
+
   test('rejects non-records and missing/empty fields', () => {
     expect(hookModule!.parseHtmlElementAnchor(null)).toBeNull();
     expect(hookModule!.parseHtmlElementAnchor('main')).toBeNull();

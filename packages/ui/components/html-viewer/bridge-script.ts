@@ -922,8 +922,8 @@ export const BRIDGE_SCRIPT = `(function() {
       pinpointLabelEl.setAttribute('data-plannotator-pinpoint-label', '');
       pinpointLabelEl.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:none;font:600 11px/1.3 system-ui,-apple-system,sans-serif;padding:2px 7px;border-radius:5px;background:var(--pn-focus-highlight,#4493f8);color:#fff;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,.35);';
       overlayNodes.add(pinpointLabelEl);
-      document.body.appendChild(pinpointLabelEl);
     }
+    if (!pinpointLabelEl.isConnected) document.body.appendChild(pinpointLabelEl);
     return pinpointLabelEl;
   }
   function hidePinpointLabel() { if (pinpointLabelEl) pinpointLabelEl.style.display = 'none'; }
