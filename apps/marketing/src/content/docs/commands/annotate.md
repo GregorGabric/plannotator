@@ -101,10 +101,6 @@ Markdown conversion uses [Turndown](https://github.com/mixmark-io/turndown) with
 
 HTML files must be within your current working directory. Files outside the project root return a 403 error.
 
-### Pinpoint-first sessions
-
-Raw-HTML sessions default to **Pinpoint** input: hover highlights the element under the cursor and a click pins it and opens the comment composer directly, with a numbered badge marking each element annotation. Drag selection is still available from the input-method toggle, and your choice is remembered separately from markdown sessions. Rendered HTML pages also open **minimal**: the first-ever session hides the toolstrip, tab flags, and sidebar so you see just the page, and every session after that opens with exactly the chrome you last left visible ("Show tools" in the header brings everything back).
-
 ### `--markdown`
 
 For local HTML files, `--markdown` switches from raw HTML rendering to markdown conversion. In folder mode, the same setting applies when you open `.html` or `.htm` files from the file browser.
