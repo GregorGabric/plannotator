@@ -149,6 +149,62 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     );
   }
 
+  // --- Annotation overlay helpers -------------------------------------------
+  // Committed annotation visuals live in a shadow-rooted overlay host on the
+  // root element; nothing annotation-related is written into the page's DOM.
+
+  function overlayHost(): HTMLElement | null {
+    return document.querySelector<HTMLElement>("[data-plannotator-overlay-host]");
+  }
+
+  function overlayRoot(): ParentNode | null {
+    const host = overlayHost();
+    if (!host) return null;
+    return host.shadowRoot ?? host;
+  }
+
+  function allMarkers(): HTMLButtonElement[] {
+    const root = overlayRoot();
+    if (!root) return [];
+    return Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-plannotator-marker]"));
+  }
+
+  function visibleMarkers(): HTMLButtonElement[] {
+    return allMarkers().filter((b) => b.style.display !== "none");
+  }
+
+  function markersFor(id: string): HTMLButtonElement[] {
+    return visibleMarkers().filter((b) => b.getAttribute("data-annotation-id") === id);
+  }
+
+  function markerNumber(button: HTMLButtonElement): string {
+    return button.querySelector(".pn-marker-num")?.textContent ?? "";
+  }
+
+  function visibleHighlights(cls?: string): HTMLElement[] {
+    const root = overlayRoot();
+    if (!root) return [];
+    const selector = cls ? `.pn-hl.${cls}` : ".pn-hl";
+    return Array.from(root.querySelectorAll<HTMLElement>(selector)).filter(
+      (el) => el.style.display !== "none",
+    );
+  }
+
+  /** Record every element scrollIntoView lands on across one action. */
+  function collectScrollTargets(action: () => void): Element[] {
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      action();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+    return scrolled;
+  }
+
   test("author root only receives --pn-* on theme flip; opt-in restores bare push", () => {
     const root = document.documentElement;
 
@@ -701,10 +757,18 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
       .toBe("VISUAL · SELECT");
     expect(window.getSelection()?.toString()).toBe("Alpha ");
+    // The committed annotation renders as an overlay marker + highlight —
+    // never as inline markup inside the page.
+    expect(markersFor("vim-committed-range").length).toBe(1);
     expect(
-      document.querySelector('[data-bind-id="vim-committed-range"]')?.textContent,
-    ).toBe("Alpha ");
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "vim-committed-range",
+      ),
+    ).toBe(true);
+    expect(document.querySelector("[data-bind-id]")).toBeNull();
+    expect(document.querySelector("mark")).toBeNull();
 
+    postBridge({ type: "plannotator-bridge-clear-marks" });
     postBridge({
       type: "plannotator-bridge-set-vim-mode",
       enabled: false,
@@ -748,10 +812,10 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(document.querySelector("[data-plannotator-vim-badge]")?.textContent)
       .toBe("VISUAL BLOCK · SELECT");
     expect(window.getSelection()?.toString()).toBe("Whole block target");
-    expect(
-      document.querySelector('[data-bind-id="vim-committed-block-range"]')?.textContent,
-    ).toBe("Whole block target");
+    expect(markersFor("vim-committed-block-range").length).toBe(1);
+    expect(document.querySelector("[data-bind-id]")).toBeNull();
 
+    postBridge({ type: "plannotator-bridge-clear-marks" });
     postBridge({
       type: "plannotator-bridge-set-vim-mode",
       enabled: false,
@@ -815,7 +879,12 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
 
     postBridge({ type: "plannotator-bridge-cancel-selection" });
 
-    // Anchor-first restore: find-and-mark scoped to the resolved element.
+    // Restoration writes NOTHING into the page: every restore below must
+    // leave the author DOM byte-identical.
+    const pageSnapshot = document.body.innerHTML;
+
+    // Anchor-first restore: the resolved element owns the placed marker and
+    // the scoped text range paints the overlay highlight.
     postBridge({
       type: "plannotator-bridge-find-and-mark",
       id: "pin-restore",
@@ -823,13 +892,23 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor,
     });
-    const mark = document.querySelector('[data-bind-id="pin-restore"]');
-    expect(mark?.textContent).toBe("Anchor target text");
-    expect(target.contains(mark)).toBe(true);
+    expect(markersFor("pin-restore").length).toBe(1);
+    expect(
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "pin-restore",
+      ),
+    ).toBe(true);
+    // Scrolling the annotation lands on the anchored element itself.
+    const anchoredScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "pin-restore" });
+    });
+    expect(anchoredScroll[0]).toBe(target);
+    expect(document.body.innerHTML).toBe(pageSnapshot);
     postBridge({ type: "plannotator-bridge-remove-mark", id: "pin-restore" });
+    expect(markersFor("pin-restore").length).toBe(0);
 
     // Text drift under a STABLE anchor (#id): the element still identifies
-    // itself, so when the text is gone everywhere it gets a numbered pin badge
+    // itself, so when the text is gone everywhere it gets a placed marker
     // (still counts as restored).
     postBridge({
       type: "plannotator-bridge-find-and-mark",
@@ -838,10 +917,12 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: "#hero", tagName: "div" },
     });
-    const badge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
-    if (!badge) throw new Error("pin badge missing");
-    expect(badge.textContent).toBe("1");
-    expect(document.querySelector('[data-bind-id="pin-badge"]')).toBeNull();
+    const driftMarkers = markersFor("pin-badge");
+    expect(driftMarkers.length).toBe(1);
+    expect(markerNumber(driftMarkers[0]!)).toBe("1");
+    expect(driftMarkers[0]!.getAttribute("aria-label")).toBe("Comment 1");
+    expect(driftMarkers[0]!.tagName).toBe("BUTTON");
+    expect(document.body.innerHTML).toBe(pageSnapshot);
 
     // A weak anchor with NO text snapshot is rejected outright (a missing
     // snapshot is a rejection, not an exemption): restoration falls back to
@@ -853,9 +934,13 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: anchor.selector, tagName: "p" },
     });
-    const fallbackMark = document.querySelector('[data-bind-id="pin-no-snapshot"]');
-    expect(fallbackMark?.textContent).toBe("Second paragraph");
-    expect(target.contains(fallbackMark)).toBe(false);
+    expect(markersFor("pin-no-snapshot").length).toBe(1);
+    const fallbackScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "pin-no-snapshot" });
+    });
+    // The text was found in the SECOND paragraph, not the anchored element.
+    expect(fallbackScroll[0]?.textContent).toBe("Second paragraph");
+    expect(fallbackScroll[0]).not.toBe(target);
     postBridge({ type: "plannotator-bridge-remove-mark", id: "pin-no-snapshot" });
 
     // Fail-closed anchors: a weak selector whose text snapshot no longer
@@ -867,12 +952,16 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: anchor.selector, tagName: "p", text: "Stale snapshot" },
     });
-    const staleMark = document.querySelector('[data-bind-id="pin-stale"]');
-    expect(staleMark?.textContent).toBe("Second paragraph");
-    expect(target.contains(staleMark)).toBe(false);
+    expect(markersFor("pin-stale").length).toBe(1);
+    const staleScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "pin-stale" });
+    });
+    expect(staleScroll[0]?.textContent).toBe("Second paragraph");
+    expect(staleScroll[0]).not.toBe(target);
+    expect(document.body.innerHTML).toBe(pageSnapshot);
 
     postBridge({ type: "plannotator-bridge-clear-marks" });
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(visibleMarkers().length).toBe(0);
     postBridge({
       type: "plannotator-bridge-set-input-method",
       method: "drag",
@@ -941,16 +1030,17 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: 'button[role="button"]', tagName: "button", text: "Save draft" },
     });
-    const mark = document.querySelector('[data-bind-id="role-anchor"]');
-    expect(mark?.textContent).toBe("Save draft");
-    expect(document.querySelector("button")?.contains(mark)).toBe(false);
-    expect(document.querySelector("p")?.contains(mark)).toBe(true);
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(markersFor("role-anchor").length).toBe(1);
+    const roleScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "role-anchor" });
+    });
+    // The annotation followed the TEXT into the paragraph — never the button.
+    expect(roleScroll[0]?.tagName).toBe("P");
     postBridge({ type: "plannotator-bridge-clear-marks" });
 
     // data-* attributes ARE author-controlled identity: a data-testid anchor
     // whose text drifted still resolves, and with the text gone everywhere the
-    // element gets the pin badge.
+    // element gets the placed marker.
     document.body.innerHTML = '<div data-testid="stats">New numbers</div>';
     postBridge({
       type: "plannotator-bridge-find-and-mark",
@@ -959,9 +1049,11 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: 'div[data-testid="stats"]', tagName: "div", text: "Old numbers" },
     });
-    expect(document.querySelector('[data-bind-id="data-anchor"]')).toBeNull();
-    const dataBadge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
-    expect(dataBadge).not.toBeNull();
+    expect(markersFor("data-anchor").length).toBe(1);
+    const dataScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "data-anchor" });
+    });
+    expect(dataScroll[0]).toBe(document.querySelector('div[data-testid="stats"]'));
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
   });
@@ -977,8 +1069,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: 'div[data-cy="metrics"]', tagName: "div", text: "Stale content gone from the page" },
     });
-    expect(document.querySelector('[data-bind-id="cy-anchor"]')).toBeNull();
-    expect(document.querySelector("[data-plannotator-pin-badge]")).not.toBeNull();
+    expect(markersFor("cy-anchor").length).toBe(1);
+    expect(document.querySelector("[data-bind-id]")).toBeNull();
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
   });
@@ -1213,7 +1305,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     postBridge({ type: "plannotator-bridge-cancel-selection" });
 
     // Round trip: the stable-identity anchor resolves without a text check,
-    // so the icon gets a pin badge even though text search can never succeed.
+    // so the icon gets a placed marker even though text search can never
+    // succeed ("[element: icon close]" appears nowhere in the page).
     postBridge({
       type: "plannotator-bridge-find-and-mark",
       id: "identity-pin",
@@ -1221,10 +1314,10 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor,
     });
-    expect(document.querySelector("[data-plannotator-pin-badge]")).not.toBeNull();
-    expect(document.querySelector('[data-bind-id="identity-pin"]')).toBeNull();
+    expect(markersFor("identity-pin").length).toBe(1);
+    expect(document.querySelector("[data-bind-id]")).toBeNull();
     postBridge({ type: "plannotator-bridge-clear-marks" });
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(visibleMarkers().length).toBe(0);
 
     // A text-less element with only classes (weak selector) ships NO anchor:
     // there is nothing to verify against, and a wrong-binding anchor is
@@ -1280,21 +1373,21 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
         anchor: { selector, tagName: "span", text: "" },
       });
     }
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(visibleMarkers().length).toBe(0);
     expect(document.querySelector("[data-bind-id]")).toBeNull();
 
     postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
     document.body.replaceChildren();
   });
 
-  test("badge click ownership is identity-gated, not selector-gated (D5)", async () => {
-    // A page element spoofing our badge attribute is NOT a viewer overlay:
+  test("marker click ownership is identity-gated, not selector-gated (D5)", async () => {
+    // A page element spoofing our marker attributes is NOT a viewer overlay:
     // it hovers and annotates like any other element.
-    document.body.innerHTML = "<div data-plannotator-pin-badge class=\"fake-badge\">7</div><p id=\"pin-me\">Pinned text</p>";
+    document.body.innerHTML = "<div data-plannotator-marker class=\"fake-marker\">7</div><p id=\"pin-me\">Pinned text</p>";
     postBridge({ type: "plannotator-bridge-set-vim-mode", enabled: false });
     postBridge({ type: "plannotator-bridge-set-input-method", method: "pinpoint" });
 
-    const spoof = document.querySelector<HTMLElement>("div.fake-badge");
+    const spoof = document.querySelector<HTMLElement>("div.fake-marker");
     if (!spoof) throw new Error("spoof fixture missing");
     hoverAt(spoof, 40, 40);
     expect(
@@ -1305,7 +1398,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(messages.length).toBe(1);
     expect(messages[0]!.text).toBe("7");
 
-    // A REAL badge still owns its click: it posts mark-click, not a selection.
+    // A REAL placed marker owns its click: it posts mark-click (which the
+    // parent maps to focusing the annotation in the panel), not a selection.
     postBridge({
       type: "plannotator-bridge-find-and-mark",
       id: "badge-owner",
@@ -1313,10 +1407,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: "#pin-me", tagName: "p" },
     });
-    const realBadge = document.querySelector<HTMLElement>(
-      "[data-plannotator-pin-badge]:not(.fake-badge)",
-    );
-    if (!realBadge) throw new Error("real badge missing");
+    const realMarker = markersFor("badge-owner")[0];
+    if (!realMarker) throw new Error("real marker missing");
     const collected: Array<Record<string, unknown>> = [];
     const collect = (event: MessageEvent) => {
       const data = bridgeMessageData(event);
@@ -1326,7 +1418,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       ) collected.push(data);
     };
     window.addEventListener("message", collect);
-    realBadge.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    realMarker.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await new Promise((resolve) => setTimeout(resolve, 0));
     window.removeEventListener("message", collect);
     expect(collected).toEqual([
@@ -1467,16 +1559,18 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
     });
 
-    // Primary keeps its text mark (or pin); beta + gamma each get a pin —
-    // and every badge for this annotation shows the SAME number.
-    const badges = Array.from(
-      document.querySelectorAll<HTMLElement>("[data-plannotator-pin-badge]"),
-    );
-    expect(badges.length).toBeGreaterThanOrEqual(2);
-    for (const badge of badges) expect(badge.textContent).toBe("1");
+    // Primary + beta + gamma all render placed markers under the SAME id —
+    // and every marker for this grouped annotation shows the SAME number.
+    // Numbering derives from the annotation collection, never target count.
+    const commitMarkers = markersFor("multi-commit");
+    expect(commitMarkers.length).toBeGreaterThanOrEqual(2);
+    for (const marker of commitMarkers) {
+      expect(markerNumber(marker)).toBe("1");
+      expect(marker.getAttribute("aria-label")).toBe("Comment 1");
+    }
     expect(pinnedBoxCount()).toBe(0); // draft state fully cleared
 
-    // A SECOND annotation numbers 2 — multi-target pins consumed only one slot.
+    // A SECOND annotation numbers 2 — multi-target markers consumed one slot.
     postBridge({
       type: "plannotator-bridge-find-and-mark",
       id: "second-ann",
@@ -1484,10 +1578,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       annotationType: "comment",
       anchor: { selector: "#hero", tagName: "div" },
     });
-    const allBadges = Array.from(
-      document.querySelectorAll<HTMLElement>("[data-plannotator-pin-badge]"),
-    );
-    const numbers = allBadges.map((b) => b.textContent);
+    const numbers = visibleMarkers().map((b) => markerNumber(b));
     expect(numbers).toContain("2");
     expect(numbers.filter((n) => n === "1").length).toBeGreaterThanOrEqual(2);
     expect(numbers.filter((n) => n === "2").length).toBe(1);
@@ -1513,15 +1604,18 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     expect(removals[0]!.key).toBe(primaryKey);
     expect(pinnedBoxCount()).toBe(1); // only the promoted primary's main box
 
-    // Committing now pins the PROMOTED element (beta), not alpha.
+    // Committing now marks the PROMOTED element (beta), not alpha.
     postBridge({
       type: "plannotator-bridge-create-mark",
       id: "promoted-commit",
       annotationType: "comment",
     });
-    const badge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
-    expect(badge).not.toBeNull();
-    expect(document.querySelector('[data-bind-id="promoted-commit"]')).toBeNull();
+    const promotedMarkers = markersFor("promoted-commit");
+    expect(promotedMarkers.length).toBe(1);
+    const promotedScroll = collectScrollTargets(() => {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "promoted-commit" });
+    });
+    expect(promotedScroll[0]).toBe(document.querySelector("p.beta"));
     postBridge({ type: "plannotator-bridge-clear-marks" });
 
     // Fresh draft with ONLY a primary: shift-clicking it cancels the draft —
@@ -1539,8 +1633,8 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       id: "cancelled-commit",
       annotationType: "comment",
     });
-    expect(document.querySelector('[data-bind-id="cancelled-commit"]')).toBeNull();
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(markersFor("cancelled-commit").length).toBe(0);
+    expect(visibleMarkers().length).toBe(0);
 
     postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
     document.body.replaceChildren();
@@ -1571,9 +1665,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       id: "unarmed-commit",
       annotationType: "comment",
     });
-    expect(
-      document.querySelectorAll("[data-plannotator-pin-badge]").length,
-    ).toBeLessThanOrEqual(1);
+    expect(markersFor("unarmed-commit").length).toBeLessThanOrEqual(1);
 
     postBridge({ type: "plannotator-bridge-clear-marks" });
     postBridge({ type: "plannotator-bridge-cancel-selection" });
@@ -1623,9 +1715,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       id: "stale-arm-commit",
       annotationType: "comment",
     });
-    expect(
-      document.querySelectorAll("[data-plannotator-pin-badge]").length,
-    ).toBeLessThanOrEqual(1);
+    expect(markersFor("stale-arm-commit").length).toBeLessThanOrEqual(1);
 
     postBridge({ type: "plannotator-bridge-clear-marks" });
     postBridge({ type: "plannotator-bridge-cancel-selection" });
@@ -1660,8 +1750,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       id: "resync-commit",
       annotationType: "comment",
     });
-    const badge = document.querySelector<HTMLElement>("[data-plannotator-pin-badge]");
-    expect(badge).not.toBeNull();
+    expect(markersFor("resync-commit").length).toBe(1);
     postBridge({ type: "plannotator-bridge-clear-marks" });
     postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
     void betaKey;
@@ -1739,19 +1828,26 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       ],
     });
 
-    // Primary restored as an inline mark inside alpha.
-    const mark = document.querySelector('[data-bind-id="restore-multi"]');
-    expect(mark?.textContent).toBe("Alpha text");
-    // Beta restored as a pin sharing the annotation's number; gamma failed closed.
-    const badges = Array.from(
-      document.querySelectorAll<HTMLElement>("[data-plannotator-pin-badge]"),
-    );
-    expect(badges.length).toBe(1);
-    expect(badges[0]!.textContent).toBe("1");
+    // Primary restored as an anchored element marker + overlay highlight;
+    // beta restored as a marker sharing the SAME number; gamma failed closed
+    // (stale snapshot resolves nothing — no marker, no mis-highlight).
+    const restoreMarkers = markersFor("restore-multi");
+    expect(restoreMarkers.length).toBe(2);
+    for (const marker of restoreMarkers) expect(markerNumber(marker)).toBe("1");
+    expect(
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "restore-multi",
+      ),
+    ).toBe(true);
+    expect(document.querySelector("[data-bind-id]")).toBeNull();
 
     postBridge({ type: "plannotator-bridge-remove-mark", id: "restore-multi" });
-    expect(document.querySelector('[data-bind-id="restore-multi"]')).toBeNull();
-    expect(document.querySelector("[data-plannotator-pin-badge]")).toBeNull();
+    expect(markersFor("restore-multi").length).toBe(0);
+    expect(
+      visibleHighlights().some(
+        (el) => el.getAttribute("data-annotation-id") === "restore-multi",
+      ),
+    ).toBe(false);
     document.body.replaceChildren();
   });
 
