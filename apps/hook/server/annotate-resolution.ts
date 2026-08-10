@@ -44,6 +44,9 @@ export interface AnnotateResolutionSuccess {
   sourceInfo?: string;
   sourceConverted: boolean;
   isUrl: boolean;
+  /** Loopback HTML target resolved as a LIVE app session (server mode
+   *  "annotate-app"): the URL is proxied, not converted. */
+  liveApp?: boolean;
 }
 
 export interface AnnotateResolutionFailure {
@@ -57,6 +60,17 @@ export type AnnotateResolutionResult =
   | AnnotateResolutionSuccess
   | AnnotateResolutionFailure;
 
+/** True for hostnames the live-app probe treats as loopback. */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  return (
+    host === "localhost"
+    || host === "::1"
+    || host === "[::1]"
+    || host.startsWith("127.")
+  );
+}
+
 export async function resolveAnnotateTarget(options: {
   rawFilePath: string;
   projectRoot: string;
@@ -68,9 +82,13 @@ export async function resolveAnnotateTarget(options: {
    * that already hold a resolved list.
    */
   extraMarkdownExtensions?: readonly string[];
+  /** --app: force live mode; loud startup failure when it cannot apply. */
+  forceApp?: boolean;
+  /** --static: force the classic conversion pipeline on loopback URLs. */
+  forceStatic?: boolean;
   log?: (line: string) => void;
 }): Promise<AnnotateResolutionResult> {
-  const { rawFilePath, projectRoot, noJina, renderMarkdown } = options;
+  const { rawFilePath, projectRoot, noJina, renderMarkdown, forceApp = false, forceStatic = false } = options;
   const extraMarkdownExtensions =
     options.extraMarkdownExtensions ?? getExtraMarkdownExtensions();
   const log = options.log ?? ((line: string) => console.error(line));
@@ -89,6 +107,76 @@ export async function resolveAnnotateTarget(options: {
   const isUrl = /^https?:\/\//i.test(filePath);
 
   if (isUrl) {
+    // --- Live app detection (phase 1: Bun server + Claude Code CLI only) ---
+    // Loopback http URLs default to LIVE mode when a quick probe returns an
+    // HTML page; --static forces the classic conversion pipeline; --app
+    // forces live mode and fails loudly when it cannot apply. Non-loopback
+    // URLs keep the conversion pipeline untouched.
+    let parsedUrl: URL | null = null;
+    try {
+      parsedUrl = new URL(filePath);
+    } catch {
+      parsedUrl = null;
+    }
+    const loopback = parsedUrl !== null && isLoopbackHostname(parsedUrl.hostname);
+
+    if (forceApp && !loopback) {
+      return {
+        ok: false,
+        notFound: false,
+        message: "--app requires a localhost/loopback URL",
+      };
+    }
+    if (forceApp && parsedUrl?.protocol === "https:") {
+      // The phase 1 proxy is http-only.
+      return {
+        ok: false,
+        notFound: false,
+        message: "--app requires an http:// URL (the live app proxy does not support https upstreams)",
+      };
+    }
+
+    if (loopback && parsedUrl?.protocol === "http:" && !forceStatic) {
+      let liveEligible = false;
+      let probeError: string | null = null;
+      try {
+        const probe = await fetch(filePath, {
+          headers: { accept: "text/html" },
+          redirect: "follow",
+          signal: AbortSignal.timeout(3000),
+        });
+        const contentType = probe.headers.get("content-type") ?? "";
+        liveEligible = probe.status < 500 && contentType.includes("text/html");
+      } catch (err) {
+        probeError = err instanceof Error ? err.message : String(err);
+      }
+      if (liveEligible) {
+        log(`Live app: ${filePath}`);
+        return {
+          ok: true,
+          markdown: "",
+          absolutePath: filePath,
+          annotateMode: "annotate",
+          liveApp: true,
+          sourceInfo: filePath,
+          sourceConverted: false,
+          isUrl,
+        };
+      }
+      if (forceApp) {
+        return {
+          ok: false,
+          notFound: false,
+          message: probeError !== null
+            ? `--app: could not reach ${filePath}: ${probeError}`
+            : `--app: ${filePath} did not return an HTML page`,
+        };
+      }
+      // Probe failure or non-HTML without --app: fall through to the static
+      // pipeline, whose own error surfaces verbatim (preserves the legacy
+      // behavior for dead URLs and JSON endpoints).
+    }
+
     const useJina = resolveUseJina(noJina, loadConfig());
     log(`Fetching: ${filePath}${useJina ? " (via Jina Reader)" : " (via fetch+Turndown)"}`);
     let markdown: string;
