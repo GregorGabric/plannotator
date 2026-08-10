@@ -1098,6 +1098,25 @@ const blockEndLine = (block: Block): number => {
 
 /** Resolve the source-line label for a single annotation.
  *  Returns null for global comments, diff-view annotations, or missing blocks. */
+/** Multi-target raw-HTML comments: list every ADDITIONAL element the one
+ *  comment covers (the primary target is already quoted as `originalText`),
+ *  labeled with the semantic hover label plus a short excerpt so the agent
+ *  reading the feedback sees every referenced element. Emits nothing for
+ *  single-target annotations, keeping their output byte-identical. */
+const additionalTargetsExportBlock = (ann: any): string => {
+  const targets = ann?.htmlAdditionalTargets;
+  if (!Array.isArray(targets) || targets.length === 0) return '';
+  let block = `**Also applies to ${targets.length} more element${targets.length > 1 ? 's' : ''}:**\n`;
+  targets.forEach((target: any) => {
+    const label = typeof target?.label === 'string' && target.label ? `[${target.label}] ` : '';
+    const raw = typeof target?.text === 'string' ? target.text : '';
+    const excerpt = raw.replace(/\s+/g, ' ').trim();
+    const clipped = excerpt.length > 120 ? `${excerpt.slice(0, 120)}…` : excerpt;
+    block += `- ${label}"${clipped}"\n`;
+  });
+  return block;
+};
+
 const lineLabelForAnnotation = (blocks: Block[], ann: any): string | null => {
   if (!ann.blockId || ann.type === 'GLOBAL_COMMENT') return null;
   if (typeof ann.blockId === 'string' && ann.blockId.startsWith('diff-block-')) return null;
@@ -1187,6 +1206,9 @@ export const exportAnnotations = (
         output += `> ${ann.text}\n`;
         break;
     }
+
+    // Multi-target raw-HTML comments list every additional covered element.
+    output += additionalTargetsExportBlock(ann);
 
     // Skill references in the comment text (no-op unless a catalog is
     // registered). An annotation carrying a `source` arrived through the
@@ -1288,6 +1310,9 @@ export const exportLinkedDocAnnotations = (
           output += `> ${ann.text}\n`;
           break;
       }
+
+      // Multi-target raw-HTML comments list every additional covered element.
+      output += additionalTargetsExportBlock(ann);
 
       // External (tool-sourced) comments list skills but never inject.
       output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
