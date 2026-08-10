@@ -38,7 +38,12 @@ import {
   type ComposerYieldState,
 } from "./composerYield";
 import { buildSyncNumbering } from "./annotationNumbering";
-import { useHtmlAnnotation } from "./useHtmlAnnotation";
+import {
+  MAX_PAGE_URL_LENGTH,
+  rejectsLiveMessage,
+  useHtmlAnnotation,
+  type HtmlLiveSession,
+} from "./useHtmlAnnotation";
 import {
   THEME_TOKENS,
   buildSrcdocInjection,
@@ -138,6 +143,17 @@ function parseVimBridgeCopy(value: unknown): string | null {
 /** Inputs for the sandboxed raw-HTML viewer and its parent-side annotation UI. */
 export interface HtmlViewerProps {
   rawHtml: string;
+  /** Live proxied-app mode: render `src` (no sandbox, no srcdoc) instead of
+   *  rawHtml. The caller must also set `fullViewport` and `liveSession`. */
+  src?: string;
+  /** Live session credentials paired with `src`: proxy origin + per-session
+   *  token, validated on every inbound message and stamped on every post. */
+  liveSession?: HtmlLiveSession;
+  /** Current page (pathname + search) in a live multi-page session. Restore
+   *  filters annotations to this page; changing it re-applies the filter. */
+  currentPageUrl?: string;
+  /** Live-mode page navigation reports (ready pageUrl + page-change). */
+  onPageChange?: (pageUrl: string) => void;
   annotations: Annotation[];
   onAddAnnotation: (ann: Annotation) => void;
   onSelectAnnotation: (id: string | null) => void;
@@ -189,6 +205,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
   (
     {
       rawHtml,
+      src,
+      liveSession,
+      currentPageUrl,
+      onPageChange,
       annotations,
       onAddAnnotation,
       onSelectAnnotation,
@@ -233,11 +253,30 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       contextText: string;
     } | null>(null);
 
+    // Live proxied-app mode: the iframe navigates a real origin, so the
+    // srcdoc pipeline is skipped entirely and its messages carry credentials.
+    const liveMode = !!src;
+    const liveSessionRef = useRef<HtmlLiveSession | null>(liveSession ?? null);
+    liveSessionRef.current = liveSession ?? null;
+    const onPageChangeRef = useRef(onPageChange);
+    onPageChangeRef.current = onPageChange;
+
+    /** Single choke point for direct-to-bridge posts: live sessions get the
+     *  token + concrete targetOrigin, srcdoc keeps "*" and no token. */
+    const postToBridge = useCallback((msg: Record<string, unknown>) => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      const live = liveSessionRef.current;
+      if (live) win.postMessage({ ...msg, token: live.token }, live.origin);
+      else win.postMessage(msg, "*");
+    }, []);
+
     // Host theming is opt-in per document (Plannotator-generated artifacts tag
     // themselves); arbitrary HTML renders untouched, like a standalone tab.
-    const hostTheme = useMemo(() => hasHostThemeOptIn(rawHtml), [rawHtml]);
+    const hostTheme = useMemo(() => !liveMode && hasHostThemeOptIn(rawHtml), [liveMode, rawHtml]);
 
     const srcdoc = useMemo(() => {
+      if (liveMode) return undefined; // src mode: the proxy injects the bridge
       const injection = buildSrcdocInjection({
         tokens: readThemeTokens(),
         isLight: isLightTheme(),
@@ -245,11 +284,12 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         diffActive: !!diffActive,
       });
       return injectIntoHead(rawHtml, injection);
-    }, [rawHtml, hostTheme, diffActive]);
+    }, [liveMode, rawHtml, hostTheme, diffActive]);
 
     const handleResize = useCallback((height: number) => {
+      if (liveMode) return; // live surfaces are full-viewport; height is ignored
       setIframeHeight(height);
-    }, []);
+    }, [liveMode]);
 
     // Composer yield while shift-selecting (multi-target drafts): fade the
     // composer as the pointer approaches, click-through when over it. Pointer
@@ -299,6 +339,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       selectedAnnotationId,
       mode,
       onResize: handleResize,
+      live: liveSession,
+      onPageChange,
       onBridgePointer: handleBridgePointer,
       onUnanchoredChange,
     });
@@ -353,11 +395,26 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     useEffect(() => {
       function handler(e: MessageEvent<unknown>) {
         if (e.source !== iframeRef.current?.contentWindow) return;
+        // Live sessions verify origin + token before reading anything.
+        const live = liveSessionRef.current;
+        if (live && rejectsLiveMessage(live, e.origin, e.data)) return;
         if (isBridgeReadyMessage(e.data)) {
           setIframeReadyVersion((version) => version + 1);
           setVimBridgePhase("inactive");
           setVimHudCommand(null);
           setVimHelpOpen(false);
+          // Live ready carries the page identity (validated like page-change)
+          // so reloads and cross-page navigations re-anchor the restore filter.
+          if (live && isRecord(e.data)) {
+            const pageUrl = e.data.pageUrl;
+            if (
+              typeof pageUrl === "string"
+              && pageUrl.length > 0
+              && pageUrl.length <= MAX_PAGE_URL_LENGTH
+            ) {
+              onPageChangeRef.current?.(pageUrl);
+            }
+          }
           return;
         }
         const vimCopy = parseVimBridgeCopy(e.data);
@@ -408,9 +465,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
 
     const handleVimHelpOpenChange = useCallback((open: boolean) => {
       setVimHelpOpen(open);
-      iframeRef.current?.contentWindow?.postMessage(
+      postToBridge(
         { type: `${PREFIX}set-vim-help`, open },
-        "*",
       );
     }, []);
 
@@ -425,9 +481,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       if (document.activeElement === iframe) return false;
       iframe.focus({ preventScroll: true });
       if (document.activeElement !== iframe) return false;
-      iframe.contentWindow?.postMessage(
+      postToBridge(
         { type: `${PREFIX}focus-vim` },
-        "*",
       );
       return true;
     }, [readOnly, vimModeEnabled]);
@@ -438,12 +493,45 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       focusDocument: focusVimDocument,
     });
 
+    // Restore filter for live multi-page sessions: only annotations made on
+    // the current page (or without page identity) are pushed for restoration.
+    // Numbering (sync-annotations) still ships the FULL list: numbers are
+    // parent-authoritative and global across pages, matching export.
+    const forCurrentPage = useCallback(
+      (anns: Annotation[]) =>
+        anns.filter((a) => !a.pageUrl || a.pageUrl === currentPageUrl),
+      [currentPageUrl],
+    );
+
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
-      if (annotations.length > 0) {
-        hook.applyAnnotations(annotations);
+      const restorable = forCurrentPage(annotations);
+      if (restorable.length > 0) {
+        hook.applyAnnotations(restorable);
       }
     }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Live page navigation with a ready iframe: explicitly clear the previous
+    // page's marks, then re-apply the filtered set. Relying on dead anchors to
+    // hide pins would risk cross-page text-search false matches and waste
+    // reconcile budget.
+    const lastAppliedPageRef = useRef<string | undefined>(currentPageUrl);
+    useEffect(() => {
+      if (lastAppliedPageRef.current === currentPageUrl) return;
+      lastAppliedPageRef.current = currentPageUrl;
+      if (iframeReadyVersion === 0) return;
+      postToBridge({ type: `${PREFIX}clear-marks` });
+      const restorable = forCurrentPage(annotations);
+      if (restorable.length > 0) {
+        hook.applyAnnotations(restorable);
+      }
+      // clear-marks drops the bridge's synced numbering; re-establish it so
+      // restored markers keep their export-matching global numbers.
+      postToBridge({
+        type: `${PREFIX}sync-annotations`,
+        annotations: buildSyncNumbering(annotations),
+      });
+    }, [currentPageUrl, iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Placed-marker numbering is parent-authoritative and matches the
     // numbers exportAnnotations writes into the submitted feedback: the full
@@ -454,9 +542,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // order is only a pre-sync fallback.
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
-      iframeRef.current?.contentWindow?.postMessage(
+      postToBridge(
         { type: `${PREFIX}sync-annotations`, annotations: buildSyncNumbering(annotations) },
-        "*",
       );
     }, [iframeReadyVersion, annotations]);
 
@@ -464,31 +551,28 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // ready (fresh iframe) and whenever the user switches it in the toolstrip.
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
-      iframeRef.current?.contentWindow?.postMessage(
+      postToBridge(
         { type: `${PREFIX}set-input-method`, method: inputMethod },
-        "*",
       );
     }, [iframeReadyVersion, inputMethod]);
 
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
       const iframe = iframeRef.current;
-      iframe?.contentWindow?.postMessage(
+      postToBridge(
         {
           type: `${PREFIX}set-vim-mode`,
           enabled: !readOnly && vimModeEnabled,
           hudEnabled: vimHudEnabled,
           mode,
         },
-        "*",
       );
       if (!readOnly && vimModeEnabled && iframe && iframe === document.activeElement) {
         // The initial parent focus can land before the sandbox bridge is ready.
         // Reassert it after configuration so raw HTML enters BLOCK immediately,
         // matching the Markdown surface instead of waiting for the first key.
-        iframe.contentWindow?.postMessage(
+        postToBridge(
           { type: `${PREFIX}focus-vim` },
-          "*",
         );
       }
     }, [iframeReadyVersion, mode, readOnly, vimHudEnabled, vimModeEnabled]);
@@ -506,9 +590,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         && (document.activeElement === document.body || document.activeElement === null)
       ) {
         iframeRef.current?.focus({ preventScroll: true });
-        iframeRef.current?.contentWindow?.postMessage(
+        postToBridge(
           { type: `${PREFIX}focus-vim` },
-          "*",
         );
       }
     }, [hook.commentPopover, hook.quickLabelPicker, hook.toolbarState, readOnly, vimModeEnabled]);
@@ -516,14 +599,13 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
       function sendTheme() {
-        iframeRef.current?.contentWindow?.postMessage(
+        postToBridge(
           {
             type: `${PREFIX}theme`,
             tokens: buildThemeTokenPayload(readThemeTokens(), hostTheme),
             isLight: isLightTheme(),
             hostTheme,
           },
-          "*",
         );
       }
       sendTheme();
@@ -538,7 +620,9 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     useImperativeHandle(ref, () => ({
       removeHighlight: hook.removeHighlight,
       clearAllHighlights: hook.clearAllHighlights,
-      applySharedAnnotations: hook.applyAnnotations,
+      // Shared/draft restores respect the live page filter too.
+      applySharedAnnotations: (anns: Annotation[]) =>
+        hook.applyAnnotations(forCurrentPage(anns)),
     }));
 
     const handleGlobalCommentSubmit = useCallback(
@@ -640,10 +724,12 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
                 {actionButtons}
               </div>
             )}
+            {/* Live proxied-app mode navigates a real loopback origin: no
+                sandbox (the user's own app needs cookies, storage, and
+                same-origin XHR) and no srcdoc. Srcdoc mode is unchanged. */}
             <iframe
               ref={iframeRef}
-              srcDoc={srcdoc}
-              sandbox="allow-scripts"
+              {...(src ? { src } : { srcDoc: srcdoc, sandbox: "allow-scripts" })}
               style={{
                 width: "100%",
                 height: fullViewport ? "100%" : `${iframeHeight}px`,
