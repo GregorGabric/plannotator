@@ -2227,7 +2227,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     // A wrapped multi-line/multi-paragraph selection yields SEVERAL client
     // rects. The old .focused class landed on querySelector's FIRST inline
     // mark only; the overlay must cover every rect.
-    (Range.prototype as { getClientRects: () => DOMRect[] }).getClientRects = () => [
+    (Range.prototype as unknown as { getClientRects: () => DOMRect[] }).getClientRects = () => [
       rectOf(10, 10, 100, 20),
       rectOf(10, 40, 80, 20),
     ];

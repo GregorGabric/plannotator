@@ -448,7 +448,7 @@ describe.if(hasDom)('multi-target bridge message validation (trust boundary)', (
       key: 'ht-7',
       text: 'Create',
       anchor: { selector: 'span.btn', tagName: 'span', text: 'Create', point: { x: 'evil', y: 0.2 } },
-    }) as { anchor?: { point?: unknown } };
+    }) as { anchor?: { selector: string; tagName: string; text?: string; point?: unknown } };
     expect(bad.anchor).toEqual({ selector: 'span.btn', tagName: 'span', text: 'Create' });
     expect(bad.anchor?.point).toBeUndefined();
   });
