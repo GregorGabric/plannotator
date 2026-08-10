@@ -1346,24 +1346,40 @@ export const BRIDGE_SCRIPT = `(function() {
     return found;
   }
 
+  // Unresolvable-target re-search is GENERATION-gated: findTextRange is a
+  // whole-document TreeWalker sweep (and anchor re-resolution a document
+  // query + text snapshot), while refreshRecordTargets runs on every
+  // scroll/resize rAF and every body mutation. A page with one stale
+  // annotation plus scrolling must not do O(document-text) work per frame
+  // forever. The counter advances only on signals that can change text
+  // (page mutations, settle events, frame loads); scroll and resize alone
+  // never unlock a re-search — geometry changes, text doesn't.
+  var domGeneration = 1;
+
   // Re-resolve stale live targets from durable data. Element targets
   // re-acquire through their anchor; range targets re-run the text search
-  // (anchor-scoped first). Unresolvable targets stay hidden — never guessed.
+  // (anchor-scoped first). Unresolvable targets stay hidden — never guessed
+  // — and cache the generation of their last failed search so they retry
+  // only after the document could actually have changed.
   function refreshRecordTargets(record) {
     for (var i = 0; i < record.targets.length; i++) {
       var target = record.targets[i];
       if (target.kind === 'element') {
         if ((!target.element || !target.element.isConnected) && target.anchor) {
+          if (target.failedGeneration === domGeneration) continue;
           target.element = resolveAnchorElement(target.anchor);
+          target.failedGeneration = target.element ? 0 : domGeneration;
         }
       } else if (!rangeAlive(target.range)) {
         target.range = null;
         if (target.text) {
+          if (target.failedGeneration === domGeneration) continue;
           var scopeEl = record.params && record.params.anchor
             ? resolveAnchorElement(record.params.anchor)
             : null;
           target.range = (scopeEl && findTextRange(target.text, scopeEl))
             || findTextRange(target.text, null);
+          target.failedGeneration = target.range ? 0 : domGeneration;
         }
       }
     }
@@ -1398,15 +1414,46 @@ export const BRIDGE_SCRIPT = `(function() {
   function rectRight(r) { return typeof r.right === 'number' ? r.right : r.left + (r.width || 0); }
   function rectBottom(r) { return typeof r.bottom === 'number' ? r.bottom : r.top + (r.height || 0); }
 
-  // Intersect a target rect with every clipping/scroll ancestor so a marker
-  // is never shown for content its container has scrolled or clipped away.
-  function clippedTargetRect(el, rect) {
-    if (!layoutActive()) return rect;
-    var left = rect.left;
-    var top = rect.top;
-    var right = rectRight(rect);
-    var bottom = rectBottom(rect);
-    var current = el ? el.parentElement : null;
+  // Ancestors that establish the containing block for FIXED-position
+  // descendants (transform / perspective / filter / backdrop-filter /
+  // will-change of those). Overflow clipping only applies to a fixed target
+  // when the clipper is in its containing-block chain, so plain static
+  // clippers must be skipped for fixed targets — a fully visible
+  // position:fixed element inside an overflow:hidden ancestor would
+  // otherwise be intersected away and omitted forever.
+  function establishesFixedContainingBlock(style) {
+    if (!style) return false;
+    if (style.transform && style.transform !== 'none') return true;
+    if (style.perspective && style.perspective !== 'none') return true;
+    if (style.filter && style.filter !== 'none') return true;
+    var backdrop = style.backdropFilter || style.webkitBackdropFilter || '';
+    if (backdrop && backdrop !== 'none') return true;
+    var willChange = style.willChange || '';
+    if (
+      willChange.indexOf('transform') >= 0
+      || willChange.indexOf('perspective') >= 0
+      || willChange.indexOf('filter') >= 0
+    ) return true;
+    return false;
+  }
+
+  // Viewport-space clip window from the element's clipping/scroll ancestor
+  // chain, or null when nothing clips. Shared by marker projection AND every
+  // painted highlight rect: content an inner scroll container has scrolled
+  // away must never paint stripes over unrelated content outside its box.
+  function clipBoundsFor(el) {
+    if (!layoutActive() || !el) return null;
+    var left = -Infinity;
+    var top = -Infinity;
+    var right = Infinity;
+    var bottom = Infinity;
+    var clipped = false;
+    var fixedSkip = false;
+    try {
+      var ownStyle = window.getComputedStyle(el);
+      fixedSkip = !!ownStyle && ownStyle.position === 'fixed';
+    } catch (exOwn) {}
+    var current = el.parentElement;
     var guard = 0;
     while (
       current
@@ -1416,25 +1463,73 @@ export const BRIDGE_SCRIPT = `(function() {
     ) {
       var style = null;
       try { style = window.getComputedStyle(current); } catch (ex) { break; }
+      // Once the fixed target's containing block is reached, that ancestor
+      // and everything above it clip normally (the containing block itself
+      // participates in ordinary flow).
+      if (fixedSkip && establishesFixedContainingBlock(style)) fixedSkip = false;
       var overflowX = (style && (style.overflowX || style.overflow)) || '';
       var overflowY = (style && (style.overflowY || style.overflow)) || '';
       var clipsX = overflowX && overflowX !== 'visible';
       var clipsY = overflowY && overflowY !== 'visible';
-      if (clipsX || clipsY) {
+      if ((clipsX || clipsY) && !fixedSkip) {
         var cr = current.getBoundingClientRect();
-        if (clipsX) { left = Math.max(left, cr.left); right = Math.min(right, rectRight(cr)); }
-        if (clipsY) { top = Math.max(top, cr.top); bottom = Math.min(bottom, rectBottom(cr)); }
+        if (clipsX) { left = Math.max(left, cr.left); right = Math.min(right, rectRight(cr)); clipped = true; }
+        if (clipsY) { top = Math.max(top, cr.top); bottom = Math.min(bottom, rectBottom(cr)); clipped = true; }
       }
       current = current.parentElement;
     }
+    return clipped ? { left: left, top: top, right: right, bottom: bottom } : null;
+  }
+
+  // Intersect one paintable rect with a clip window; null when nothing
+  // visible survives (the rect is DROPPED, never painted degenerate).
+  function clipRect(rect, bounds) {
+    if (!bounds) return rect;
+    var left = Math.max(rect.left, bounds.left);
+    var top = Math.max(rect.top, bounds.top);
+    var right = Math.min(rectRight(rect), bounds.right);
+    var bottom = Math.min(rectBottom(rect), bounds.bottom);
+    if (right <= left || bottom <= top) return null;
     return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
+  }
+
+  // Intersect a target rect with its clip chain for MARKER projection. May
+  // return a degenerate rect — markerViewportPoint reads that as "no visible
+  // intersection" and omits.
+  function clippedTargetRect(el, rect) {
+    var bounds = clipBoundsFor(el);
+    if (!bounds) return rect;
+    var left = Math.max(rect.left, bounds.left);
+    var top = Math.max(rect.top, bounds.top);
+    var right = Math.min(rectRight(rect), bounds.right);
+    var bottom = Math.min(rectBottom(rect), bounds.bottom);
+    return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
+  }
+
+  // Unresolved-for-display: a target whose box exists but is invisible
+  // (visibility:hidden/collapse, display:none, opacity:0) keeps a full-size
+  // rect, so without this gate markers, focus rects, and highlights would
+  // render over whatever visible content stacks in the same box (e.g.
+  // carousel slides toggled via visibility). display:none targets already
+  // report empty client rects, but visibility and opacity do not. Checked
+  // per reconcile frame, only for targets that passed the cheaper gates.
+  function targetStyleHidden(el) {
+    if (!el || !layoutActive()) return false;
+    var style = null;
+    try { style = window.getComputedStyle(el); } catch (ex) { return false; }
+    if (!style) return false;
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return true;
+    if (style.display === 'none') return true;
+    var opacity = parseFloat(style.opacity);
+    if (!isNaN(opacity) && opacity === 0) return true;
+    return false;
   }
 
   /**
    * Project a raw marker point against the target's visible geometry:
    * omit when the target has no visible intersection with the viewport,
    * clamp so the full marker stays reachable at viewport edges, and omit
-   * when the clamped point is no longer visibly associated with the target
+   * when the point is no longer visibly associated with the target
    * (clipped/scrolled away). Never guesses a position.
    */
   function markerViewportPoint(visRect, rawX, rawY) {
@@ -1446,21 +1541,54 @@ export const BRIDGE_SCRIPT = `(function() {
     var visRight = Math.min(rectRight(visRect), vw);
     var visBottom = Math.min(rectBottom(visRect), vh);
     if (visRight <= visLeft || visBottom <= visTop) return null;
+    // Association is tested against the UNCLAMPED point: viewport edges CLAMP
+    // (never omit — a fully visible element flush against the edge keeps its
+    // marker even though the 29px inset moves it inward), while clip/scroll
+    // detachment — a raw point no longer near the visible target geometry —
+    // omits. The clamp below is rendering-only.
+    var dx = rawX < visLeft ? visLeft - rawX : rawX > visRight ? rawX - visRight : 0;
+    var dy = rawY < visTop ? visTop - rawY : rawY > visBottom ? rawY - visBottom : 0;
+    if (dx > MARKER_ASSOC_TOLERANCE || dy > MARKER_ASSOC_TOLERANCE) return null;
     var x = Math.max(MARKER_EDGE_INSET, Math.min(rawX, vw - MARKER_EDGE_INSET));
     var y = Math.max(MARKER_EDGE_INSET, Math.min(rawY, vh - MARKER_EDGE_INSET));
-    var dx = x < visLeft ? visLeft - x : x > visRight ? x - visRight : 0;
-    var dy = y < visTop ? visTop - y : y > visBottom ? y - visBottom : 0;
-    if (dx > MARKER_ASSOC_TOLERANCE || dy > MARKER_ASSOC_TOLERANCE) return null;
     return { x: x, y: y };
   }
 
+  // Containment filter: Range.getClientRects() returns BOTH a fully-contained
+  // element's border box AND its line rects, so multi-paragraph selections
+  // would double-paint stacked translucent rects (and redlines duplicate
+  // strike lines). Drop any rect that strictly contains a smaller rect in
+  // the same list.
+  function dropContainerRects(rects) {
+    if (rects.length < 2) return rects;
+    return rects.filter(function(a) {
+      var aArea = (a.width || 0) * (a.height || 0);
+      for (var i = 0; i < rects.length; i++) {
+        var b = rects[i];
+        if (b === a) continue;
+        var bArea = (b.width || 0) * (b.height || 0);
+        if (bArea >= aArea) continue; // only a STRICTLY larger box is a container
+        if (
+          a.left <= b.left
+          && a.top <= b.top
+          && rectRight(a) >= rectRight(b)
+          && rectBottom(a) >= rectBottom(b)
+        ) return false;
+      }
+      return true;
+    });
+  }
+
+  // All client rects for a range: zero-size filtered, containment filtered.
+  // NOT capped here — the marker anchor needs the TRUE last rect even when
+  // painting is capped at MAX_HIGHLIGHT_RECTS.
   function rangeClientRects(range) {
     var out = [];
     if (!range) return out;
     if (typeof range.getClientRects === 'function') {
       try {
         var list = range.getClientRects();
-        for (var i = 0; i < list.length && out.length < MAX_HIGHLIGHT_RECTS; i++) out.push(list[i]);
+        for (var i = 0; i < list.length; i++) out.push(list[i]);
       } catch (ex) {}
     }
     if (!out.length && typeof range.getBoundingClientRect === 'function') {
@@ -1473,8 +1601,42 @@ export const BRIDGE_SCRIPT = `(function() {
       out = out.filter(function(rect) {
         return (rect.width || 0) > 0 || (rect.height || 0) > 0;
       });
+      out = dropContainerRects(out);
     }
     return out;
+  }
+
+  // Range paint/projection geometry, shared by the overlay render, the print
+  // layer, and highlight click hit-testing: clip-tested painted rects
+  // (capped), the TRUE last client rect (marker anchor — never the capped
+  // list's 48th rect), and the clipped union (marker association).
+  function rangeVisualGeometry(range) {
+    var rangeEl = range && range.startContainer
+      ? (range.startContainer.nodeType === 1
+        ? range.startContainer
+        : range.startContainer.parentElement)
+      : null;
+    if (rangeEl && targetStyleHidden(rangeEl)) {
+      return { paint: [], last: null, vis: null, hidden: true };
+    }
+    var all = rangeClientRects(range);
+    if (!all.length) return { paint: [], last: null, vis: null, hidden: false };
+    var bounds = clipBoundsFor(rangeEl);
+    var paint = [];
+    for (var i = 0; i < all.length && paint.length < MAX_HIGHLIGHT_RECTS; i++) {
+      var clipped = clipRect(all[i], bounds);
+      if (clipped) paint.push(clipped);
+    }
+    var union = unionOfRects(all);
+    var vis = bounds
+      ? {
+        left: Math.max(union.left, bounds.left),
+        top: Math.max(union.top, bounds.top),
+        right: Math.min(union.right, bounds.right),
+        bottom: Math.min(union.bottom, bounds.bottom)
+      }
+      : union;
+    return { paint: paint, last: all[all.length - 1], vis: vis, hidden: false };
   }
 
   function unionOfRects(rects) {
@@ -1614,6 +1776,10 @@ export const BRIDGE_SCRIPT = `(function() {
         ? annNumbers.get(record.id)
         : fallbackNumbers.get(record.id);
       var focused = focusedAnnotationId === record.id;
+      // One marker per RESOLVED element per record: two anchors of one
+      // annotation re-resolving to the same element must not render two
+      // coincident same-number markers that then spread apart.
+      var seenRecordElements = [];
       for (var targetIndex = 0; targetIndex < record.targets.length; targetIndex++) {
         var target = record.targets[targetIndex];
         var markerKey = record.id + '::' + targetIndex;
@@ -1623,43 +1789,49 @@ export const BRIDGE_SCRIPT = `(function() {
             markers.push({ key: markerKey, id: record.id, number: number, hidden: true });
             continue;
           }
+          if (seenRecordElements.indexOf(el) >= 0) {
+            markers.push({ key: markerKey, id: record.id, number: number, hidden: true });
+            continue;
+          }
+          seenRecordElements.push(el);
           var rect = el.getBoundingClientRect();
           var zeroSize = layoutActive() && !(rect.width || 0) && !(rect.height || 0);
+          var styleHidden = !zeroSize && targetStyleHidden(el);
           var point = target.point || { x: 0.5, y: 0.5 };
-          var placed = zeroSize ? null : markerViewportPoint(
+          var placed = zeroSize || styleHidden ? null : markerViewportPoint(
             clippedTargetRect(el, rect),
             rect.left + point.x * (rect.width || 0),
             rect.top + point.y * (rect.height || 0)
           );
           if (placed) {
             markers.push({ key: markerKey, id: record.id, number: number, x: placed.x, y: placed.y });
-            if (focused) takeHighlightRect('pn-hl-focus', rect, record.id);
+            if (focused) {
+              // The focus flash is a painted rect too: clip-test it like
+              // every other highlight so it never flashes over content
+              // outside the target's scroll container.
+              var focusRect = clipRect(rect, clipBoundsFor(el));
+              if (focusRect) takeHighlightRect('pn-hl-focus', focusRect, record.id);
+            }
           } else {
             markers.push({ key: markerKey, id: record.id, number: number, hidden: true });
           }
         } else {
-          var rects = rangeClientRects(target.range);
-          for (var rectIndex = 0; rectIndex < rects.length; rectIndex++) {
+          var geometry = rangeVisualGeometry(target.range);
+          for (var rectIndex = 0; rectIndex < geometry.paint.length; rectIndex++) {
             takeHighlightRect(
               record.annType === 'deletion' ? 'pn-hl-deletion' : 'pn-hl-comment',
-              rects[rectIndex],
+              geometry.paint[rectIndex],
               record.id
             );
-            if (focused) takeHighlightRect('pn-hl-focus', rects[rectIndex], record.id);
+            if (focused) takeHighlightRect('pn-hl-focus', geometry.paint[rectIndex], record.id);
           }
           if (!target.markerless) {
             var rangePlaced = null;
-            if (rects.length) {
-              var last = rects[rects.length - 1];
-              var rangeEl = target.range && target.range.startContainer
-                ? (target.range.startContainer.nodeType === 1
-                  ? target.range.startContainer
-                  : target.range.startContainer.parentElement)
-                : null;
+            if (geometry.last && geometry.vis) {
               rangePlaced = markerViewportPoint(
-                clippedTargetRect(rangeEl, unionOfRects(rects)),
-                rectRight(last),
-                last.top + (last.height || 0) / 2
+                geometry.vis,
+                rectRight(geometry.last),
+                geometry.last.top + (geometry.last.height || 0) / 2
               );
             }
             if (rangePlaced) {
@@ -1673,10 +1845,12 @@ export const BRIDGE_SCRIPT = `(function() {
     }
     // Draft selection highlight: overlay-projected rectangles from the live
     // pending range — the page's own DOM is never mutated for draft state.
+    // Clip-tested like committed rects (M1): a draft inside a scrolled inner
+    // container must not stripe content outside the container's box.
     if (hasDraftRange) {
-      var draftRects = rangeClientRects(pendingRange);
-      for (var draftIndex = 0; draftIndex < draftRects.length; draftIndex++) {
-        takeHighlightRect('pn-hl-draft', draftRects[draftIndex], '');
+      var draftGeometry = rangeVisualGeometry(pendingRange);
+      for (var draftIndex = 0; draftIndex < draftGeometry.paint.length; draftIndex++) {
+        takeHighlightRect('pn-hl-draft', draftGeometry.paint[draftIndex], '');
       }
     }
     hideUnusedHighlights();
@@ -3457,6 +3631,7 @@ export const BRIDGE_SCRIPT = `(function() {
     pageMutationObserver = new MutationObserver(function(mutations) {
       for (var i = 0; i < mutations.length; i++) {
         if (!isViewerOverlayNode(mutations[i].target)) {
+          domGeneration += 1; // page text may have changed: unlock dead-target re-search
           schedulePinpointReconcile();
           return;
         }
@@ -3473,12 +3648,37 @@ export const BRIDGE_SCRIPT = `(function() {
   // Animations/transitions move geometry without mutations or scroll events:
   // reconcile when they settle (end or cancel), matching the reference
   // invalidation set. Capture phase so non-bubbling targets still count.
+  // Viewer-owned light-DOM chrome (pin-enter, vim reticle) settling is
+  // identity-filtered out: our own overlay animations must never schedule
+  // redundant reconciles of the frames they themselves caused.
   var settleEvents = ['animationend', 'animationcancel', 'transitionend', 'transitioncancel'];
   for (var settleIndex = 0; settleIndex < settleEvents.length; settleIndex++) {
-    document.addEventListener(settleEvents[settleIndex], function() {
+    document.addEventListener(settleEvents[settleIndex], function(e) {
+      if (e && e.target && isViewerOverlayNode(e.target)) return;
+      domGeneration += 1; // a settled page animation can land text-affecting state
       schedulePinpointReconcile();
     }, { capture: true, passive: true });
   }
+
+  // Reflow WITHOUT mutation/scroll/animation still moves geometry: a web-font
+  // swap or an image loading into a fixed-height container reflows silently.
+  // Both change GEOMETRY, not text — they schedule a reconcile but never bump
+  // the re-search generation (a dead target stays dead through them).
+  if (
+    document.fonts
+    && document.fonts.ready
+    && typeof document.fonts.ready.then === 'function'
+  ) {
+    document.fonts.ready.then(function() { schedulePinpointReconcile(); }).catch(function() {});
+  }
+  document.addEventListener('load', function(e) {
+    if (!e || !e.target || e.target === document || isViewerOverlayNode(e.target)) return;
+    // A (same-origin) frame load is a text-capable invalidation; image and
+    // media loads are geometry-only.
+    var tag = e.target.tagName || '';
+    if (tag === 'IFRAME' || tag === 'FRAME') domGeneration += 1;
+    schedulePinpointReconcile();
+  }, { capture: true, passive: true });
 
   function onReady() {
     if (typeof ResizeObserver !== 'undefined' && document.body) {

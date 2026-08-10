@@ -2014,6 +2014,16 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.replaceChildren();
   });
 
+  /** Advance the bridge's re-search generation like a real invalidation
+   * signal would. Dead-target re-resolution is generation-gated (M3): only
+   * text-capable signals (page mutations, settle events, frame loads) unlock
+   * it. happy-dom's MutationObserver stops delivering once the overlay host
+   * holds an SVG marker (environment bug — real browsers are unaffected), so
+   * tests use the settle-event signal, which is synchronous and equivalent. */
+  function bumpDomGeneration() {
+    document.body.dispatchEvent(new Event("animationend", { bubbles: true }));
+  }
+
   test("unresolved targets omit their markers instead of guessing", () => {
     document.body.innerHTML = '<div data-testid="vanishing">Now you see me</div>';
     postBridge({
@@ -2028,11 +2038,13 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     // The page rerenders without the element: the anchor no longer resolves,
     // so the marker is omitted — never left floating over unrelated content.
     document.body.innerHTML = "<p>Completely different content</p>";
+    bumpDomGeneration();
     postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
     expect(markersFor("vanish-ann").length).toBe(0);
     // The annotation record survives (it stays reachable via the panel), so
     // a page that brings the element back re-resolves and re-renders it.
     document.body.innerHTML = '<div data-testid="vanishing">Back again</div>';
+    bumpDomGeneration();
     postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
     expect(markersFor("vanish-ann").length).toBe(1);
 
@@ -2086,8 +2098,12 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       expect(clamped[0]!.style.left).toBe("29px");
       expect(clamped[0]!.style.top).toBe("60px");
 
-      // A 4px corner sliver cannot host a clamped marker without visually
-      // detaching from it (29 - 4 > tolerance): omit rather than guess.
+      // A fully visible 4px corner sliver still gets its marker: viewport
+      // edges CLAMP, never omit (per the contract only clip-container
+      // detachment omits). The raw point (2,4) sits inside the visible rect,
+      // so association holds and the 29px inset is rendering-only. The old
+      // behavior measured association AFTER clamping, creating a dead band
+      // where fully visible edge-flush elements lost their markers.
       sliver.getBoundingClientRect = () => rectOf(0, 2, 4, 4);
       postBridge({
         type: "plannotator-bridge-find-and-mark",
@@ -2096,7 +2112,10 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
         annotationType: "comment",
         anchor: { selector: "#sliver", tagName: "div" },
       });
-      expect(markersFor("sliver-ann").length).toBe(0);
+      const sliverMarkers = markersFor("sliver-ann");
+      expect(sliverMarkers.length).toBe(1);
+      expect(sliverMarkers[0]!.style.left).toBe("29px");
+      expect(sliverMarkers[0]!.style.top).toBe("29px");
     });
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
