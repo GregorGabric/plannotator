@@ -399,6 +399,41 @@ describe.if(hasDom)('ordered saved-annotation sync (placed-marker numbering)', (
       postedToIframe.some((m) => m.type === 'plannotator-bridge-sync-annotations'),
     ).toBe(false);
   });
+
+  test('the sync feed truncates to 512 entries AFTER the stable sort (m2)', async () => {
+    // The bridge caps its numbering map at 512; without a sender-side slice
+    // the bridge would keep an arbitrary tail whose numbers disagree with
+    // the panel. Slicing after the sort keeps the first 512 numbers equal on
+    // both sides. createdA descends here, so the sort must run before the
+    // slice for bulk-519 (oldest) to survive as number 1.
+    const annotations = Array.from({ length: 520 }, (_, i) => ann(`bulk-${i}`, 1000 - i));
+    const { postReady, postedToIframe } = await mountWithAnnotations(annotations);
+    await postReady();
+    const syncs = postedToIframe.filter(
+      (m) => m.type === 'plannotator-bridge-sync-annotations',
+    );
+    const list = syncs.at(-1)!.annotations as Array<{ id: string; number: number }>;
+    expect(list.length).toBe(512);
+    expect(list[0]).toEqual({ id: 'bulk-519', number: 1 });
+    expect(list[511]).toEqual({ id: 'bulk-8', number: 512 });
+  });
+});
+
+describe.if(hasDom)('mark-click validation (trust boundary)', () => {
+  test('mark-click ids are capped at 256 chars like the bridge sync cap (m1)', () => {
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-mark-click',
+      id: 'x'.repeat(256),
+    })).toEqual({ type: 'plannotator-bridge-mark-click', id: 'x'.repeat(256) });
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-mark-click',
+      id: 'x'.repeat(257),
+    })).toBeNull();
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-mark-click',
+      id: 42,
+    })).toBeNull();
+  });
 });
 
 describe.if(hasDom)('multi-target bridge message validation (trust boundary)', () => {

@@ -3880,4 +3880,24 @@ export const BRIDGE_SCRIPT = `(function() {
   } else {
     onReady();
   }
+
+  // Test-only introspection: the DOM suites assert committed-range EXTENT
+  // (which exact text a committed annotation's range binds), which has no
+  // other observable in the overlay model. Exposes nothing the same-realm
+  // page could not already derive — the overlay root is open, highlight
+  // geometry mirrors the ranges, and the text is the page's own content.
+  window.__plannotatorBridgeInternals = {
+    committedRanges: function(id) {
+      var record = findAnnRecord(id);
+      if (!record) return [];
+      var out = [];
+      for (var i = 0; i < record.targets.length; i++) {
+        var target = record.targets[i];
+        if (target.kind === 'range' && target.range) {
+          try { out.push(target.range.cloneRange()); } catch (ex) {}
+        }
+      }
+      return out;
+    }
+  };
 })();`;
