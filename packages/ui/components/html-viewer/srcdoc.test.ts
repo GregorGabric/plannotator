@@ -2874,6 +2874,46 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
   });
+
+  test("rect collection is capped at 48 with the containment filter, marker at the true tail (perf bound)", () => {
+    document.body.innerHTML = "<p>Huge wrapped selection</p>";
+    const originalGetClientRects = Range.prototype.getClientRects;
+    withLayout(() => {
+      // 60 rects: index 0 is a border box strictly containing lines 1..10;
+      // only the first 48 may ever be materialized (a huge selection can
+      // yield thousands of rects per reconcile frame), the containment
+      // filter runs on that capped list, and the marker still anchors the
+      // TRUE final rect read by index off the live list.
+      const rects: DOMRect[] = [rectOf(10, 10, 100, 50)];
+      for (let i = 1; i < 60; i++) rects.push(rectOf(10, 10 + (i - 1) * 5, 100, 5));
+      (Range.prototype as unknown as { getClientRects: () => DOMRect[] }).getClientRects = () =>
+        rects;
+      try {
+        postBridge({
+          type: "plannotator-bridge-find-and-mark",
+          id: "huge-ann",
+          originalText: "Huge wrapped selection",
+          annotationType: "comment",
+        });
+        const painted = visibleHighlights("pn-hl-comment").filter(
+          (el) => el.getAttribute("data-annotation-id") === "huge-ann",
+        );
+        // 48 collected minus the containment-dropped border box.
+        expect(painted.length).toBe(47);
+        expect(painted.some((el) => el.style.height === "50px")).toBe(false);
+        // True tail: rects[59] (top 300, height 5) — not the 48th entry.
+        const hugeMarkers = markersFor("huge-ann");
+        expect(hugeMarkers.length).toBe(1);
+        expect(hugeMarkers[0]!.style.left).toBe("110px");
+        expect(hugeMarkers[0]!.style.top).toBe("302.5px");
+      } finally {
+        (Range.prototype as { getClientRects: typeof originalGetClientRects }).getClientRects =
+          originalGetClientRects;
+      }
+    });
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    document.body.replaceChildren();
+  });
 });
 
 describe("injectIntoHead", () => {

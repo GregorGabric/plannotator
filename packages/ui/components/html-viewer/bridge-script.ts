@@ -1638,22 +1638,32 @@ export const BRIDGE_SCRIPT = `(function() {
     });
   }
 
-  // All client rects for a range: zero-size filtered, containment filtered.
-  // NOT capped here — the marker anchor needs the TRUE last rect even when
-  // painting is capped at MAX_HIGHLIGHT_RECTS.
+  // Client rects for a range, BOUNDED at the source: a huge drag-selection or
+  // redline can yield thousands of client rects (only the selection TEXT is
+  // capped, never the Range extent), and this runs per range target per rAF
+  // reconcile and per click hit-test. Only the paintable prefix (at most
+  // MAX_HIGHLIGHT_RECTS) is ever materialized — so the zero-size and
+  // containment filters below operate on at most 48 entries — and the
+  // marker's TRUE last rect (m12) is read directly by index off the live
+  // DOMRectList, never by collecting the whole list.
   function rangeClientRects(range) {
     var out = [];
-    if (!range) return out;
+    var lastRaw = null;
+    if (!range) return { rects: out, last: null };
     if (typeof range.getClientRects === 'function') {
       try {
         var list = range.getClientRects();
-        for (var i = 0; i < list.length; i++) out.push(list[i]);
+        for (var i = 0; i < list.length && out.length < MAX_HIGHLIGHT_RECTS; i++) out.push(list[i]);
+        if (list.length) lastRaw = list[list.length - 1];
       } catch (ex) {}
     }
     if (!out.length && typeof range.getBoundingClientRect === 'function') {
       try {
         var bounds = range.getBoundingClientRect();
-        if (bounds) out.push(bounds);
+        if (bounds) {
+          out.push(bounds);
+          if (!lastRaw) lastRaw = bounds;
+        }
       } catch (ex2) {}
     }
     if (layoutActive()) {
@@ -1662,13 +1672,15 @@ export const BRIDGE_SCRIPT = `(function() {
       });
       out = dropContainerRects(out);
     }
-    return out;
+    return { rects: out, last: lastRaw };
   }
 
   // Range paint/projection geometry, shared by the overlay render, the print
   // layer, and highlight click hit-testing: clip-tested painted rects
   // (capped), the TRUE last client rect (marker anchor — never the capped
-  // list's 48th rect), and the clipped union (marker association).
+  // list's 48th rect), and the clipped union (marker association; extended
+  // to the last rect so the tail of a cap-truncated selection still
+  // associates its marker).
   function rangeVisualGeometry(range) {
     var rangeEl = range && range.startContainer
       ? (range.startContainer.nodeType === 1
@@ -1678,7 +1690,8 @@ export const BRIDGE_SCRIPT = `(function() {
     if (rangeEl && targetStyleHidden(rangeEl)) {
       return { paint: [], last: null, vis: null, hidden: true };
     }
-    var all = rangeClientRects(range);
+    var collected = rangeClientRects(range);
+    var all = collected.rects;
     if (!all.length) return { paint: [], last: null, vis: null, hidden: false };
     var bounds = clipBoundsFor(rangeEl);
     var paint = [];
@@ -1686,7 +1699,13 @@ export const BRIDGE_SCRIPT = `(function() {
       var clipped = clipRect(all[i], bounds);
       if (clipped) paint.push(clipped);
     }
-    var union = unionOfRects(all);
+    var last = collected.last;
+    if (layoutActive() && last && !(last.width || 0) && !(last.height || 0)) {
+      // A zero-size trailing rect (collapsed tail) has no visual anchor —
+      // fall back to the last collected paintable rect.
+      last = all[all.length - 1];
+    }
+    var union = unionOfRects(last ? all.concat([last]) : all);
     var vis = bounds
       ? {
         left: Math.max(union.left, bounds.left),
@@ -1695,7 +1714,7 @@ export const BRIDGE_SCRIPT = `(function() {
         bottom: Math.min(union.bottom, bounds.bottom)
       }
       : union;
-    return { paint: paint, last: all[all.length - 1], vis: vis, hidden: false };
+    return { paint: paint, last: last, vis: vis, hidden: false };
   }
 
   function unionOfRects(rects) {
