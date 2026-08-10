@@ -493,6 +493,7 @@ export const BRIDGE_SCRIPT = `(function() {
 
     else if (type === PREFIX + 'clear-marks') {
       annRecords = [];
+      annNumbers = null; // stale synced numbers must not leak onto future records
       focusedAnnotationId = null;
       renderAnnotationOverlay();
     }
@@ -693,14 +694,39 @@ export const BRIDGE_SCRIPT = `(function() {
     return el;
   }
 
+  // The placed-marker button the most recent raw (pre-yield) probe landed
+  // on, if any. Hover uses it to advertise the MARKER's identity instead of
+  // the page element beneath it — the marker owns the click, so the hover
+  // label must never promise an annotate action the click won't perform.
+  var lastRawHitMarker = null;
+
+  function committedMarkerButtonFrom(node) {
+    var current = node;
+    var guard = 0;
+    while (current && guard++ < 24) {
+      if (
+        current.nodeType === 1
+        && overlayNodes.has(current)
+        && current.hasAttribute
+        && current.hasAttribute('data-plannotator-marker')
+      ) return current;
+      current = current.parentElement
+        || (current.getRootNode && current.getRootNode().host)
+        || null;
+    }
+    return null;
+  }
+
   // Resolve the pinpoint target at a viewport point. The deepest rendered
   // element under the pointer wins; containers are selected by pointing at
   // their uncovered area (padding, gaps), exactly like the markdown surface.
   // fallbackNode covers engines without a real elementFromPoint (headless DOM
   // tests) and the scroll reconcile, which re-resolves under a still cursor.
   function resolvePinpointTargetAt(x, y, fallbackNode) {
+    lastRawHitMarker = null;
     var node = deepElementFromPoint(x, y);
     if (node && isViewerOverlayNode(node)) {
+      lastRawHitMarker = committedMarkerButtonFrom(node);
       // A placed marker owns its clicks, but hit-testing for a NEW selection
       // must reach the page beneath it: temporarily yield marker hit targets
       // and probe again (identity-gated, never selector-gated).
@@ -741,10 +767,11 @@ export const BRIDGE_SCRIPT = `(function() {
       && now - lastPointerHit.t <= 16
       && (!lastPointerHit.el || lastPointerHit.el.isConnected)
     ) {
+      lastRawHitMarker = lastPointerHit.marker || null;
       return lastPointerHit.el;
     }
     var el = resolvePinpointTargetAt(x, y, fallbackNode);
-    lastPointerHit = { x: x, y: y, t: now, el: el };
+    lastPointerHit = { x: x, y: y, t: now, el: el, marker: lastRawHitMarker };
     return el;
   }
   function invalidatePointerHitCache() {
@@ -967,7 +994,14 @@ export const BRIDGE_SCRIPT = `(function() {
       pinpointLabelEl.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;display:none;font:600 11px/1.3 system-ui,-apple-system,sans-serif;padding:2px 7px;border-radius:5px;background:var(--pn-focus-highlight,#4493f8);color:#fff;white-space:nowrap;box-shadow:0 1px 5px rgba(0,0,0,.35);';
       overlayNodes.add(pinpointLabelEl);
     }
-    if (!pinpointLabelEl.isConnected) document.body.appendChild(pinpointLabelEl);
+    // Paint order at equal z-index follows DOM order: the label must sit
+    // AFTER the marker overlay host on the root element or marker bubbles
+    // occlude it. Re-append whenever it is not the last child (appendChild
+    // moves an already-connected node).
+    var labelRoot = document.documentElement || document.body;
+    if (labelRoot && (!pinpointLabelEl.isConnected || pinpointLabelEl.nextSibling)) {
+      labelRoot.appendChild(pinpointLabelEl);
+    }
     return pinpointLabelEl;
   }
   function hidePinpointLabel() { if (pinpointLabelEl) pinpointLabelEl.style.display = 'none'; }
@@ -1023,6 +1057,17 @@ export const BRIDGE_SCRIPT = `(function() {
   // Per-event hit-testing only — never builds the semantic graph.
   function updatePinpointHover(x, y, fallbackNode) {
     var el = pinpointLeafAt(x, y, fallbackNode);
+    // The 25px marker bubble owns clicks over it (they select its comment),
+    // so hover must advertise the MARKER's own identity — no annotate box,
+    // label "Comment N" — never the element beneath. Moving off the bubble
+    // restores normal element hover/annotate.
+    if (lastRawHitMarker && !pendingPinEl) {
+      var markerLabel = lastRawHitMarker.getAttribute('aria-label') || 'Comment';
+      pinpointHover = null;
+      hidePinpointBox();
+      positionPinpointLabel(lastRawHitMarker, markerLabel);
+      return;
+    }
     if (el !== pinpointHover) {
       pinpointHover = el;
       if (el && !pendingPinEl) {
@@ -1166,6 +1211,11 @@ export const BRIDGE_SCRIPT = `(function() {
     // never sees overlay writes.
     if (!overlayHostEl.isConnected) {
       (document.documentElement || document.body).appendChild(overlayHostEl);
+      // Keep the pinpoint hover label painting ABOVE markers: it must stay
+      // after the host in DOM order (equal z-index resolves by paint order).
+      if (pinpointLabelEl && pinpointLabelEl.isConnected) {
+        (document.documentElement || document.body).appendChild(pinpointLabelEl);
+      }
     }
     return overlayHostEl;
   }
@@ -2462,15 +2512,62 @@ export const BRIDGE_SCRIPT = `(function() {
   // Author opt-in: a plain click on any element tagged [data-annotate] pops the
   // toolbar — no pinpoint mode. Lets an HTML doc (e.g. a flow graph) wire its own
   // nodes to Plannotator's toolbar. Bubble phase so the page's own click handlers
-  // run first; an active text selection is respected, not clobbered.
+  // run first; an active text selection is respected, not clobbered. A click on
+  // a committed highlight selects the annotation instead (the pre-overlay
+  // handler deferred to '.annotation-highlight' the same way).
   document.addEventListener('click', function(e) {
     if (currentInputMethod === 'pinpoint') return; // pinpoint handler covers this
     if (isViewerOverlayNode(e.target)) return; // placed markers own their clicks
     var t = e.target && e.target.closest && e.target.closest('[data-annotate]');
     if (!t) return;
+    if (committedHighlightAt(e.clientX, e.clientY)) return; // mark-click handler owns it
     var s = window.getSelection();
     if (s && !s.isCollapsed && (s.toString() || '').trim()) return; // respect a drag-selection
     annotateElement(t, undefined, undefined, { x: e.clientX, y: e.clientY });
+  });
+
+  // --- Mark Click ---
+  // Pre-overlay, committed highlights were inline marks with cursor:pointer
+  // and their own click handler: clicking anywhere on a highlighted passage
+  // posted mark-click and selected the annotation in the panel. Overlay
+  // highlight rects are pointer-transparent (page pass-through must remain),
+  // so the affordance is restored by hit-testing the click point against the
+  // painted committed range rects. Bubble phase, exactly like the old
+  // handler: the capture-phase pinpoint annotate click stopPropagation()s
+  // first (pinpoint flows keep owning their clicks, as pre-overlay), and
+  // marker buttons stop propagation before this can run.
+  function committedHighlightAt(x, y) {
+    var best = null;
+    for (var recordIndex = 0; recordIndex < annRecords.length; recordIndex++) {
+      var record = annRecords[recordIndex];
+      for (var targetIndex = 0; targetIndex < record.targets.length; targetIndex++) {
+        var target = record.targets[targetIndex];
+        if (target.kind !== 'range' || !rangeAlive(target.range)) continue;
+        var geometry = rangeVisualGeometry(target.range);
+        for (var i = 0; i < geometry.paint.length; i++) {
+          var rect = geometry.paint[i];
+          if ((rect.width || 0) <= 0 || (rect.height || 0) <= 0) continue;
+          if (x < rect.left || x > rectRight(rect) || y < rect.top || y > rectBottom(rect)) continue;
+          var area = (rect.width || 0) * (rect.height || 0);
+          // Smallest rect wins on overlap; ties go to the later-painted
+          // (topmost) annotation.
+          if (!best || area <= best.area) best = { id: record.id, area: area };
+        }
+      }
+    }
+    return best ? best.id : null;
+  }
+
+  document.addEventListener('click', function(e) {
+    if (e.shiftKey) return; // shift belongs to multi-select
+    if (isViewerOverlayNode(e.target)) return; // markers own their clicks
+    if (pendingPinEl) return; // an open pinpoint draft owns the surface
+    var s = window.getSelection();
+    if (s && !s.isCollapsed && (s.toString() || '').trim()) return; // end of a drag-selection
+    var hitId = committedHighlightAt(e.clientX, e.clientY);
+    if (!hitId) return;
+    e.stopPropagation();
+    parent.postMessage({ type: PREFIX + 'mark-click', id: hitId }, '*');
   });
 
   // --- Optional Vim navigation ---
