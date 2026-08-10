@@ -253,9 +253,13 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
 
   // First-keystroke guard: while the draft is open, a printable keydown that
   // lands nowhere (focus fell back to <body> after an iframe interaction)
-  // routes into the textarea instead of vanishing. Capture phase, so a
-  // parent-level global shortcut cannot both fire and have its character
-  // appended; the character lands at the textarea's remembered caret.
+  // routes into the textarea instead of vanishing. Runs in capture phase so
+  // it claims the key before the app's shortcut dispatcher; the character
+  // lands at the textarea's remembered caret. Note that preventDefault here
+  // does not stop the dispatcher (it deliberately ignores defaultPrevented,
+  // see shortcuts/runtime.ts) — this guard is only safe because the
+  // plan-review scopes bind no bare printable single key. Any future single-
+  // key binding on this surface must be reconciled with this handler.
   useEffect(() => {
     if (!captureStrayKeys) return;
     const handler = (e: KeyboardEvent) => {
