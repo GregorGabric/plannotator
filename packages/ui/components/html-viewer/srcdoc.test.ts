@@ -136,9 +136,46 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
       : null;
   }
 
+  /** The bridge's page MutationObservers, captured at load: callback plus
+   * every observe() target. happy-dom stops delivering mutation records once
+   * the overlay host holds an SVG marker button (environment bug — see
+   * bumpDomGeneration), so observer-scope tests assert the observed target
+   * and drive the captured callback with synthetic records directly. */
+  const capturedObservers: Array<{
+    callback: (mutations: MutationRecord[], observer: MutationObserver) => void;
+    targets: Node[];
+  }> = [];
+
   beforeAll(() => {
-    new Function(BRIDGE_SCRIPT)();
+    const RealMutationObserver = globalThis.MutationObserver;
+    (globalThis as unknown as { MutationObserver: unknown }).MutationObserver =
+      class CapturingMutationObserver extends RealMutationObserver {
+        private readonly entry: { callback: MutationCallback; targets: Node[] };
+        constructor(callback: MutationCallback) {
+          super(callback);
+          this.entry = { callback, targets: [] };
+          capturedObservers.push(this.entry as (typeof capturedObservers)[number]);
+        }
+        override observe(target: Node, options?: MutationObserverInit) {
+          this.entry.targets.push(target);
+          super.observe(target, options);
+        }
+      };
+    try {
+      new Function(BRIDGE_SCRIPT)();
+    } finally {
+      (globalThis as unknown as { MutationObserver: unknown }).MutationObserver =
+        RealMutationObserver;
+    }
   });
+
+  /** Deliver synthetic mutation records straight to the bridge's page
+   * observer (bypassing happy-dom's broken delivery). */
+  function deliverPageMutations(records: Array<Partial<MutationRecord>>) {
+    const observer = capturedObservers[0];
+    if (!observer) throw new Error("bridge page observer was not captured");
+    observer.callback(records as MutationRecord[], null as unknown as MutationObserver);
+  }
 
   function postBridge(data: Record<string, unknown>) {
     window.dispatchEvent(
@@ -2543,10 +2580,14 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
           annotationType: "comment",
         });
         window.dispatchEvent(new Event("beforeprint"));
-        const layer = document.body.querySelector<HTMLElement>(
+        const layer = document.querySelector<HTMLElement>(
           "[data-plannotator-print-layer]",
         );
         if (!layer) throw new Error("print layer missing");
+        // On the ROOT element (not <body>): a page styling body
+        // { position: relative } would otherwise shift every stripe by
+        // body's document offset.
+        expect(layer.parentElement).toBe(document.documentElement);
         // Absolute (not fixed) so it paginates with the content.
         expect(layer.style.position).toBe("absolute");
         const stripes = Array.from(layer.children) as HTMLElement[];
@@ -2559,7 +2600,7 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
         // Highlights print; markers don't (parity with pre-overlay badges).
         expect(layer.querySelector("button")).toBeNull();
         window.dispatchEvent(new Event("afterprint"));
-        expect(document.body.querySelector("[data-plannotator-print-layer]")).toBeNull();
+        expect(document.querySelector("[data-plannotator-print-layer]")).toBeNull();
       } finally {
         (Range.prototype as { getClientRects: typeof originalGetClientRects }).getClientRects =
           originalGetClientRects;
@@ -2924,6 +2965,93 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
           originalGetClientRects;
       }
     });
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    document.body.replaceChildren();
+  });
+
+  test("the page observer watches documentElement; body swaps unlock re-search (M3 scope)", () => {
+    const observer = capturedObservers[0];
+    if (!observer) throw new Error("bridge page observer was not captured");
+    // Scope: a body-scoped observer sees NO record when the page swaps the
+    // <body> element itself (documentElement.replaceChild), permanently
+    // locking dead-target re-search behind a generation that never advances.
+    expect(observer.targets).toContain(document.documentElement);
+    for (const observed of observer.targets) {
+      expect(observed.nodeName).not.toBe("BODY");
+    }
+
+    document.body.innerHTML = "<p>Body swap text</p>";
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "swap-ann",
+      originalText: "Body swap text",
+      annotationType: "comment",
+    });
+    expect(
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "swap-ann",
+      ),
+    ).toBe(true);
+
+    // The body is swapped for an interim skeleton: the record lands on
+    // documentElement. The free retry runs against the skeleton and fails.
+    document.body.innerHTML = "<p>interim skeleton</p>";
+    deliverPageMutations([{
+      type: "childList",
+      target: document.documentElement,
+      addedNodes: [document.body] as unknown as NodeList,
+      removedNodes: [] as unknown as NodeList,
+    }]);
+    postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+    expect(
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "swap-ann",
+      ),
+    ).toBe(false);
+
+    // Overlay-only childList writes on the root (host/label/print-layer
+    // appends) must NOT bump the generation: no re-search may run.
+    const host = overlayHost();
+    if (!host) throw new Error("overlay host missing");
+    const originalCreateTreeWalker = document.createTreeWalker.bind(document);
+    let sweeps = 0;
+    (document as { createTreeWalker: typeof document.createTreeWalker }).createTreeWalker = ((
+      ...args: Parameters<typeof document.createTreeWalker>
+    ) => {
+      sweeps += 1;
+      return originalCreateTreeWalker(...args);
+    }) as typeof document.createTreeWalker;
+    try {
+      deliverPageMutations([{
+        type: "childList",
+        target: document.documentElement,
+        addedNodes: [host] as unknown as NodeList,
+        removedNodes: [] as unknown as NodeList,
+      }]);
+      postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+      postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+      expect(sweeps).toBe(0);
+    } finally {
+      (document as { createTreeWalker: typeof document.createTreeWalker }).createTreeWalker =
+        originalCreateTreeWalker;
+    }
+
+    // The text returns inside the (new) body — inside the documentElement
+    // observer's subtree — and the next real record unlocks re-search.
+    document.body.innerHTML = "<p>Body swap text</p>";
+    deliverPageMutations([{
+      type: "childList",
+      target: document.documentElement,
+      addedNodes: [document.body] as unknown as NodeList,
+      removedNodes: [] as unknown as NodeList,
+    }]);
+    postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+    expect(
+      visibleHighlights("pn-hl-comment").some(
+        (el) => el.getAttribute("data-annotation-id") === "swap-ann",
+      ),
+    ).toBe(true);
+
     postBridge({ type: "plannotator-bridge-clear-marks" });
     document.body.replaceChildren();
   });

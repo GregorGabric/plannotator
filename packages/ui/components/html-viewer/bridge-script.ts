@@ -3764,18 +3764,44 @@ export const BRIDGE_SCRIPT = `(function() {
   // IDENTITY: our own light-DOM box/label style writes must never schedule
   // the frame that caused them (that would degenerate into a rAF loop).
   var pageMutationObserver = null;
+
+  // A mutation is viewer-owned when its target is an overlay node OR it is a
+  // childList change whose added/removed nodes are ALL overlay nodes (the
+  // overlay host / hover label / print layer being appended to the root
+  // element, pinned boxes entering <body>). Those writes must neither bump
+  // the re-search generation nor schedule the reconcile frame that caused
+  // them.
+  function isOverlayOnlyMutation(mutation) {
+    if (isViewerOverlayNode(mutation.target)) return true;
+    if (mutation.type !== 'childList') return false;
+    var added = mutation.addedNodes || [];
+    var removed = mutation.removedNodes || [];
+    if (!added.length && !removed.length) return false;
+    for (var i = 0; i < added.length; i++) {
+      if (!isViewerOverlayNode(added[i])) return false;
+    }
+    for (var j = 0; j < removed.length; j++) {
+      if (!isViewerOverlayNode(removed[j])) return false;
+    }
+    return true;
+  }
+
   function watchPageMutations() {
-    if (pageMutationObserver || typeof MutationObserver === 'undefined' || !document.body) return;
+    if (pageMutationObserver || typeof MutationObserver === 'undefined' || !document.documentElement) return;
     pageMutationObserver = new MutationObserver(function(mutations) {
       for (var i = 0; i < mutations.length; i++) {
-        if (!isViewerOverlayNode(mutations[i].target)) {
+        if (!isOverlayOnlyMutation(mutations[i])) {
           domGeneration += 1; // page text may have changed: unlock dead-target re-search
           schedulePinpointReconcile();
           return;
         }
       }
     });
-    pageMutationObserver.observe(document.body, {
+    // Observe the ROOT element, not <body>: a page that swaps the <body>
+    // element itself (documentElement.replaceChild) produces no record on a
+    // body-scoped observer, permanently locking dead-target re-search behind
+    // a generation that never advances.
+    pageMutationObserver.observe(document.documentElement, {
       childList: true,
       subtree: true,
       attributes: true,
@@ -3832,13 +3858,22 @@ export const BRIDGE_SCRIPT = `(function() {
   var PRINT_HL_COMMENT = 'background:oklch(0.70 0.18 60 / 0.28);border-bottom:2px solid var(--pn-accent, #d97757);';
   var PRINT_HL_DELETION = 'background:oklch(from var(--pn-destructive, #c0392b) l c h / 0.28);background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--pn-destructive, #c0392b) calc(50% - 1px), var(--pn-destructive, #c0392b) calc(50% + 1px), transparent calc(50% + 1px));';
   var printLayerEl = null;
+  var retiredPrintLayerEl = null;
 
   function teardownPrintLayer() {
+    // Deregister the PREVIOUSLY retired layer now: its removal's mutation
+    // record has long been delivered. The layer removed below must STAY
+    // overlay-registered until then — the observer's overlay-only filter
+    // sees removal records asynchronously and must still recognize the node.
+    if (retiredPrintLayerEl) {
+      overlayNodes.delete(retiredPrintLayerEl);
+      retiredPrintLayerEl = null;
+    }
     if (!printLayerEl) return;
     try {
       if (printLayerEl.parentNode) printLayerEl.parentNode.removeChild(printLayerEl);
     } catch (ex) {}
-    overlayNodes.delete(printLayerEl);
+    retiredPrintLayerEl = printLayerEl;
     printLayerEl = null;
   }
 
@@ -3874,7 +3909,14 @@ export const BRIDGE_SCRIPT = `(function() {
       if (!layer.childNodes.length) return;
       overlayNodes.add(layer);
       printLayerEl = layer;
-      document.body.appendChild(layer);
+      // Root element, NOT <body>: a page styling body { position: relative }
+      // would make body's padding box the containing block and shift every
+      // stripe by body's document offset. On <html> the containing block is
+      // the initial containing block (matching the viewport+scroll
+      // coordinates computed above) in the overwhelmingly common case where
+      // html itself is not positioned; a positioned documentElement is
+      // accepted as out of scope.
+      (document.documentElement || document.body).appendChild(layer);
     } catch (exBuild) {
       try { teardownPrintLayer(); } catch (exDown) {}
     }
