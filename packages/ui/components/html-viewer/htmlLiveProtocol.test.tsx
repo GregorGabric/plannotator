@@ -258,6 +258,19 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
   let bridgeWindow: Window & { __plannotatorLiveConfig?: unknown };
   let bridgeDocument: Document;
 
+  // Failed dead-target searches carry a wall-clock backoff (300ms doubling
+  // to a 5s cap) on top of the generation gate. Tests asserting legitimate
+  // recovery jump the bridge's monotonic clock (performance.now resolves in
+  // the test realm's scope chain) instead of sleeping.
+  let monotonicOffsetMs = 0;
+  const realPerformanceNow = performance.now.bind(performance);
+  beforeAll(() => {
+    performance.now = () => realPerformanceNow() + monotonicOffsetMs;
+  });
+  afterAll(() => {
+    performance.now = realPerformanceNow;
+  });
+
   function postToBridge(data: Record<string, unknown>, origin: string = editorOrigin) {
     bridgeWindow.dispatchEvent(new MessageEvent('message', {
       data,
@@ -321,14 +334,19 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     expect(style!.textContent).toContain('.pn-live-probe');
   });
 
-  test('ready carries the current pageUrl, the token, and the pinned editor origin', () => {
-    const ready = parentPosts.find((p) => p.data.type === 'plannotator-bridge-ready');
-    expect(ready).toBeDefined();
-    expect(ready!.data.token).toBe(bridgeToken);
-    expect(ready!.data.pageUrl).toBe(
-      (bridgeWindow.location.pathname + bridgeWindow.location.search).slice(0, 2048),
-    );
-    expect(ready!.targetOrigin).toBe(editorOrigin);
+  test('ready carries the current pageUrl and token, posted once per listed editor origin', () => {
+    // The server cannot know which origin form (localhost vs 127.0.0.1) the
+    // editor tab was opened on: the bridge posts to every listed origin and
+    // the browser delivers only the matching one. An editor opened at
+    // 127.0.0.1 must not silently miss ready.
+    const readies = parentPosts.filter((p) => p.data.type === 'plannotator-bridge-ready');
+    expect(readies.map((p) => p.targetOrigin)).toEqual([editorOrigin, 'http://127.0.0.1:4100']);
+    for (const ready of readies) {
+      expect(ready.data.token).toBe(bridgeToken);
+      expect(ready.data.pageUrl).toBe(
+        (bridgeWindow.location.pathname + bridgeWindow.location.search).slice(0, 2048),
+      );
+    }
   });
 
   test('inbound messages without the token (or from a foreign origin) are ignored', () => {
@@ -361,14 +379,20 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     expect(bridgeDocument.querySelector('[data-plannotator-vim-ui]')).toBeNull();
   });
 
-  test('a pushState burst posts exactly one coalesced page-change', async () => {
-    const before = parentPosts.filter((p) => p.data.type === 'plannotator-bridge-page-change').length;
+  test('a pushState burst posts exactly one coalesced page-change per editor origin', async () => {
+    const changesFor = (origin: string) =>
+      parentPosts.filter(
+        (p) => p.data.type === 'plannotator-bridge-page-change' && p.targetOrigin === origin,
+      );
+    const beforePrimary = changesFor(editorOrigin).length;
+    const beforeAlternate = changesFor('http://127.0.0.1:4100').length;
     bridgeWindow.history.pushState({}, '', '/first');
     bridgeWindow.history.pushState({}, '', '/second?tab=2');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const changes = parentPosts.filter((p) => p.data.type === 'plannotator-bridge-page-change');
-    expect(changes.length).toBe(before + 1);
-    const last = changes.at(-1)!;
+    const primary = changesFor(editorOrigin);
+    expect(primary.length).toBe(beforePrimary + 1);
+    expect(changesFor('http://127.0.0.1:4100').length).toBe(beforeAlternate + 1);
+    const last = primary.at(-1)!;
     // The reported page is whatever location the environment resolved the
     // pushState to (happy-dom keeps about:blank-relative paths); the CONTRACT
     // is that it always mirrors the live location, capped at 2048.
@@ -376,6 +400,54 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
       (bridgeWindow.location.pathname + bridgeWindow.location.search).slice(0, 2048),
     );
     expect(last.data.token).toBe(bridgeToken);
-    expect(last.targetOrigin).toBe(editorOrigin);
+  });
+
+  test('a zero-target restore is kept in live mode and re-acquired when its element appears', async () => {
+    // SPA navigation race (phase 1 exit bar): the parent re-applies a page's
+    // annotations right after a route change, but a lazy route has not
+    // rendered its elements yet. The restore resolves nothing; the record
+    // must survive so the reconcile machinery re-acquires it once the
+    // element exists, instead of the pin staying invisible for the visit.
+    postToBridge({
+      type: 'plannotator-bridge-find-and-mark',
+      id: 'late-pin',
+      originalText: '',
+      annotationType: 'comment',
+      anchor: { selector: '#late-target', tagName: 'div' },
+      token: bridgeToken,
+    });
+    const applied = parentPosts.filter(
+      (p) => p.data.type === 'plannotator-bridge-mark-applied' && p.data.id === 'late-pin',
+    );
+    expect(applied.length).toBeGreaterThan(0);
+    expect(applied[0]!.data.success).toBe(false);
+    // Let the queued overlay pass run (and fail its first dead search).
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // The route finishes rendering: the anchored element appears.
+    const late = bridgeDocument.createElement('div');
+    late.id = 'late-target';
+    late.textContent = 'late content';
+    bridgeDocument.body.appendChild(late);
+    // Jump the wall-clock backoff a failed dead search installs, and bump
+    // the re-search generation deterministically via a settle event (the
+    // harness cannot rely on MutationObserver delivery timing).
+    monotonicOffsetMs += 6000;
+    late.dispatchEvent(new Event('transitionend', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // scroll-to proves the record still exists and its placeholder target
+    // re-resolved to the late element: a dropped record would scroll nothing.
+    const scrolled: Element[] = [];
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function scrollProbe(this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      postToBridge({ type: 'plannotator-bridge-scroll-to', id: 'late-pin', token: bridgeToken });
+    } finally {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    }
+    expect(scrolled).toContain(late);
   });
 });

@@ -500,6 +500,7 @@ export async function startAnnotateServer(
   // editor origins carry the port) and before onReady advertises the URL.
   let liveProxy: LiveAppProxy | null = null;
   let liveSessionToken = "";
+  let liveAppUrl = "";
 
   const server = await startBunServerOnAvailablePort((port) =>
     Bun.serve({
@@ -533,7 +534,7 @@ export async function startAnnotateServer(
               mode,
               filePath,
               sourceInfo: sourceInfo ?? liveApp.targetUrl,
-              appUrl: liveProxy ? liveProxy.origin + "/" : "",
+              appUrl: liveAppUrl,
               targetUrl: liveApp.targetUrl,
               liveToken: liveSessionToken,
               gate,
@@ -1109,6 +1110,24 @@ export async function startAnnotateServer(
       editorOrigins,
       bridgeJs,
     });
+    // Advertise the proxy under the LOCALHOST spelling, carrying the target
+    // URL's own path and query. localhost keeps the framed app same-site
+    // with the editor page (buildAdvertisedUrl advertises localhost locally)
+    // and shares the dev app's host-only localhost cookies and storage,
+    // which a 127.0.0.1 spelling would not (and Safari ITP blocks all
+    // cookies in cross-site iframes). The proxy itself still BINDS the
+    // 127.0.0.1 literal; browsers that resolve localhost to ::1 first fall
+    // back to IPv4 on the refused loopback connect. The path matters too:
+    // annotating http://localhost:5173/admin must open /admin, not the app
+    // root. PLANNOTATOR_URL_HOST is still never applied here.
+    let targetPath = "/";
+    try {
+      const parsedTarget = new URL(liveApp.targetUrl);
+      targetPath = parsedTarget.pathname + parsedTarget.search;
+    } catch {
+      targetPath = "/";
+    }
+    liveAppUrl = `http://localhost:${liveProxy.port}${targetPath}`;
   }
 
   // The cache warm must never gate the listening socket. Its async filesystem

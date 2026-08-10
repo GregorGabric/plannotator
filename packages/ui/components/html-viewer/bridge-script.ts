@@ -222,11 +222,12 @@ export const BRIDGE_SCRIPT = `(function() {
   // may run.
   var LIVE = window.__plannotatorLiveConfig || null;
   if (LIVE && (window === window.parent || window.parent !== window.top)) return;
-  // The editor posts from one concrete origin: pin outbound messages to the
-  // first listed editor origin (the one the browser was opened on) and accept
-  // any listed origin inbound. Srcdoc keeps targetOrigin '*' and no token.
-  var PARENT_ORIGIN = '*';
-  if (LIVE && LIVE.editorOrigins && LIVE.editorOrigins.length) PARENT_ORIGIN = LIVE.editorOrigins[0];
+  // The server cannot know which origin form (localhost or 127.0.0.1) the
+  // editor tab was opened on, so live outbound messages are posted once per
+  // listed editor origin: the browser delivers only the post whose
+  // targetOrigin matches the parent document and silently drops the rest,
+  // so exactly one copy arrives. Inbound accepts any listed origin. Srcdoc
+  // keeps targetOrigin '*' and no token.
   function isEditorOrigin(origin) {
     if (!LIVE) return true;
     var list = LIVE.editorOrigins || [];
@@ -234,8 +235,13 @@ export const BRIDGE_SCRIPT = `(function() {
     return false;
   }
   function postToParent(msg) {
-    if (LIVE) msg.token = LIVE.token;
-    parent.postMessage(msg, PARENT_ORIGIN);
+    if (LIVE) {
+      msg.token = LIVE.token;
+      var origins = LIVE.editorOrigins || [];
+      for (var o = 0; o < origins.length; o++) parent.postMessage(msg, origins[o]);
+      return;
+    }
+    parent.postMessage(msg, '*');
   }
   // Page identity for multi-page live sessions: annotations are stamped with
   // the page they were made on, and restore filters to the current page.
@@ -1568,9 +1574,47 @@ export const BRIDGE_SCRIPT = `(function() {
         }
       }
     }
+    if (!record.targets.length && LIVE) {
+      // Live pages render late (lazy routes, data-dependent trees): a
+      // restore that resolves nothing keeps its record, seeded with
+      // unresolved placeholder targets built from the durable params, so
+      // the mutation-driven reconcile re-acquires them when the elements
+      // appear. Srcdoc documents are static (nothing would ever
+      // re-resolve), so the record is dropped below exactly as before.
+      if (anchor) {
+        record.targets.push({
+          kind: 'element',
+          element: null,
+          anchor: anchor,
+          point: normalizedPointOf(anchor, null)
+        });
+      }
+      if (originalText) {
+        record.targets.push({
+          kind: 'range',
+          range: null,
+          text: originalText,
+          markerless: !!anchor
+        });
+      }
+      if (additionalAnchors && additionalAnchors.length) {
+        var lateCount = Math.min(additionalAnchors.length, MAX_MULTI_TARGETS);
+        for (var lateIndex = 0; lateIndex < lateCount; lateIndex++) {
+          if (!additionalAnchors[lateIndex]) continue;
+          record.targets.push({
+            kind: 'element',
+            element: null,
+            anchor: additionalAnchors[lateIndex],
+            point: normalizedPointOf(additionalAnchors[lateIndex], null)
+          });
+        }
+      }
+    }
     if (!record.targets.length) {
       // The record is removed (nothing to retry), so the per-pass dead scan
       // cannot see this id: track it separately for the unanchored report.
+      // Live sessions only reach here when the durable params seeded no
+      // placeholder targets at all (nothing will ever re-resolve).
       removeAnnRecord(id);
       restoreFailedIds.add(id);
     }

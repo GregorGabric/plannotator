@@ -1880,8 +1880,10 @@ describe("annotate server: live app mode (annotate-app)", () => {
       expect(plan.liveToken).toMatch(/^[0-9a-f]{32}$/);
       expect(plan.sharingEnabled).toBe(false);
       expect(plan.convertHtml).toBe(false);
-      // appUrl is the live loopback proxy, never an advertised-host URL.
-      expect(plan.appUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      // appUrl is the live loopback proxy under its LOCALHOST spelling (so
+      // the framed app is same-site with the editor and shares the dev
+      // app's host-only localhost cookies), never an advertised-host URL.
+      expect(plan.appUrl).toMatch(/^http:\/\/localhost:\d+\/$/);
       // No srcdoc payloads, no version fields.
       expect(plan.rawHtml).toBeUndefined();
       expect(plan.renderAs).toBeUndefined();
@@ -1907,6 +1909,25 @@ describe("annotate server: live app mode (annotate-app)", () => {
       // The proxied page carries the injected bridge script tag.
       const page = await (await fetch(appUrl)).text();
       expect(page).toContain('<script src="/__plannotator__/bridge.js"></script>');
+    } finally {
+      server.stop();
+      app.stop(true);
+    }
+  });
+
+  test("a pathful target URL keeps its path and query in appUrl", async () => {
+    // Annotating http://localhost:5173/admin/settings must open that page,
+    // not the app root.
+    const app = startFakeApp();
+    const targetUrl = `http://127.0.0.1:${app.port}/admin/settings?tab=2`;
+    const server = await startLiveServer(targetUrl);
+    try {
+      const plan = (await (await fetch(`${server.url}/api/plan`)).json()) as { appUrl: string };
+      expect(plan.appUrl).toMatch(/^http:\/\/localhost:\d+\/admin\/settings\?tab=2$/);
+      // The advertised page is reachable through the proxy under the
+      // localhost Host spelling.
+      const res = await fetch(plan.appUrl);
+      expect(res.status).toBe(200);
     } finally {
       server.stop();
       app.stop(true);
