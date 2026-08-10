@@ -407,10 +407,11 @@ export const BRIDGE_SCRIPT = `(function() {
     if (!tracked) return;
     var r = tracked.getBoundingClientRect();
     if (r.bottom < 0 || r.top > window.innerHeight) {
-      // Multi-select drafts survive scrolling: the user is expected to roam
-      // the page shift-clicking distant elements, so the primary leaving the
-      // viewport must not tear the draft down.
-      if (pendingMultiTargets.length > 0) return;
+      // Pinpoint drafts survive scrolling: the user is expected to roam the
+      // page (especially to shift-click distant elements into the draft), so
+      // the pinned primary leaving the viewport must not tear the draft down.
+      // Drag selections keep the existing close-on-scroll-out behavior.
+      if (pendingPinViaPinpoint || pendingMultiTargets.length > 0) return;
       // Selection scrolled out of view — close the toolbar (matches markdown).
       parent.postMessage({ type: PREFIX + 'selection-clear' }, '*');
       pendingSelection = null;
