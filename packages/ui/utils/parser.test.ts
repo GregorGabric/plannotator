@@ -1752,6 +1752,53 @@ describe("exportAnnotations — line labels", () => {
   });
 });
 
+describe("exportAnnotations — multi-target raw-HTML comments", () => {
+  // HTML-surface annotations have blockId '' — no blocks apply.
+  const htmlAnn = (extra: object = {}) => ({
+    blockId: "",
+    startOffset: 0,
+    endOffset: 0,
+    type: "COMMENT",
+    text: "Unify these",
+    originalText: "Primary chip",
+    ...extra,
+  });
+
+  test("additional targets are listed with label + excerpt, primary first", () => {
+    const output = exportAnnotations([], [htmlAnn({
+      htmlAdditionalTargets: [
+        { label: "Button", text: "Create", anchor: { selector: "span.btn", tagName: "span", text: "Create" } },
+        // Fail-closed target (no anchor) still exports its label + text.
+        { label: "rowchip", text: "adopted   by 1" },
+      ],
+    })]);
+    expect(output).toContain('Feedback on: "Primary chip"');
+    expect(output).toContain("Also applies to 2 more elements:");
+    expect(output.indexOf("Primary chip")).toBeLessThan(output.indexOf("Also applies"));
+    expect(output).toContain('- [Button] "Create"');
+    expect(output).toContain('- [rowchip] "adopted by 1"'); // whitespace collapsed
+  });
+
+  test("long excerpts are clipped and label-less targets still list", () => {
+    const output = exportAnnotations([], [htmlAnn({
+      htmlAdditionalTargets: [{ text: "x".repeat(300) }],
+    })]);
+    expect(output).toContain("Also applies to 1 more element:");
+    expect(output).toContain(`- "${"x".repeat(120)}…"`);
+  });
+
+  test("single-target output is byte-identical to the pre-feature format", () => {
+    const single = exportAnnotations([], [htmlAnn()]);
+    const empty = exportAnnotations([], [htmlAnn({ htmlAdditionalTargets: [] })]);
+    expect(single).toBe(empty);
+    expect(single).not.toContain("Also applies");
+    expect(single).toBe(
+      "# Plan Feedback\n\nI've reviewed this plan and have 1 piece of feedback:\n\n" +
+      "## 1. Feedback on: \"Primary chip\"\n> Unify these\n\n---\n",
+    );
+  });
+});
+
 describe("parseMarkdownToBlocks — non-markdown plain text (#1029)", () => {
   /**
    * Annotate now accepts YAML/JSON/TOML-style config files and renders them

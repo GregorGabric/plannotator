@@ -248,3 +248,307 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
     expect(added[0]!.htmlAnchor).toBeUndefined();
   });
 });
+
+describe.if(hasDom)('multi-target bridge message validation (trust boundary)', () => {
+  test('multi-target-added: well-formed DTO passes with validated anchor', () => {
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-2',
+      label: 'Button',
+      text: 'Create',
+      anchor: { selector: 'span.btn', tagName: 'span', text: 'Create' },
+    })).toEqual({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-2',
+      label: 'Button',
+      text: 'Create',
+      anchor: { selector: 'span.btn', tagName: 'span', text: 'Create' },
+    });
+  });
+
+  test('multi-target-added: missing/oversized key or text rejects the message', () => {
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      text: 'Create',
+    })).toBeNull();
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'x'.repeat(65),
+      text: 'Create',
+    })).toBeNull();
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-2',
+      text: 42,
+    })).toBeNull();
+  });
+
+  test('multi-target-added: hostile label is truncated, hostile anchor dropped, text capped', () => {
+    const parsed = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-added',
+      key: 'ht-3',
+      label: 'L'.repeat(500),
+      text: 'x'.repeat(hookModule!.MAX_SELECTION_TEXT_LENGTH + 5000),
+      anchor: { selector: 'x'.repeat(2000), tagName: 'p' },
+    }) as { label?: string; text: string; anchor?: unknown };
+    expect(parsed).not.toBeNull();
+    expect(parsed.label!.length).toBe(64);
+    expect(parsed.text.length).toBe(hookModule!.MAX_SELECTION_TEXT_LENGTH);
+    expect(parsed.anchor).toBeUndefined();
+  });
+
+  test('multi-target-removed and pointer messages validate their fields', () => {
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-removed',
+      key: 'ht-2',
+    })).toEqual({ type: 'plannotator-bridge-multi-target-removed', key: 'ht-2' });
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-multi-target-removed',
+      key: 7,
+    })).toBeNull();
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-pointer',
+      x: 12,
+      y: 34,
+    })).toEqual({ type: 'plannotator-bridge-pointer', x: 12, y: 34 });
+    expect(hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-pointer',
+      x: Infinity,
+      y: 1,
+    })).toBeNull();
+  });
+
+  test('selection: targetKey validated, targetLabel truncated', () => {
+    const rect = { top: 10, left: 10, width: 100, height: 20 };
+    const parsed = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-selection',
+      text: 'Hello',
+      rect,
+      pinpoint: true,
+      targetKey: 'ht-1',
+      targetLabel: 'Z'.repeat(200),
+    }) as { targetKey?: string; targetLabel?: string };
+    expect(parsed.targetKey).toBe('ht-1');
+    expect(parsed.targetLabel!.length).toBe(64);
+    const badKey = hookModule!.parseBridgeMessage({
+      type: 'plannotator-bridge-selection',
+      text: 'Hello',
+      rect,
+      pinpoint: true,
+      targetKey: 'x'.repeat(65),
+    }) as { targetKey?: string };
+    expect(badKey.targetKey).toBeUndefined();
+  });
+});
+
+describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () => {
+  async function mountViewer(onAdd: (ann: Annotation) => void) {
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <HtmlViewer
+          rawHtml="<html><body><p>Pinpoint target</p></body></html>"
+          annotations={[]}
+          onAddAnnotation={onAdd}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+        />,
+      );
+    });
+    const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    const post = async (data: Record<string, unknown>) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: iframe.contentWindow,
+          data,
+        }));
+      });
+    };
+    return { post };
+  }
+
+  const rect = { top: 10, left: 10, width: 120, height: 24 };
+
+  function primarySelection(overrides: Record<string, unknown> = {}) {
+    return {
+      type: 'plannotator-bridge-selection',
+      text: 'Primary text',
+      rect,
+      pinpoint: true,
+      targetKey: 'ht-1',
+      targetLabel: 'Paragraph',
+      anchor: { selector: 'p.primary', tagName: 'p', text: 'Primary text' },
+      ...overrides,
+    };
+  }
+
+  function addedTarget(key: string, text: string) {
+    return {
+      type: 'plannotator-bridge-multi-target-added',
+      key,
+      label: 'Button',
+      text,
+      anchor: { selector: `span[data-testid="${key}"]`, tagName: 'span', text },
+    };
+  }
+
+  function chips(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('[data-target-chip]'));
+  }
+
+  async function typeComment(value: string) {
+    const el = document.querySelector<HTMLTextAreaElement>('[data-comment-popover] textarea');
+    if (!el) throw new Error('composer textarea missing');
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+    await act(async () => {
+      if (setter) setter.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function save() {
+    const button = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'),
+    ).find((b) => b.textContent === 'Save');
+    if (!button) throw new Error('Save button missing');
+    await act(async () => {
+      button.click();
+    });
+  }
+
+  test('pinpoint draft renders a primary chip; shift-adds append chips and submit as ONE comment', async () => {
+    const added: Annotation[] = [];
+    const { post } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+    expect(chips().length).toBe(1);
+    expect(chips()[0]!.getAttribute('data-target-chip-primary')).toBe('true');
+
+    await post(addedTarget('ht-2', 'Create'));
+    await post(addedTarget('ht-3', 'Cancel'));
+    expect(chips().length).toBe(3);
+
+    await typeComment('Unify these buttons');
+    await save();
+
+    expect(added.length).toBe(1);
+    const ann = added[0]!;
+    expect(ann.text).toBe('Unify these buttons');
+    expect(ann.originalText).toBe('Primary text');
+    expect(ann.htmlAnchor).toEqual({ selector: 'p.primary', tagName: 'p', text: 'Primary text' });
+    expect(ann.htmlAdditionalTargets).toEqual([
+      {
+        label: 'Button',
+        text: 'Create',
+        anchor: { selector: 'span[data-testid="ht-2"]', tagName: 'span', text: 'Create' },
+      },
+      {
+        label: 'Button',
+        text: 'Cancel',
+        anchor: { selector: 'span[data-testid="ht-3"]', tagName: 'span', text: 'Cancel' },
+      },
+    ]);
+    // Draft state cleared with the submit.
+    expect(document.querySelector('[data-comment-popover]')).toBeNull();
+  });
+
+  test('single-target pinpoint submit carries NO additional-targets array', async () => {
+    const added: Annotation[] = [];
+    const { post } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    await typeComment('Just this one');
+    await save();
+    expect(added.length).toBe(1);
+    expect(added[0]!.htmlAdditionalTargets).toBeUndefined();
+  });
+
+  test('removing the primary promotes the next target onto the comment', async () => {
+    const added: Annotation[] = [];
+    const { post } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    await post(addedTarget('ht-2', 'Create'));
+    expect(chips().length).toBe(2);
+
+    // Bridge-echoed removal of the primary (shift-click toggle-off).
+    await post({ type: 'plannotator-bridge-multi-target-removed', key: 'ht-1' });
+    expect(chips().length).toBe(1);
+    expect(chips()[0]!.getAttribute('data-target-chip')).toBe('ht-2');
+    expect(chips()[0]!.getAttribute('data-target-chip-primary')).toBe('true');
+
+    await typeComment('Promoted');
+    await save();
+    expect(added.length).toBe(1);
+    expect(added[0]!.originalText).toBe('Create'); // the promoted target's text
+    expect(added[0]!.htmlAnchor).toEqual({
+      selector: 'span[data-testid="ht-2"]',
+      tagName: 'span',
+      text: 'Create',
+    });
+    expect(added[0]!.htmlAdditionalTargets).toBeUndefined();
+  });
+
+  test('removing the final target cancels the draft (composer closes)', async () => {
+    const { post } = await mountViewer(() => {});
+    await post(primarySelection());
+    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+    await post({ type: 'plannotator-bridge-multi-target-removed', key: 'ht-1' });
+    expect(document.querySelector('[data-comment-popover]')).toBeNull();
+    expect(chips().length).toBe(0);
+  });
+
+  test('chip remove button removes that target from the draft', async () => {
+    const added: Annotation[] = [];
+    const { post } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    await post(addedTarget('ht-2', 'Create'));
+    expect(chips().length).toBe(2);
+
+    const removeButton = document.querySelector<HTMLButtonElement>(
+      '[data-target-chip-remove="ht-2"]',
+    );
+    if (!removeButton) throw new Error('chip remove button missing');
+    await act(async () => {
+      removeButton.click();
+    });
+    expect(chips().length).toBe(1);
+
+    await typeComment('Back to one');
+    await save();
+    expect(added[0]!.htmlAdditionalTargets).toBeUndefined();
+  });
+
+  test('the additional-target array is capped at 16 at the trust boundary', async () => {
+    const added: Annotation[] = [];
+    const { post } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    for (let i = 0; i < 25; i++) {
+      await post(addedTarget(`flood-${i}`, `Target ${i}`));
+    }
+    expect(chips().length).toBe(17); // primary + 16
+
+    await typeComment('Capped');
+    await save();
+    expect(added[0]!.htmlAdditionalTargets!.length).toBe(16);
+  });
+
+  test('adds are ignored when no pinpoint draft is open (drag selections stay single-target)', async () => {
+    const { post } = await mountViewer(() => {});
+    // Drag selection (no pinpoint flag): opens the toolbar, arms nothing.
+    await post({
+      type: 'plannotator-bridge-selection',
+      text: 'Dragged text',
+      rect,
+    });
+    await post(addedTarget('ht-9', 'Stray'));
+    expect(chips().length).toBe(0);
+  });
+});
