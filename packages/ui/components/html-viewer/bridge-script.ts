@@ -78,6 +78,15 @@ body[data-plannotator-pinpoint-cursor] * {
     display: none !important;
   }
 }
+/* Print-parity layer: committed highlight rects re-projected into an
+ * absolute-positioned light-DOM layer built on beforeprint and torn down on
+ * afterprint (the fixed overlay cannot paginate). Guarded here so it can
+ * never flash on screen even if an afterprint teardown is missed. */
+@media screen {
+  [data-plannotator-print-layer] {
+    display: none !important;
+  }
+}
 body[data-plannotator-vim-focus-owner]:focus {
   outline: none !important;
 }
@@ -3679,6 +3688,84 @@ export const BRIDGE_SCRIPT = `(function() {
     if (tag === 'IFRAME' || tag === 'FRAME') domGeneration += 1;
     schedulePinpointReconcile();
   }, { capture: true, passive: true });
+
+  // --- Print parity ---
+  // Pre-overlay, inline annotation marks stayed visible in print ON PURPOSE
+  // (matching markdown documents); only pin badges were print-hidden. The
+  // fixed overlay cannot paginate (fixed-position layers repeat or clip per
+  // printed page), so print parity is restored by re-projecting the
+  // committed highlight rects into a temporary ABSOLUTE-positioned light-DOM
+  // layer in document coordinates (viewport rect + scroll offset), appended
+  // to <body> so it paginates with the content. Markers stay print-hidden —
+  // badges were print-hidden pre-overlay too; parity is highlights-print,
+  // markers-don't. Fail-safe: any error tears the layer down and printing
+  // proceeds without annotation visuals.
+  var PRINT_HL_COMMENT = 'background:oklch(0.70 0.18 60 / 0.28);border-bottom:2px solid var(--pn-accent, #d97757);';
+  var PRINT_HL_DELETION = 'background:oklch(from var(--pn-destructive, #c0392b) l c h / 0.28);background-image:linear-gradient(to bottom, transparent calc(50% - 1px), var(--pn-destructive, #c0392b) calc(50% - 1px), var(--pn-destructive, #c0392b) calc(50% + 1px), transparent calc(50% + 1px));';
+  var printLayerEl = null;
+
+  function teardownPrintLayer() {
+    if (!printLayerEl) return;
+    try {
+      if (printLayerEl.parentNode) printLayerEl.parentNode.removeChild(printLayerEl);
+    } catch (ex) {}
+    overlayNodes.delete(printLayerEl);
+    printLayerEl = null;
+  }
+
+  function buildPrintLayer() {
+    teardownPrintLayer();
+    try {
+      if (!annRecords.length || !document.body) return;
+      var layer = document.createElement('div');
+      layer.setAttribute('data-plannotator-print-layer', '');
+      layer.style.cssText = 'position:absolute;left:0;top:0;width:0;height:0;overflow:visible;pointer-events:none;';
+      var sx = window.scrollX || 0;
+      var sy = window.scrollY || 0;
+      for (var recordIndex = 0; recordIndex < annRecords.length; recordIndex++) {
+        var record = annRecords[recordIndex];
+        refreshRecordTargets(record);
+        for (var targetIndex = 0; targetIndex < record.targets.length; targetIndex++) {
+          var target = record.targets[targetIndex];
+          if (target.kind !== 'range' || !rangeAlive(target.range)) continue;
+          var geometry = rangeVisualGeometry(target.range);
+          for (var i = 0; i < geometry.paint.length; i++) {
+            var rect = geometry.paint[i];
+            var div = document.createElement('div');
+            div.style.cssText = 'position:absolute;pointer-events:none;border-radius:2px;box-sizing:border-box;'
+              + (record.annType === 'deletion' ? PRINT_HL_DELETION : PRINT_HL_COMMENT);
+            div.style.left = (rect.left + sx) + 'px';
+            div.style.top = (rect.top + sy) + 'px';
+            div.style.width = (rect.width || 0) + 'px';
+            div.style.height = (rect.height || 0) + 'px';
+            layer.appendChild(div);
+          }
+        }
+      }
+      if (!layer.childNodes.length) return;
+      overlayNodes.add(layer);
+      printLayerEl = layer;
+      document.body.appendChild(layer);
+    } catch (exBuild) {
+      try { teardownPrintLayer(); } catch (exDown) {}
+    }
+  }
+
+  window.addEventListener('beforeprint', buildPrintLayer);
+  window.addEventListener('afterprint', teardownPrintLayer);
+  if (typeof window.matchMedia === 'function') {
+    // Safari fires the print media-query transition without beforeprint in
+    // some paths; mirror the layer lifecycle on it.
+    try {
+      var printMedia = window.matchMedia('print');
+      var onPrintMediaChange = function(mediaEvent) {
+        if (mediaEvent && mediaEvent.matches) buildPrintLayer();
+        else teardownPrintLayer();
+      };
+      if (printMedia.addEventListener) printMedia.addEventListener('change', onPrintMediaChange);
+      else if (printMedia.addListener) printMedia.addListener(onPrintMediaChange);
+    } catch (exMedia) {}
+  }
 
   function onReady() {
     if (typeof ResizeObserver !== 'undefined' && document.body) {
