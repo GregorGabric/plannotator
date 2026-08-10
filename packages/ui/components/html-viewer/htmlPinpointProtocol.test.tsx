@@ -45,16 +45,16 @@ describe.if(hasDom)('parseHtmlElementAnchor (validated DTO)', () => {
       .toEqual({ selector: 'main', tagName: 'main' });
   });
 
-  test('accepts a shape-signature snapshot for text-less elements', () => {
-    // Text-less elements (icon buttons) store a '[[pn-shape]]'-prefixed
-    // signature in the text field; it rides through the same validated DTO
-    // and the same 400-char cap as ordinary text snapshots.
-    const shape = '[[pn-shape]]span|icon-close|0|2x2';
+  test('accepts an empty text snapshot (stable-identity text-less anchors)', () => {
+    // Text-less elements anchor only through a stable-identity selector
+    // (#id / data-* identity attrs) and carry an empty snapshot; the bridge
+    // treats an empty snapshot on a WEAK selector as a rejection at restore
+    // time, so passing it through the DTO is safe.
     expect(hookModule!.parseHtmlElementAnchor({
-      selector: 'span.icon-close',
+      selector: 'span[data-testid="close-btn"]',
       tagName: 'span',
-      text: shape,
-    })).toEqual({ selector: 'span.icon-close', tagName: 'span', text: shape });
+      text: '',
+    })).toEqual({ selector: 'span[data-testid="close-btn"]', tagName: 'span', text: '' });
   });
 
   test('rejects non-records and missing/empty fields', () => {

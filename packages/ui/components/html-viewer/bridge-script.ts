@@ -909,7 +909,7 @@ export const BRIDGE_SCRIPT = `(function() {
     var role = el.getAttribute && el.getAttribute('role');
     if (role && role.trim()) return truncateLabel(role.trim());
     var tokens = meaningfulClassTokens(el);
-    if (tokens.length) return tokens.join(' ');
+    if (tokens.length) return truncateLabel(tokens.join(' '));
     var text = (el.textContent || '').replace(/\\s+/g, ' ').trim();
     if (text && text.length <= MAX_HOVER_LABEL) return text;
     return 'container';
@@ -1015,6 +1015,10 @@ export const BRIDGE_SCRIPT = `(function() {
     if (pinpointReconcileRaf) return;
     pinpointReconcileRaf = requestAnimationFrame(function() {
       pinpointReconcileRaf = 0;
+      // Same point, possibly a different element after a scroll, resize, or
+      // layout-changing mutation (the body ResizeObserver also lands here) —
+      // the last-position cache must never answer the next probe.
+      invalidatePointerHitCache();
       renderPinBadges();
       if (pendingPinEl && pendingPinEl.isConnected) {
         positionPinpointBox(pendingPinEl);
@@ -1023,9 +1027,6 @@ export const BRIDGE_SCRIPT = `(function() {
       if (currentInputMethod !== 'pinpoint') return;
       if (vimEnabled && vimPhase !== 'inactive') return;
       if (lastPointer) {
-        // Same point, possibly a different element after the scroll — the
-        // last-position cache must not answer this probe.
-        invalidatePointerHitCache();
         updatePinpointHover(lastPointer.x, lastPointer.y, pinpointHover);
       }
     });
@@ -1125,27 +1126,6 @@ export const BRIDGE_SCRIPT = `(function() {
     return text.length > 180 ? text.slice(0, 180) : text;
   }
 
-  // Text-less elements (icon buttons, decorative chips) have no snapshot to
-  // verify against, so their weak anchors carry a shape signature instead:
-  // tagName + sorted class list + child count + 16px-bucketed width/height,
-  // stored in the anchor's text field behind a distinguishing prefix and
-  // compared whole-string on restore — the same fail-closed rule as text.
-  var ANCHOR_SHAPE_PREFIX = '[[pn-shape]]';
-
-  function anchorShapeSignature(el) {
-    var classes = [];
-    if (el.classList) {
-      for (var i = 0; i < el.classList.length; i++) classes.push(el.classList[i]);
-    }
-    classes.sort();
-    var r = el.getBoundingClientRect();
-    return ANCHOR_SHAPE_PREFIX
-      + el.tagName.toLowerCase()
-      + '|' + classes.join('.')
-      + '|' + (el.children ? el.children.length : 0)
-      + '|' + Math.round(r.width / 16) + 'x' + Math.round(r.height / 16);
-  }
-
   function uniquelySelects(selector, el) {
     try {
       var matches = document.querySelectorAll(selector);
@@ -1243,9 +1223,14 @@ export const BRIDGE_SCRIPT = `(function() {
     var selector = buildAnchorSelector(el);
     if (!selector) return null;
     var snapshot = anchorTextSnapshot(el);
-    // No text to snapshot: store the shape signature so a weak anchor for an
-    // icon button is verifiable instead of automatically dead.
-    if (!snapshot) snapshot = anchorShapeSignature(el);
+    // Text-less elements anchor ONLY through a stable-identity rung (#id or
+    // an author-controlled data-* identity attribute). A weak (positional /
+    // class) selector has nothing to verify against — identical siblings
+    // share every structural trait, so any derived signature would validate
+    // the WRONG element after a sibling is inserted or removed. A
+    // wrong-binding anchor is worse than no anchor: ship none and fail
+    // closed (the pin simply doesn't restore).
+    if (!snapshot && !anchorHasStableIdentity(selector, el)) return null;
     return {
       selector: selector,
       tagName: el.tagName.toLowerCase(),
@@ -1288,15 +1273,11 @@ export const BRIDGE_SCRIPT = `(function() {
     if (el.tagName.toLowerCase() !== anchor.tagName.toLowerCase()) return null;
     if (!anchorHasStableIdentity(anchor.selector, el)) {
       // Weak (positional / class / behavioral-attribute) anchor: the captured
-      // snapshot must exist and still match, or the anchor is rejected and
+      // text snapshot must exist and still match, or the anchor is rejected and
       // restoration falls back to text search. A missing or empty snapshot is a
-      // rejection, not an exemption. Shape-signature snapshots (text-less
-      // elements) verify the same fail-closed way: whole-string comparison
-      // against the candidate's re-derived signature.
+      // rejection, not an exemption.
       if (typeof anchor.text !== 'string' || !anchor.text) return null;
-      if (anchor.text.indexOf(ANCHOR_SHAPE_PREFIX) === 0) {
-        if (anchorShapeSignature(el) !== anchor.text) return null;
-      } else if (anchorTextSnapshot(el) !== anchor.text) return null;
+      if (anchorTextSnapshot(el) !== anchor.text) return null;
     }
     return el;
   }
@@ -1347,9 +1328,8 @@ export const BRIDGE_SCRIPT = `(function() {
     }
     var elText = capSelectionText((el.textContent || '').trim());
     // Text-less elements (icon buttons, decorative chips, empty containers)
-    // are still annotatable: describe the element instead of quoting it. The
-    // shape-signature anchor keeps restoration verifiable.
-    if (!elText) elText = '[element: ' + pinpointHoverLabel(el) + ']';
+    // are still annotatable: describe the element instead of quoting it.
+    if (!elText) elText = capSelectionText('[element: ' + pinpointHoverLabel(el) + ']');
     var r = el.getBoundingClientRect();
     pendingSelection = { element: true };
     pendingRange = null;
@@ -1364,9 +1344,12 @@ export const BRIDGE_SCRIPT = `(function() {
 
   document.addEventListener('click', function(e) {
     if (currentInputMethod !== 'pinpoint') return;
-    // Existing marks are handled by the mark-click listener; pin badges own
-    // their clicks.
-    if (e.target && e.target.closest && e.target.closest('.annotation-highlight[data-bind-id],[data-plannotator-pin-badge]')) return;
+    // Existing marks are handled by the mark-click listener.
+    if (e.target && e.target.closest && e.target.closest('.annotation-highlight[data-bind-id]')) return;
+    // Real pin badges (and any other viewer overlay) own their clicks —
+    // checked by IDENTITY, not selector, so a page element spoofing
+    // [data-plannotator-pin-badge] stays an ordinary annotatable target.
+    if (isViewerOverlayNode(e.target)) return;
     // Click what the hover box shows: the currently hovered element is the
     // target the user aimed at. Fall back to a fresh hit-test at the click
     // point (e.g. a click with no preceding mousemove).
