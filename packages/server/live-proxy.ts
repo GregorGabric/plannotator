@@ -61,6 +61,20 @@ type LiveProxySocketData = {
   protocols: string | null;
 };
 
+/** True for hostnames that name the local loopback: localhost, the IPv6
+ * loopback, or a LITERAL IPv4 address in 127.0.0.0/8. A string-prefix test
+ * would also match DNS names like 127.0.0.1.evil.example that resolve
+ * anywhere, so the 127/8 rung requires exactly four numeric octets. WHATWG
+ * URL parsing canonicalizes numeric spellings (127.1, 0177.0.0.1,
+ * 2130706433) to dotted-decimal before a hostname reaches this check. */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
+  const octets = /^127\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!octets) return false;
+  return Number(octets[1]) <= 255 && Number(octets[2]) <= 255 && Number(octets[3]) <= 255;
+}
+
 /** True when the Host header names this proxy on loopback. */
 export function isAllowedProxyHost(hostHeader: string | null, port: number): boolean {
   if (!hostHeader) return false;
@@ -69,6 +83,41 @@ export function isAllowedProxyHost(hostHeader: string | null, port: number): boo
     || hostHeader === `localhost:${port}`
     || hostHeader === `[::1]:${port}`
   );
+}
+
+/** True when a browser-supplied Origin header names this proxy itself. */
+export function isAllowedProxyOrigin(origin: string, port: number): boolean {
+  return (
+    origin === `http://127.0.0.1:${port}`
+    || origin === `http://localhost:${port}`
+    || origin === `http://[::1]:${port}`
+  );
+}
+
+/**
+ * Rewrite an absolute redirect Location that names the upstream dev server
+ * back to the proxy origin, or return null to pass it through untouched.
+ * The match is by loopback hostname plus the upstream's port, not a string
+ * prefix, so it covers alternate loopback spellings (target given as
+ * localhost:5173, Location saying 127.0.0.1:5173) and never mangles
+ * prefix look-alikes (localhost:51730 is a different service). Relative
+ * Locations already resolve against the proxy origin and pass through.
+ */
+export function rewriteLoopbackLocation(
+  location: string,
+  target: URL,
+  proxyOrigin: string,
+): string | null {
+  if (!/^http:\/\//i.test(location)) return null;
+  let locUrl: URL;
+  try {
+    locUrl = new URL(location);
+  } catch {
+    return null;
+  }
+  if (!isLoopbackHostname(locUrl.hostname)) return null;
+  if ((locUrl.port || "80") !== (target.port || "80")) return null;
+  return proxyOrigin + locUrl.pathname + locUrl.search + locUrl.hash;
 }
 
 /** Document-intent requests get Accept-Encoding stripped so HTML arrives
@@ -290,6 +339,17 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
       // Reserved namespace: never forwarded upstream.
       if (url.pathname.startsWith(LIVE_PROXY_RESERVED_PREFIX)) {
         if (url.pathname === LIVE_PROXY_BRIDGE_PATH && (req.method === "GET" || req.method === "HEAD")) {
+          // The bridge body embeds the per-session token, and a <script src>
+          // include is not subject to CORS: a hostile page that guesses the
+          // proxy port could otherwise read the token off the config global.
+          // Browsers stamp subresource requests with Sec-Fetch-Site; only the
+          // proxied page's own same-origin include (and direct navigation)
+          // passes. Header-less clients (curl, tests) pass; this is defense
+          // in depth on top of the parent's source and origin checks.
+          const fetchSite = req.headers.get("sec-fetch-site");
+          if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+            return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+          }
           return new Response(req.method === "HEAD" ? null : opts.bridgeJs, {
             headers: {
               "Content-Type": "text/javascript; charset=utf-8",
@@ -302,6 +362,17 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
 
       // WebSocket passthrough (HMR): upgrade after Host validation.
       if ((req.headers.get("upgrade") ?? "").toLowerCase() === "websocket") {
+        // Browsers stamp cross-site WS connects with their Origin, and the
+        // upstream connection below carries no Origin header at all. Piping
+        // a hostile page's connect through would launder it into exactly the
+        // origin-less shape dev servers trust as a non-browser client
+        // (bypassing e.g. Vite's CVE-2025-24010 cross-site WS protection).
+        // An Origin, when present, must name this proxy itself; header-less
+        // clients (non-browser tools) pass.
+        const wsOrigin = req.headers.get("origin");
+        if (wsOrigin !== null && !isAllowedProxyOrigin(wsOrigin, srv.port!)) {
+          return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+        }
         const upgraded = srv.upgrade(req, {
           data: {
             upstream: null,
@@ -351,12 +422,15 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
 
       const responseHeaders = new Headers(upstreamResponse.headers);
       stripHopByHop(responseHeaders);
-      responseHeaders.delete("x-frame-options");
 
       const location = responseHeaders.get("location");
-      if (location && location.startsWith(targetOrigin)) {
-        const proxyOrigin = `http://${LOOPBACK_HOST}:${srv.port}`;
-        responseHeaders.set("location", proxyOrigin + location.slice(targetOrigin.length));
+      if (location) {
+        const rewritten = rewriteLoopbackLocation(
+          location,
+          target,
+          `http://${LOOPBACK_HOST}:${srv.port}`,
+        );
+        if (rewritten !== null) responseHeaders.set("location", rewritten);
       }
 
       const contentType = responseHeaders.get("content-type") ?? "";
@@ -367,7 +441,12 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
         // frame-ancestors policy. Amending an arbitrary CSP correctly for the
         // injected script plus a runtime <style> is unpredictable; dev
         // servers almost never ship CSP, and this is a dev-only loopback
-        // proxy. Non-HTML responses keep their CSP.
+        // proxy. Non-HTML responses keep their CSP, and their
+        // X-Frame-Options: the anti-framing strip exists solely so the
+        // editor can frame the app document, and the frame-ancestors
+        // replacement lands only on HTML, so a non-HTML response must keep
+        // whatever framing protection the app shipped with it.
+        responseHeaders.delete("x-frame-options");
         responseHeaders.delete("content-security-policy");
         responseHeaders.delete("content-security-policy-report-only");
         responseHeaders.set("content-security-policy", frameAncestors);

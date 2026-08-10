@@ -17,7 +17,10 @@ import {
   LIVE_PROXY_BRIDGE_PATH,
   createHtmlInjector,
   isAllowedProxyHost,
+  isAllowedProxyOrigin,
   isDocumentIntentRequest,
+  isLoopbackHostname,
+  rewriteLoopbackLocation,
   startLiveAppProxy,
   type LiveAppProxy,
 } from "./live-proxy";
@@ -95,6 +98,13 @@ beforeAll(() => {
           return new Response("console.log('asset');", {
             headers: { "Content-Type": "text/javascript", "X-Asset-Header": "kept" },
           });
+        case "/xfo-asset":
+          // Non-HTML response that relies on X-Frame-Options: the proxy only
+          // strips anti-framing where it replaces it (HTML), so this must
+          // pass through with the app's protection intact.
+          return new Response("{\"ok\":true}", {
+            headers: { "Content-Type": "application/json", "X-Frame-Options": "DENY" },
+          });
         case "/binary":
           return new Response(BINARY_BYTES, {
             headers: { "Content-Type": "application/octet-stream" },
@@ -148,6 +158,20 @@ beforeAll(() => {
           return new Response(null, {
             status: 302,
             headers: { Location: "/after-redirect" },
+          });
+        case "/redirect-alt-spelling":
+          // Upstream names its own origin with the OTHER loopback spelling
+          // (target is 127.0.0.1:<port>, Location says localhost:<port>).
+          return new Response(null, {
+            status: 302,
+            headers: { Location: `http://localhost:${srv.port}/after-redirect?x=1` },
+          });
+        case "/redirect-lookalike":
+          // Another local service whose port merely EXTENDS the target port
+          // as a string prefix (5173 vs 51730): must pass through untouched.
+          return new Response(null, {
+            status: 302,
+            headers: { Location: `http://127.0.0.1:${srv.port}0/auth` },
           });
         default:
           return new Response("upstream 404", { status: 404 });
@@ -248,6 +272,14 @@ describe("live proxy: header hygiene", () => {
     expect(res.headers.get("x-asset-header")).toBe("kept");
     expect(res.headers.get("content-security-policy")).toBeNull();
   });
+
+  test("non-HTML responses keep their X-Frame-Options", async () => {
+    // The anti-framing strip exists only where frame-ancestors replaces it
+    // (HTML). A sniffable-but-not-text/html response must not lose the
+    // clickjacking protection its app shipped.
+    const res = await fetch(proxyUrl("/xfo-asset"));
+    expect(res.headers.get("x-frame-options")).toBe("DENY");
+  });
 });
 
 describe("live proxy: passthrough fidelity", () => {
@@ -306,6 +338,18 @@ describe("live proxy: passthrough fidelity", () => {
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/after-redirect");
   });
+
+  test("a Location naming the upstream under its other loopback spelling is rewritten", async () => {
+    const res = await fetch(proxyUrl("/redirect-alt-spelling"), { redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(`${proxy.origin}/after-redirect?x=1`);
+  });
+
+  test("a Location whose port merely extends the target port passes through untouched", async () => {
+    const res = await fetch(proxyUrl("/redirect-lookalike"), { redirect: "manual" });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(`http://127.0.0.1:${upstream.port}0/auth`);
+  });
 });
 
 describe("live proxy: WebSocket passthrough", () => {
@@ -341,6 +385,45 @@ describe("live proxy: WebSocket passthrough", () => {
     await gotBoth;
     expect(received[0]).toBe("hello-through-proxy");
     expect(Buffer.from(received[1] as Uint8Array).equals(Buffer.from([9, 8, 7]))).toBe(true);
+    const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
+    ws.close();
+    await closed;
+  });
+
+  test("a WS upgrade with a foreign Origin is refused before touching upstream", async () => {
+    // A hostile page's cross-site connect must not be laundered into the
+    // origin-less shape dev servers trust as a non-browser client.
+    upstreamHits = [];
+    const raw = await rawHttpRequest(proxy.port, [
+      "GET /ws-echo HTTP/1.1",
+      `Host: 127.0.0.1:${proxy.port}`,
+      "Upgrade: websocket",
+      "Connection: Upgrade",
+      "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+      "Sec-WebSocket-Version: 13",
+      "Origin: https://evil.example",
+    ]);
+    expect(raw.head.startsWith("http/1.1 403")).toBe(true);
+    expect(upstreamHits).toEqual([]);
+  });
+
+  test("a WS upgrade with the proxy's own Origin still echoes through", async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${proxy.port}/ws-echo`, {
+      headers: { origin: `http://127.0.0.1:${proxy.port}` },
+    } as unknown as string[]);
+    const echoed = await new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("ws echo timed out")), 5000);
+      ws.addEventListener("message", (event) => {
+        clearTimeout(timer);
+        resolve(String(event.data));
+      });
+      ws.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("ws error"));
+      });
+      ws.addEventListener("open", () => ws.send("origin-ok"));
+    });
+    expect(echoed).toBe("origin-ok");
     const closed = new Promise<void>((resolve) => ws.addEventListener("close", () => resolve()));
     ws.close();
     await closed;
@@ -394,6 +477,30 @@ describe("live proxy: security posture", () => {
     expect(res.status).toBe(404);
     expect(upstreamHits).toEqual([]);
   });
+
+  test("bridge.js refuses cross-site and same-site subresource fetches (token exposure)", async () => {
+    // A hostile page that guesses the port must not read the token via an
+    // off-origin <script src> include; browsers stamp those cross-site.
+    const crossSite = await fetch(proxyUrl(LIVE_PROXY_BRIDGE_PATH), {
+      headers: { "sec-fetch-site": "cross-site" },
+    });
+    expect(crossSite.status).toBe(403);
+    // Another localhost port's page is same-SITE but not same-origin.
+    const sameSite = await fetch(proxyUrl(LIVE_PROXY_BRIDGE_PATH), {
+      headers: { "sec-fetch-site": "same-site" },
+    });
+    expect(sameSite.status).toBe(403);
+    // The proxied page's own include is same-origin; direct navigation is
+    // none; header-less clients pass.
+    const sameOrigin = await fetch(proxyUrl(LIVE_PROXY_BRIDGE_PATH), {
+      headers: { "sec-fetch-site": "same-origin" },
+    });
+    expect(sameOrigin.status).toBe(200);
+    const navigation = await fetch(proxyUrl(LIVE_PROXY_BRIDGE_PATH), {
+      headers: { "sec-fetch-site": "none" },
+    });
+    expect(navigation.status).toBe(200);
+  });
 });
 
 describe("live proxy: unit helpers", () => {
@@ -419,6 +526,48 @@ describe("live proxy: unit helpers", () => {
     const html = out.join("");
     expect(html.split("<INJ>").length - 1).toBe(1);
     expect(html).toContain("<head><INJ>");
+  });
+
+  test("isLoopbackHostname requires literal 127/8 IPv4, never a string prefix", () => {
+    expect(isLoopbackHostname("localhost")).toBe(true);
+    expect(isLoopbackHostname("LOCALHOST")).toBe(true);
+    expect(isLoopbackHostname("::1")).toBe(true);
+    expect(isLoopbackHostname("[::1]")).toBe(true);
+    expect(isLoopbackHostname("127.0.0.1")).toBe(true);
+    expect(isLoopbackHostname("127.255.255.255")).toBe(true);
+    expect(isLoopbackHostname("127.0.0.1.evil.example")).toBe(false);
+    expect(isLoopbackHostname("127.evil.example")).toBe(false);
+    expect(isLoopbackHostname("127.0.0")).toBe(false);
+    expect(isLoopbackHostname("127.0.0.256")).toBe(false);
+    expect(isLoopbackHostname("128.0.0.1")).toBe(false);
+    expect(isLoopbackHostname("localhost.evil.example")).toBe(false);
+  });
+
+  test("isAllowedProxyOrigin accepts only this proxy's own loopback origins", () => {
+    expect(isAllowedProxyOrigin("http://127.0.0.1:5000", 5000)).toBe(true);
+    expect(isAllowedProxyOrigin("http://localhost:5000", 5000)).toBe(true);
+    expect(isAllowedProxyOrigin("http://[::1]:5000", 5000)).toBe(true);
+    expect(isAllowedProxyOrigin("http://127.0.0.1:5001", 5000)).toBe(false);
+    expect(isAllowedProxyOrigin("https://evil.example", 5000)).toBe(false);
+    expect(isAllowedProxyOrigin("null", 5000)).toBe(false);
+  });
+
+  test("rewriteLoopbackLocation matches by loopback host + port, with boundaries", () => {
+    const target = new URL("http://localhost:5173");
+    const proxyOrigin = "http://127.0.0.1:9000";
+    // Same server, either spelling, boundary respected.
+    expect(rewriteLoopbackLocation("http://localhost:5173/a?b#c", target, proxyOrigin))
+      .toBe("http://127.0.0.1:9000/a?b#c");
+    expect(rewriteLoopbackLocation("http://127.0.0.1:5173/x", target, proxyOrigin))
+      .toBe("http://127.0.0.1:9000/x");
+    expect(rewriteLoopbackLocation("http://localhost:5173", target, proxyOrigin))
+      .toBe("http://127.0.0.1:9000/");
+    // Prefix look-alike port, other ports, other hosts, https, relative: untouched.
+    expect(rewriteLoopbackLocation("http://localhost:51730/auth", target, proxyOrigin)).toBeNull();
+    expect(rewriteLoopbackLocation("http://localhost:3000/", target, proxyOrigin)).toBeNull();
+    expect(rewriteLoopbackLocation("http://evil.example:5173/", target, proxyOrigin)).toBeNull();
+    expect(rewriteLoopbackLocation("https://localhost:5173/", target, proxyOrigin)).toBeNull();
+    expect(rewriteLoopbackLocation("/relative", target, proxyOrigin)).toBeNull();
   });
 
   test("createHtmlInjector does not treat <header> as a head open tag", () => {

@@ -11,18 +11,43 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { isLoopbackHostname, resolveAnnotateTarget } from "./annotate-resolution";
 
 let fakeApp: ReturnType<typeof Bun.serve>;
+let otherApp: ReturnType<typeof Bun.serve>;
 let htmlUrl: string;
 let jsonUrl: string;
 let unreachableUrl: string;
 
 beforeAll(() => {
+  // A second loopback service on a DIFFERENT port: the probe's off-origin
+  // redirect rule is exercised without any real external fetch.
+  otherApp = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return new Response(
+        "<html><head><title>portal</title></head><body><h1>OffOriginPortal</h1></body></html>",
+        { headers: { "Content-Type": "text/html" } },
+      );
+    },
+  });
   fakeApp = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(req) {
+    fetch(req, srv) {
       const url = new URL(req.url);
       if (url.pathname === "/api") {
         return Response.json({ ok: true });
+      }
+      if (url.pathname === "/redirect-same") {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `http://127.0.0.1:${srv.port}/` },
+        });
+      }
+      if (url.pathname === "/redirect-away") {
+        return new Response(null, {
+          status: 302,
+          headers: { Location: `http://127.0.0.1:${otherApp.port}/` },
+        });
       }
       return new Response(
         "<html><head><title>dev app</title></head><body><h1>App</h1></body></html>",
@@ -38,6 +63,7 @@ beforeAll(() => {
 
 afterAll(() => {
   fakeApp.stop(true);
+  otherApp.stop(true);
 });
 
 function resolve(rawFilePath: string, overrides: { forceApp?: boolean; forceStatic?: boolean } = {}) {
@@ -67,6 +93,18 @@ describe("isLoopbackHostname", () => {
     expect(isLoopbackHostname("192.168.1.10")).toBe(false);
     expect(isLoopbackHostname("localhost.evil.example")).toBe(false);
     expect(isLoopbackHostname("128.0.0.1")).toBe(false);
+  });
+
+  test("rejects 127.-prefixed DNS names: only literal 127/8 IPv4 addresses count", () => {
+    // A string-prefix test would classify these attacker-resolvable domains
+    // as loopback and proxy an off-box origin.
+    expect(isLoopbackHostname("127.0.0.1.evil.example")).toBe(false);
+    expect(isLoopbackHostname("127.evil.example")).toBe(false);
+    expect(isLoopbackHostname("127.example.com")).toBe(false);
+    // Malformed near-literals are not literals either.
+    expect(isLoopbackHostname("127.0.0")).toBe(false);
+    expect(isLoopbackHostname("127.0.0.256")).toBe(false);
+    expect(isLoopbackHostname("127.0.0.1.2")).toBe(false);
   });
 });
 
@@ -147,6 +185,56 @@ describe("annotate URL resolution: live app probe", () => {
     if (!result.ok) {
       expect(result.notFound).toBe(false);
       expect(result.message).toContain("Failed to fetch URL");
+    }
+  });
+
+  test("a 127.-prefixed DNS name is not loopback: --app rejects it before any probe", async () => {
+    const result = await resolve("http://127.0.0.1.evil.example:5173/", { forceApp: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("--app requires a localhost/loopback URL");
+    }
+  });
+
+  test("--app on a non-URL target fails loudly instead of being swallowed", async () => {
+    const result = await resolve("notes.md", { forceApp: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.notFound).toBe(false);
+      expect(result.message).toContain("--app requires a URL target");
+    }
+  });
+
+  test("a same-origin redirect keeps the target live-eligible", async () => {
+    const result = await resolve(`http://127.0.0.1:${fakeApp.port}/redirect-same`);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.liveApp).toBe(true);
+    }
+  });
+
+  test("a redirect off the loopback origin never becomes a live session", async () => {
+    // The live surface would be dead on arrival (the iframe immediately
+    // navigates off the proxy), so eligibility is judged on the FINAL
+    // response URL and the target falls through to the static pipeline.
+    // Here that pipeline's own SSRF guard then rejects the cross-port
+    // loopback redirect; its error surfaces verbatim, exactly like any
+    // other static-pipeline terminal state. The invariant under test is
+    // that no live session starts.
+    const result = await resolve(`http://127.0.0.1:${fakeApp.port}/redirect-away`);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.notFound).toBe(false);
+      expect(result.message).toContain("Failed to fetch URL");
+    }
+  });
+
+  test("--app on an off-origin redirect fails naming the destination", async () => {
+    const result = await resolve(`http://127.0.0.1:${fakeApp.port}/redirect-away`, { forceApp: true });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("redirected off its loopback origin");
+      expect(result.message).toContain(String(otherApp.port));
     }
   });
 });

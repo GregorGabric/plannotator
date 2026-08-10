@@ -33,6 +33,7 @@ import {
   resolveUserPath,
 } from "@plannotator/shared/resolve-file";
 import { isConvertedSource, urlToMarkdown } from "@plannotator/shared/url-to-markdown";
+import { isLoopbackHostname } from "@plannotator/server/live-proxy";
 
 export interface AnnotateResolutionSuccess {
   ok: true;
@@ -60,16 +61,11 @@ export type AnnotateResolutionResult =
   | AnnotateResolutionSuccess
   | AnnotateResolutionFailure;
 
-/** True for hostnames the live-app probe treats as loopback. */
-export function isLoopbackHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  return (
-    host === "localhost"
-    || host === "::1"
-    || host === "[::1]"
-    || host.startsWith("127.")
-  );
-}
+/** The loopback gate for the live-app probe: the proxy-side predicate is the
+ * single source of truth (localhost, IPv6 loopback, or a LITERAL IPv4
+ * address in 127.0.0.0/8, never a string prefix, which DNS names like
+ * 127.0.0.1.evil.example would satisfy). Re-exported for the tests. */
+export { isLoopbackHostname };
 
 export async function resolveAnnotateTarget(options: {
   rawFilePath: string;
@@ -106,6 +102,16 @@ export async function resolveAnnotateTarget(options: {
   // --- URL annotation ---
   const isUrl = /^https?:\/\//i.test(filePath);
 
+  // --app is contracted to fail loudly whenever it cannot apply; a file or
+  // folder target silently swallowing it would hide the flag's typo'd use.
+  if (!isUrl && forceApp) {
+    return {
+      ok: false,
+      notFound: false,
+      message: "--app requires a URL target (a running local app, e.g. http://localhost:5173)",
+    };
+  }
+
   if (isUrl) {
     // --- Live app detection (phase 1: Bun server + Claude Code CLI only) ---
     // Loopback http URLs default to LIVE mode when a quick probe returns an
@@ -139,6 +145,7 @@ export async function resolveAnnotateTarget(options: {
     if (loopback && parsedUrl?.protocol === "http:" && !forceStatic) {
       let liveEligible = false;
       let probeError: string | null = null;
+      let probeRedirectedTo: string | null = null;
       try {
         const probe = await fetch(filePath, {
           headers: { accept: "text/html" },
@@ -146,7 +153,23 @@ export async function resolveAnnotateTarget(options: {
           signal: AbortSignal.timeout(3000),
         });
         const contentType = probe.headers.get("content-type") ?? "";
-        liveEligible = probe.status < 500 && contentType.includes("text/html");
+        // Live eligibility is judged on the FINAL response after redirects.
+        // A loopback URL that 302s off its own origin (auth portal, tunnel
+        // splash page, another local service) must not open a live session
+        // whose iframe immediately navigates off the proxy; same-server
+        // redirects (/ to /login) stay live-eligible.
+        let finalOnOrigin = false;
+        try {
+          const finalUrl = new URL(probe.url || filePath);
+          finalOnOrigin =
+            finalUrl.protocol === "http:"
+            && isLoopbackHostname(finalUrl.hostname)
+            && (finalUrl.port || "80") === (parsedUrl.port || "80");
+          if (!finalOnOrigin) probeRedirectedTo = probe.url;
+        } catch {
+          finalOnOrigin = false;
+        }
+        liveEligible = probe.status < 500 && contentType.includes("text/html") && finalOnOrigin;
       } catch (err) {
         probeError = err instanceof Error ? err.message : String(err);
       }
@@ -169,7 +192,9 @@ export async function resolveAnnotateTarget(options: {
           notFound: false,
           message: probeError !== null
             ? `--app: could not reach ${filePath}: ${probeError}`
-            : `--app: ${filePath} did not return an HTML page`,
+            : probeRedirectedTo !== null
+              ? `--app: ${filePath} redirected off its loopback origin (${probeRedirectedTo}); live mode requires the app to serve HTML from the probed origin`
+              : `--app: ${filePath} did not return an HTML page`,
         };
       }
       // Probe failure or non-HTML without --app: fall through to the static
