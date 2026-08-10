@@ -1595,6 +1595,44 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.replaceChildren();
   });
 
+  test("arming is per-draft: a NEW draft after an armed one starts unarmed (D1-R)", async () => {
+    // The stale-arm regression: comment-mode draft gets armed, the user
+    // switches to a mode the parent does not mirror (quick label posts
+    // nothing to the bridge), then starts a NEW draft with a plain click.
+    // Without a per-draft reset the old arm leaks into the new draft and the
+    // bridge accumulates outlines/pins the saved annotation will not carry.
+    document.body.innerHTML = MULTI_MARKUP;
+    const { primaryKey } = await startMultiDraft(); // armed comment draft
+    postBridge({ type: "plannotator-bridge-arm-multi-select", key: primaryKey });
+
+    // New draft via plain click (no cancel-selection, no re-arm) — exactly
+    // what a toolbar mode change followed by a pinpoint click produces.
+    const beta = document.querySelector<HTMLElement>("p.beta")!;
+    await collectMessages(["plannotator-bridge-selection"], () => clickAt(beta, 40, 40, false));
+
+    // Shift-click on the unarmed new draft must NOT add a target.
+    const added = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => clickAt(document.querySelector("p.gamma") ?? document.querySelector("p.alpha")!, 40, 40, true),
+    );
+    expect(added.length).toBe(0);
+
+    // Committing the new draft registers at most its own primary: no orphans.
+    postBridge({
+      type: "plannotator-bridge-create-mark",
+      id: "stale-arm-commit",
+      annotationType: "comment",
+    });
+    expect(
+      document.querySelectorAll("[data-plannotator-pin-badge]").length,
+    ).toBeLessThanOrEqual(1);
+
+    postBridge({ type: "plannotator-bridge-clear-marks" });
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
+    document.body.replaceChildren();
+  });
+
   test("remove-target is idempotent and resyncs a forged primary removal (D4)", async () => {
     document.body.innerHTML = MULTI_MARKUP;
     const { primaryKey } = await startMultiDraft();

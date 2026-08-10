@@ -1621,6 +1621,12 @@ export const BRIDGE_SCRIPT = `(function() {
     pinpointHover = null;
     hidePinpointLabel();
     clearMultiTargets(); // a new primary starts a fresh draft
+    // Arming is per-draft, never sticky: the parent re-arms via
+    // arm-multi-select keyed to THIS draft's target key if (and only if) the
+    // comment composer owns it. Without this reset, a mode switch between
+    // drafts (comment -> quick label) leaves a stale arm and the bridge
+    // accumulates pins the saved annotation will not carry.
+    multiSelectArmed = false;
     pendingPinEl = el;
     pendingPinAnchor = buildElementAnchor(el);
     pendingPinKey = makeTargetKey();
