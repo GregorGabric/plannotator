@@ -213,19 +213,77 @@ body[data-plannotator-vim-focus-owner]:focus {
 export const BRIDGE_SCRIPT = `(function() {
   var PREFIX = 'plannotator-bridge-';
 
+  // --- Live mode (proxied local app) ---
+  // Srcdoc sessions carry no config: LIVE stays null and every branch below is
+  // inert, keeping srcdoc behavior byte-for-byte identical. The proxy injects
+  // this script into EVERY HTML response, so a frame gate deactivates the
+  // bridge when the proxied page is opened directly (not framed) and inside
+  // nested same-origin subframes: only the frame whose parent IS the editor
+  // may run.
+  var LIVE = window.__plannotatorLiveConfig || null;
+  if (LIVE && (window === window.parent || window.parent !== window.top)) return;
+  // The editor posts from one concrete origin: pin outbound messages to the
+  // first listed editor origin (the one the browser was opened on) and accept
+  // any listed origin inbound. Srcdoc keeps targetOrigin '*' and no token.
+  var PARENT_ORIGIN = '*';
+  if (LIVE && LIVE.editorOrigins && LIVE.editorOrigins.length) PARENT_ORIGIN = LIVE.editorOrigins[0];
+  function isEditorOrigin(origin) {
+    if (!LIVE) return true;
+    var list = LIVE.editorOrigins || [];
+    for (var i = 0; i < list.length; i++) { if (list[i] === origin) return true; }
+    return false;
+  }
+  function postToParent(msg) {
+    if (LIVE) msg.token = LIVE.token;
+    parent.postMessage(msg, PARENT_ORIGIN);
+  }
+  // Page identity for multi-page live sessions: annotations are stamped with
+  // the page they were made on, and restore filters to the current page.
+  function currentPageUrl() {
+    return (location.pathname + location.search).slice(0, 2048);
+  }
+  if (LIVE) {
+    // SPA navigation: report history changes so the parent can re-filter the
+    // restored set. Coalesced with a microtask flag so a pushState burst posts
+    // once. Full reloads need nothing: the proxy re-injects and the fresh
+    // document posts ready again.
+    var pageChangeQueued = false;
+    var postPageChange = function() {
+      if (pageChangeQueued) return;
+      pageChangeQueued = true;
+      Promise.resolve().then(function() {
+        pageChangeQueued = false;
+        postToParent({ type: PREFIX + 'page-change', pageUrl: currentPageUrl() });
+      });
+    };
+    var wrapHistory = function(name) {
+      var original = history[name];
+      if (typeof original !== 'function') return;
+      history[name] = function() {
+        var result = original.apply(this, arguments);
+        postPageChange();
+        return result;
+      };
+    };
+    wrapHistory('pushState');
+    wrapHistory('replaceState');
+    window.addEventListener('popstate', postPageChange);
+  }
+
   // --- Theme ---
   // The author owns this document. Unless it opted in to host theming
   // (hostTheme), only viewer-namespaced --pn-* properties may be written to its
   // root, and its class list is never touched.
   window.addEventListener('message', function(e) {
     if (e.source !== parent) return;
+    if (LIVE && (!isEditorOrigin(e.origin) || !e.data || e.data.token !== LIVE.token)) return;
     if (!e.data) return;
     if (e.data.type === PREFIX + 'set-vim-help') {
       vimHelpOpen = !!e.data.open;
-      parent.postMessage({
+      postToParent({
         type: PREFIX + 'vim-help',
         open: vimHelpOpen
-      }, '*');
+      });
       return;
     }
     if (e.data.type !== PREFIX + 'theme') return;
@@ -246,11 +304,12 @@ export const BRIDGE_SCRIPT = `(function() {
   // --- Resize ---
   var lastHeight = 0;
   function postResize() {
+    if (LIVE) return; // live surfaces render full-viewport; the parent ignores height
     if (!document.body) return;
     var h = document.body.scrollHeight;
     if (h !== lastHeight) {
       lastHeight = h;
-      parent.postMessage({ type: PREFIX + 'resize', height: h }, '*');
+      postToParent({ type: PREFIX + 'resize', height: h });
     }
   }
   window.addEventListener('load', postResize);
@@ -274,7 +333,9 @@ export const BRIDGE_SCRIPT = `(function() {
   var pendingMultiTargets = []; // { key, el, anchor, label, text, box }
   var multiTargetSeq = 0;
   var MAX_MULTI_TARGETS = 16;
-  var currentInputMethod = 'drag'; // 'drag' = text selection, 'pinpoint' = click an element
+  // Live mode is pinpoint-only: drag selection registers live Range targets a
+  // framework re-render destroys, and fights the app's own selection UX.
+  var currentInputMethod = LIVE ? 'pinpoint' : 'drag'; // 'drag' = text selection, 'pinpoint' = click an element
   var pinpointHover = null;
   var vimEnabled = false;
   var vimHudEnabled = false;
@@ -322,7 +383,7 @@ export const BRIDGE_SCRIPT = `(function() {
       // Trailing clear from a plain-click element annotation — consume it once.
       if (skipNextClear) { skipNextClear = false; return; }
       if (pendingSelection) {
-        parent.postMessage({ type: PREFIX + 'selection-clear' }, '*');
+        postToParent({ type: PREFIX + 'selection-clear' });
         pendingSelection = null;
         pendingRange = null;
         clearMultiTargets();
@@ -350,7 +411,7 @@ export const BRIDGE_SCRIPT = `(function() {
       endOffset: range.endOffset
     };
 
-    parent.postMessage({
+    postToParent({
       type: PREFIX + 'selection',
       text: text,
       modeOverride: modeOverride || undefined,
@@ -359,7 +420,7 @@ export const BRIDGE_SCRIPT = `(function() {
       targetKey: (extras && extras.targetKey) || undefined,
       targetLabel: (extras && extras.targetLabel) || undefined,
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-    }, '*');
+    });
     renderAnnotationOverlay(); // draft selection highlight (overlay-projected)
     return true;
   }
@@ -382,17 +443,17 @@ export const BRIDGE_SCRIPT = `(function() {
       // Drag selections keep the existing close-on-scroll-out behavior.
       if (pendingPinViaPinpoint || pendingMultiTargets.length > 0) return;
       // Selection scrolled out of view — close the toolbar (matches markdown).
-      parent.postMessage({ type: PREFIX + 'selection-clear' }, '*');
+      postToParent({ type: PREFIX + 'selection-clear' });
       pendingSelection = null;
       pendingRange = null;
       clearPendingPin();
       renderAnnotationOverlay();
       return;
     }
-    parent.postMessage({
+    postToParent({
       type: PREFIX + 'selection-rect',
       rect: { top: r.top, left: r.left, width: r.width, height: r.height }
-    }, '*');
+    });
   }
   window.addEventListener('scroll', function() {
     if (!pendingSelection) return;
@@ -402,6 +463,7 @@ export const BRIDGE_SCRIPT = `(function() {
   // --- Mark Creation ---
   window.addEventListener('message', function(e) {
     if (e.source !== parent) return;
+    if (LIVE && (!isEditorOrigin(e.origin) || !e.data || e.data.token !== LIVE.token)) return;
     if (!e.data || !e.data.type) return;
     var type = e.data.type;
 
@@ -483,11 +545,11 @@ export const BRIDGE_SCRIPT = `(function() {
         e.data.anchor,
         e.data.additionalAnchors
       );
-      parent.postMessage({
+      postToParent({
         type: PREFIX + 'mark-applied',
         id: e.data.id,
         success: found
-      }, '*');
+      });
     }
 
     else if (type === PREFIX + 'remove-mark') {
@@ -578,7 +640,8 @@ export const BRIDGE_SCRIPT = `(function() {
     }
 
     else if (type === PREFIX + 'set-input-method') {
-      currentInputMethod = e.data.method === 'pinpoint' ? 'pinpoint' : 'drag';
+      // Live mode clamps to pinpoint: drag selection is disabled outright.
+      currentInputMethod = (LIVE || e.data.method === 'pinpoint') ? 'pinpoint' : 'drag';
       if (currentInputMethod === 'pinpoint') {
         clearHoverHighlight(); // pinpoint owns clicks; drop the select affordance (and any pending hit test)
         if (document.body) document.body.setAttribute('data-plannotator-pinpoint-cursor', '');
@@ -590,6 +653,9 @@ export const BRIDGE_SCRIPT = `(function() {
     }
 
     else if (type === PREFIX + 'set-vim-mode') {
+      // Vim is off in live mode: it writes classes onto author elements and
+      // captures keys the app needs.
+      if (LIVE) return;
       var wasVimEnabled = vimEnabled;
       var wasVimHudEnabled = vimHudEnabled;
       vimEnabled = e.data.enabled === true;
@@ -2067,7 +2133,7 @@ export const BRIDGE_SCRIPT = `(function() {
     btn.addEventListener('click', function(clickEvent) {
       clickEvent.preventDefault();
       clickEvent.stopPropagation();
-      parent.postMessage({ type: PREFIX + 'mark-click', id: annId }, '*');
+      postToParent({ type: PREFIX + 'mark-click', id: annId });
     });
     overlayNodes.add(btn);
     return btn;
@@ -2608,7 +2674,7 @@ export const BRIDGE_SCRIPT = `(function() {
         clearPendingPin();
         try { window.getSelection().removeAllRanges(); } catch (ex) {}
         renderAnnotationOverlay();
-        if (echo) parent.postMessage({ type: PREFIX + 'multi-target-removed', key: key }, '*');
+        if (echo) postToParent({ type: PREFIX + 'multi-target-removed', key: key });
         return;
       }
       var next = pendingMultiTargets.shift();
@@ -2628,14 +2694,14 @@ export const BRIDGE_SCRIPT = `(function() {
       mainBox.classList.remove('pn-pin-enter');
       if (pendingPinEl && pendingPinEl.isConnected) positionPinpointBox(pendingPinEl);
       renderAnnotationOverlay();
-      if (echo) parent.postMessage({ type: PREFIX + 'multi-target-removed', key: key }, '*');
+      if (echo) postToParent({ type: PREFIX + 'multi-target-removed', key: key });
       return;
     }
     for (var i = 0; i < pendingMultiTargets.length; i++) {
       if (pendingMultiTargets[i].key === key) {
         destroyMultiTargetBox(pendingMultiTargets[i].box);
         pendingMultiTargets.splice(i, 1);
-        if (echo) parent.postMessage({ type: PREFIX + 'multi-target-removed', key: key }, '*');
+        if (echo) postToParent({ type: PREFIX + 'multi-target-removed', key: key });
         return;
       }
     }
@@ -2678,13 +2744,13 @@ export const BRIDGE_SCRIPT = `(function() {
     var key = makeTargetKey();
     var box = createMultiTargetBox(el);
     pendingMultiTargets.push({ key: key, el: el, anchor: anchor, label: label, text: text, point: point, box: box });
-    parent.postMessage({
+    postToParent({
       type: PREFIX + 'multi-target-added',
       key: key,
       label: label,
       text: text,
       anchor: anchor || undefined
-    }, '*');
+    });
   }
 
   /** Chip hover in the composer: flash the corresponding pinned outline. */
@@ -2748,12 +2814,12 @@ export const BRIDGE_SCRIPT = `(function() {
     pointerRelayRaf = requestAnimationFrame(function() {
       pointerRelayRaf = 0;
       if (!pendingPinEl || !pointerRelayPos) return;
-      parent.postMessage({
+      postToParent({
         type: PREFIX + 'pointer',
         x: pointerRelayPos.x,
         y: pointerRelayPos.y,
         shift: pointerRelayPos.shift
-      }, '*');
+      });
     });
   }
 
@@ -2823,13 +2889,13 @@ export const BRIDGE_SCRIPT = `(function() {
     pendingSelection = { element: true };
     pendingRange = null;
     skipNextClear = true; // don't let this click's mouseup clear the toolbar we just opened
-    parent.postMessage({ type: PREFIX + 'selection', text: elText,
+    postToParent({ type: PREFIX + 'selection', text: elText,
       modeOverride: modeOverride || undefined,
       anchor: pendingPinAnchor || undefined,
       pinpoint: !!viaPinpoint || undefined,
       targetKey: pendingPinKey || undefined,
       targetLabel: pendingPinLabel || undefined,
-      rect: { top: r.top, left: r.left, width: r.width, height: r.height } }, '*');
+      rect: { top: r.top, left: r.left, width: r.width, height: r.height } });
     return true;
   }
 
@@ -2870,7 +2936,7 @@ export const BRIDGE_SCRIPT = `(function() {
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape' || vimEnabled) return;
     if (pendingSelection) {
-      parent.postMessage({ type: PREFIX + 'selection-clear' }, '*');
+      postToParent({ type: PREFIX + 'selection-clear' });
       pendingSelection = null;
       pendingRange = null;
       skipNextClear = false;
@@ -2941,7 +3007,7 @@ export const BRIDGE_SCRIPT = `(function() {
     var hitId = committedHighlightAt(e.clientX, e.clientY);
     if (!hitId) return;
     e.stopPropagation();
-    parent.postMessage({ type: PREFIX + 'mark-click', id: hitId }, '*');
+    postToParent({ type: PREFIX + 'mark-click', id: hitId });
   });
 
   // --- Optional Vim navigation ---
@@ -3655,10 +3721,10 @@ export const BRIDGE_SCRIPT = `(function() {
     if (!vimEnabled) return;
     if (vimHudEnabled && vimLastPostedPhase !== vimPhase) {
       vimLastPostedPhase = vimPhase;
-      parent.postMessage({
+      postToParent({
         type: PREFIX + 'vim-state',
         phase: vimPhase
-      }, '*');
+      });
     }
     var badge = document.querySelector('[data-plannotator-vim-badge]');
     if (!vimHudEnabled && !badge) badge = getVimBadgeEl();
@@ -3720,10 +3786,10 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function toggleVimHelp() {
     vimHelpOpen = !vimHelpOpen;
-    parent.postMessage({
+    postToParent({
       type: PREFIX + 'vim-help',
       open: vimHelpOpen
-    }, '*');
+    });
   }
 
   function clearVimUi() {
@@ -3743,10 +3809,10 @@ export const BRIDGE_SCRIPT = `(function() {
 
   function copyVimText(text) {
     if (!text) return;
-    parent.postMessage({
+    postToParent({
       type: PREFIX + 'vim-copy',
       text: text
-    }, '*');
+    });
   }
 
   function vimActionMode(key) {
@@ -3808,7 +3874,7 @@ export const BRIDGE_SCRIPT = `(function() {
       handled = true;
     } else if (key === 'Escape') {
       if (pendingSelection) {
-        parent.postMessage({ type: PREFIX + 'selection-clear' }, '*');
+        postToParent({ type: PREFIX + 'selection-clear' });
         pendingSelection = null;
         pendingRange = null;
         restoreVimSemanticTarget();
@@ -4025,12 +4091,12 @@ export const BRIDGE_SCRIPT = `(function() {
         vimLastActionId = vimActionId;
         vimLastActionContext = vimCommandContext;
         updateVimReticle();
-        parent.postMessage({
+        postToParent({
           type: PREFIX + 'vim-command',
           actionId: vimActionId,
           key: hudKey,
           context: vimCommandContext
-        }, '*');
+        });
       }
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -4064,7 +4130,7 @@ export const BRIDGE_SCRIPT = `(function() {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (!e.key || e.key.length !== 1) return; // single printable char only
     e.preventDefault();
-    parent.postMessage({ type: PREFIX + 'keytype', key: e.key }, '*');
+    postToParent({ type: PREFIX + 'keytype', key: e.key });
     // Hand keyboard focus back to the parent window so the comment textarea can
     // take it. Blurring the <iframe> from the parent isn't enough — the inner
     // document keeps focus — so the iframe must relinquish it. parent.focus() is
@@ -4305,7 +4371,9 @@ export const BRIDGE_SCRIPT = `(function() {
       }).observe(document.body);
     }
     watchPageMutations();
-    parent.postMessage({ type: PREFIX + 'ready' }, '*');
+    var readyMsg = { type: PREFIX + 'ready' };
+    if (LIVE) readyMsg.pageUrl = currentPageUrl();
+    postToParent(readyMsg);
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', onReady);
@@ -4332,4 +4400,23 @@ export const BRIDGE_SCRIPT = `(function() {
       return out;
     }
   };
+})();`;
+
+/**
+ * Live-mode bootstrap, prepended to BRIDGE_SCRIPT by the annotate server when
+ * composing the proxy-served bridge body. Reads the JSON config prelude
+ * (window.__plannotatorLiveConfig) and installs the annotation CSS that srcdoc
+ * mode splices as a <style> tag. Runs before the bridge IIFE and before its
+ * MutationObserver exists, so this write never feeds the reconcile loop.
+ * Same escaping rules as BRIDGE_SCRIPT: a dependency-free string constant.
+ */
+export const LIVE_BRIDGE_BOOTSTRAP = `(function() {
+  var config = window.__plannotatorLiveConfig;
+  if (!config || typeof config.css !== 'string') return;
+  try {
+    var style = document.createElement('style');
+    style.setAttribute('data-plannotator-live-css', '');
+    style.appendChild(document.createTextNode(config.css));
+    (document.head || document.documentElement).appendChild(style);
+  } catch (ex) {}
 })();`;
