@@ -437,6 +437,23 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       }
     }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Placed-marker numbering is parent-authoritative: sync the ORDERED
+    // saved-annotation collection (the panel's createdA order, index + 1,
+    // global comments excluded — they have no page location) so every marker
+    // shows its annotation's display number, and renumbers on delete. The
+    // bridge's own registration order is only a pre-sync fallback.
+    useEffect(() => {
+      if (iframeReadyVersion === 0) return;
+      const ordered = annotations
+        .filter((ann) => ann.type !== AnnotationType.GLOBAL_COMMENT)
+        .sort((a, b) => a.createdA - b.createdA)
+        .map((ann, index) => ({ id: ann.id, number: index + 1 }));
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: `${PREFIX}sync-annotations`, annotations: ordered },
+        "*",
+      );
+    }, [iframeReadyVersion, annotations]);
+
     // Tell the bridge the current input method (drag vs pinpoint). Re-posts on
     // ready (fresh iframe) and whenever the user switches it in the toolstrip.
     useEffect(() => {

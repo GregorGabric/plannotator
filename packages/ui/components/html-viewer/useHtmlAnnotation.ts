@@ -132,6 +132,27 @@ export function capSelectionText(text: string): string {
   return text.slice(0, cut);
 }
 
+/**
+ * Validate a bridge-posted normalized marker point. Fail-closed but additive:
+ * a malformed point is DROPPED (the marker falls back to the target-rect
+ * default) without rejecting the anchor it rides on; finite values are
+ * clamped into the normalized 0..1 range.
+ */
+function parseAnchorPoint(value: unknown): { x: number; y: number } | undefined {
+  if (!isRecord(value)) return undefined;
+  const { x, y } = value;
+  if (
+    typeof x !== "number" || !Number.isFinite(x)
+    || typeof y !== "number" || !Number.isFinite(y)
+  ) {
+    return undefined;
+  }
+  return {
+    x: Math.min(1, Math.max(0, x)),
+    y: Math.min(1, Math.max(0, y)),
+  };
+}
+
 /** Validate a bridge-posted element anchor. Exported for protocol tests. */
 export function parseHtmlElementAnchor(value: unknown): HtmlElementAnchor | null {
   if (!isRecord(value)) return null;
@@ -146,9 +167,10 @@ export function parseHtmlElementAnchor(value: unknown): HtmlElementAnchor | null
   ) {
     return null;
   }
-  if (text === undefined) return { selector, tagName };
+  const point = parseAnchorPoint(value.point);
+  if (text === undefined) return { selector, tagName, ...(point ? { point } : {}) };
   if (typeof text !== "string" || text.length > MAX_ANCHOR_TEXT_LENGTH) return null;
-  return { selector, tagName, text };
+  return { selector, tagName, text, ...(point ? { point } : {}) };
 }
 
 function parseTargetKey(value: unknown): string | null {
