@@ -34,6 +34,13 @@ for f in prompts review-core diff-paths cli-pagination jj-core gitbutler-core vc
   printf '// @generated — DO NOT EDIT. Source: packages/shared/%s.ts\n' "$f" | cat - "$src" > "generated/$f.ts"
 done
 
+# call-flow.ts imports the repository-owned npm manifest and lock that are
+# written into the managed runtime. Keep those verified install inputs beside
+# the vendored module so raw-TS Pi distributions use the identical bytes.
+mkdir -p generated/call-flow-runtime
+cp ../../packages/shared/call-flow-runtime/package.json generated/call-flow-runtime/package.json
+cp ../../packages/shared/call-flow-runtime/package-lock.json generated/call-flow-runtime/package-lock.json
+
 # Vendor review agent modules from packages/server/ — rewrite imports for generated/ layout
 for f in agent-review-message codex-review claude-review review-findings marker-review path-utils review-skill-loader; do
   src="../../packages/server/$f.ts"

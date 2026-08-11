@@ -34,6 +34,7 @@ function CallFlowNodeRow({
   onOpen,
   onComment,
   focusFiles,
+  canInteractWithNode,
 }: {
   node: CallFlowNode;
   depth: number;
@@ -41,13 +42,15 @@ function CallFlowNodeRow({
   onOpen: (node: CallFlowNode) => void;
   onComment?: (node: CallFlowNode) => void;
   focusFiles?: ReadonlySet<string>;
+  canInteractWithNode?: (node: CallFlowNode) => boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = node.children.length > 0;
-  const navigable = Boolean(node.file && node.line);
+  const inPatch = canInteractWithNode?.(node) ?? true;
+  const navigable = Boolean(node.file && node.line && inPatch);
   const location = node.file ? `${node.file}${node.line ? `:${node.line}` : ''}` : '';
   const focused = node.status !== 'same' && Boolean(node.file && focusFiles?.has(node.file));
-  const annotatable = Boolean(onComment && annotationSelectionForCallFlowNode(node));
+  const annotatable = Boolean(inPatch && onComment && annotationSelectionForCallFlowNode(node));
 
   return (
     <li className="call-flow-node">
@@ -76,7 +79,7 @@ function CallFlowNodeRow({
           className="call-flow-node-target"
           disabled={!navigable}
           onClick={() => onOpen(node)}
-          title={navigable ? `Open ${location}` : node.label}
+          title={navigable ? `Open ${location}` : node.file && node.line ? 'Outside the reviewed patch' : node.label}
         >
           <span className="call-flow-node-label">{node.label}</span>
           {node.kind === 'branch' && <span className="call-flow-node-kind">branch</span>}
@@ -107,6 +110,7 @@ function CallFlowNodeRow({
               onOpen={onOpen}
               onComment={onComment}
               focusFiles={focusFiles}
+              canInteractWithNode={canInteractWithNode}
             />
           ))}
         </ol>
@@ -122,11 +126,13 @@ interface CallFlowTreeViewProps {
   readonly onCommentNode?: (node: CallFlowNode) => void;
   /** Changed rows in these files receive the Lens focus treatment. */
   readonly focusFiles?: readonly string[];
+  /** Gate navigation and comments to ranges represented by the active patch. */
+  readonly canInteractWithNode?: (node: CallFlowNode) => boolean;
   readonly compact?: boolean;
 }
 
 /** Shared complete-tree renderer used by both the Dock and the per-file Lens. */
-export function CallFlowTreeView({ trees, onOpenNode, onCommentNode, focusFiles, compact = false }: CallFlowTreeViewProps) {
+export function CallFlowTreeView({ trees, onOpenNode, onCommentNode, focusFiles, canInteractWithNode, compact = false }: CallFlowTreeViewProps) {
   const focused = focusFiles ? new Set(focusFiles) : undefined;
   return (
     <div className={`call-flow-trees${compact ? ' call-flow-trees-compact' : ''}`}>
@@ -145,6 +151,7 @@ export function CallFlowTreeView({ trees, onOpenNode, onCommentNode, focusFiles,
               onOpen={onOpenNode}
               onComment={onCommentNode}
               focusFiles={focused}
+              canInteractWithNode={canInteractWithNode}
             />
           </ol>
         </section>

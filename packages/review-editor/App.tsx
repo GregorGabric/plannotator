@@ -15,7 +15,7 @@ import { RepoIcon } from '@plannotator/ui/components/RepoIcon';
 import { PullRequestIcon } from '@plannotator/ui/components/PullRequestIcon';
 import { getPlatformLabel, getMRLabel, getMRNumberLabel, getDisplayRepo } from '@plannotator/shared/pr-types';
 import type { SemanticDiffAdvert } from '@plannotator/shared/semantic-diff-types';
-import type { CallFlowAdvert } from '@plannotator/shared/call-flow-types';
+import type { CallFlowAdvert, CallFlowNode } from '@plannotator/shared/call-flow-types';
 import { configStore, useConfigValue, setReviewPanelView } from '@plannotator/ui/config';
 import { loadDiffFont } from '@plannotator/ui/utils/diffFonts';
 import { getAgentSwitchSettings, getEffectiveAgentName } from '@plannotator/ui/utils/agentSwitch';
@@ -38,7 +38,7 @@ import { useAIChat } from './hooks/useAIChat';
 import { toast, Toaster } from 'sonner';
 import { useCodeNav, type CodeNavRequest } from './hooks/useCodeNav';
 import { useCallFlowAnalysis } from './hooks/useCallFlowAnalysis';
-import { extractLinesFromPatch } from './utils/patchParser';
+import { extractLinesFromPatch, isLineRangeInPatch } from './utils/patchParser';
 import {
   shouldHandleReviewSearchShortcut,
   isTypingTarget,
@@ -287,7 +287,7 @@ const ReviewApp: React.FC = () => {
   const editSuggestionsEnabled = useConfigValue('editSuggestions');
   const semanticDiffEnabled = useConfigValue('semanticDiffEnabled');
   const callFlowEnabled = useConfigValue('callFlowEnabled');
-  const previousCallFlowEnabled = useRef(callFlowEnabled);
+  const confirmedAnalysisSettings = useRef({ semanticDiff: semanticDiffEnabled, callFlow: callFlowEnabled });
   // Global plan-look preference; surfaced here only by the shared 0.20.0
   // look-and-feel announcement (the grid/clean chooser applies to plan review).
   const gridEnabled = useConfigValue('gridEnabled');
@@ -374,7 +374,7 @@ const ReviewApp: React.FC = () => {
   const [snapshotId, setSnapshotId] = useState<string | undefined>(undefined);
   const semanticDiffUsable = semanticDiffEnabled && semanticDiffAvailable;
   const callFlowAvailable = callFlowEnabled && callFlowAdvert.available;
-  const callFlowAnalysis = useCallFlowAnalysis(snapshotId, callFlowAvailable);
+  const { state: callFlowAnalysis, retry: retryCallFlowAnalysis } = useCallFlowAnalysis(snapshotId, callFlowAvailable);
   const [isFetchingBase, setIsFetchingBase] = useState(false);
   // Which left panel is showing. The persisted value (Settings / first-run
   // dialog, written through the coupled setters in config/reviewView)
@@ -574,6 +574,14 @@ const ReviewApp: React.FC = () => {
     setActiveFileIndex(files.findIndex(candidate => candidate.path === resolvedFilePath));
     needsInitialDiffPanel.current = false;
   }, [dockApi, files, clearPendingSelection]);
+
+  const isCallFlowNodeInPatch = useCallback((node: CallFlowNode): boolean => {
+    if (!node.file || !node.line) return false;
+    const file = files.find((candidate) => candidate.path === node.file || candidate.oldPath === node.file);
+    if (!file) return false;
+    const end = node.endLine && node.endLine >= node.line ? node.endLine : node.line;
+    return isLineRangeInPatch(file.patch, node.line, end, node.status === 'removed' ? 'old' : 'new');
+  }, [files]);
 
   const handleRequestLineAnnotation = useCallback((filePath: string, range: SelectedLineRange) => {
     const file = files.find(candidate => candidate.path === filePath || candidate.oldPath === filePath);
@@ -1362,12 +1370,13 @@ const ReviewApp: React.FC = () => {
   // enabling either layer can take effect without reloading the current review.
   useEffect(() => {
     if (isLoading || !apiModeRef.current) return;
-    const wasCallFlowEnabled = previousCallFlowEnabled.current;
-    previousCallFlowEnabled.current = callFlowEnabled;
     if (!analysisSettingsInitialized.current) {
       analysisSettingsInitialized.current = true;
+      confirmedAnalysisSettings.current = { semanticDiff: semanticDiffEnabled, callFlow: callFlowEnabled };
       return;
     }
+    const previous = confirmedAnalysisSettings.current;
+    const requested = { semanticDiff: semanticDiffEnabled, callFlow: callFlowEnabled };
     const controller = new AbortController();
     fetch('/api/review-analysis', {
       method: 'POST',
@@ -1380,18 +1389,27 @@ const ReviewApp: React.FC = () => {
         return response.json() as Promise<{
           semanticDiff?: SemanticDiffAdvert;
           callFlow?: CallFlowAdvert;
+          superseded?: boolean;
         }>;
       })
       .then((data) => {
         if (controller.signal.aborted) return;
+        if (data.superseded) return;
+        confirmedAnalysisSettings.current = requested;
         applySemanticDiffAdvert(data.semanticDiff);
         applyCallFlowAdvert(data.callFlow);
-        if (!wasCallFlowEnabled && callFlowEnabled && data.callFlow && !data.callFlow.available) {
+        if (!previous.callFlow && callFlowEnabled && data.callFlow && !data.callFlow.available) {
           toast.error(data.callFlow.message ?? 'Call flow is unavailable for this review.');
         }
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
+        if (configStore.get('semanticDiffEnabled') !== previous.semanticDiff) {
+          configStore.set('semanticDiffEnabled', previous.semanticDiff);
+        }
+        if (configStore.get('callFlowEnabled') !== previous.callFlow) {
+          configStore.set('callFlowEnabled', previous.callFlow);
+        }
         toast.error(error instanceof Error ? error.message : 'Analysis settings could not be applied.');
       });
     return () => controller.abort();
@@ -2702,6 +2720,8 @@ const ReviewApp: React.FC = () => {
     callFlowAvailable,
     callFlowAdvert,
     callFlowAnalysis,
+    retryCallFlowAnalysis,
+    isCallFlowNodeInPatch,
     isCallFlowActive,
     openCallFlowPanel,
     openTourPanel: handleOpenTour,
@@ -2732,7 +2752,7 @@ const ReviewApp: React.FC = () => {
     isPRContextLoading, prContextError, fetchPRContext, platformUser, openDiffFile,
     handleOpenTour, handleOpenGuide, isAllFilesActive, allFilesOrder, allFilesAllCollapsed, onToggleAllFilesCollapsed, registerAllFilesCollapseToggle, commitInfo, isSemanticDiffActive, semanticDiffUsable,
     handleSemanticDiffUnavailable, handleSemanticDiffLoadError, handleSemanticDiffLoadSuccess, handleAddAnnotationForFile,
-    callFlowAvailable, callFlowAdvert, callFlowAnalysis, isCallFlowActive, openCallFlowPanel,
+    callFlowAvailable, callFlowAdvert, callFlowAnalysis, retryCallFlowAnalysis, isCallFlowNodeInPatch, isCallFlowActive, openCallFlowPanel,
     editSuggestionsEnabled, handleAddSuggestionsForFile, handleAddEditorCommentForFile,
     handleCodeNavRequest, codeNav.result, codeNav.isLoading, codeNav.activeSymbol,
   ]);

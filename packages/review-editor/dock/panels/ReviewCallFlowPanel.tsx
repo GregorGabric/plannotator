@@ -76,7 +76,10 @@ export function ReviewCallFlowPanel() {
         <div className="call-flow-shell call-flow-empty" role="alert">
           <span className="call-flow-empty-kicker">Call flow unavailable</span>
           <strong>{errorMessage(analysis.error)}</strong>
-          <p>The code diff remains available and no repository files were changed.</p>
+          <p>The code diff remains available and no repository files were changed. Wait a moment if the analysis timed out, then retry.</p>
+          <button type="button" className="call-flow-retry" onClick={state.retryCallFlowAnalysis}>
+            Retry analysis
+          </button>
         </div>
       </div>
     );
@@ -148,6 +151,7 @@ export function ReviewCallFlowPanel() {
             trees={data.trees}
             onOpenNode={openNode}
             onCommentNode={commentOnNode}
+            canInteractWithNode={state.isCallFlowNodeInPatch}
           />
         )}
 

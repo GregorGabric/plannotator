@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { CallFlowResponse } from '@plannotator/shared/call-flow-types';
 
 export type CallFlowAnalysisState =
@@ -6,12 +6,20 @@ export type CallFlowAnalysisState =
   | { status: 'ready'; data: Extract<CallFlowResponse, { status: 'ok' }> }
   | { status: 'error'; error: Exclude<CallFlowResponse, { status: 'ok' }> | Error };
 
+export interface CallFlowAnalysisController {
+  readonly state: CallFlowAnalysisState;
+  /** Start a fresh client request without changing the shared review snapshot. */
+  readonly retry: () => void;
+}
+
 /** Run once per visible review snapshot; all Dock/Lens consumers share this state. */
 export function useCallFlowAnalysis(
   snapshotId: string | undefined,
   available: boolean,
-): CallFlowAnalysisState {
+): CallFlowAnalysisController {
   const [state, setState] = useState<CallFlowAnalysisState>({ status: 'idle' });
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((value) => value + 1), []);
 
   useEffect(() => {
     if (!available || !snapshotId) {
@@ -20,7 +28,7 @@ export function useCallFlowAnalysis(
     }
     const controller = new AbortController();
     setState({ status: 'loading' });
-    fetch(`/api/call-flow?snapshot=${encodeURIComponent(snapshotId)}`, { signal: controller.signal })
+    fetch(`/api/call-flow?snapshot=${encodeURIComponent(snapshotId)}&attempt=${attempt}`, { signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json() as CallFlowResponse;
         return payload;
@@ -36,7 +44,7 @@ export function useCallFlowAnalysis(
         setState({ status: 'error', error: error instanceof Error ? error : new Error(String(error)) });
       });
     return () => controller.abort();
-  }, [available, snapshotId]);
+  }, [attempt, available, snapshotId]);
 
-  return state;
+  return { state, retry };
 }

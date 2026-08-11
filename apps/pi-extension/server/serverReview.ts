@@ -42,6 +42,7 @@ import {
 	type SinceBaseSections,
 	detectRemoteDefaultInfo,
 	getFileContentsForDiff as getFileContentsForDiffCore,
+	getGitCallFlowMaterializationPatch,
 	getSinceBaseSections,
 	isBinaryPatchFile,
 	isSameCwdCommitSwitch,
@@ -390,6 +391,8 @@ export async function startReviewServer(options: {
 	// Monotonic guard for /api/diff/switch (mirrors Bun review.ts) — concurrent
 	// switches would otherwise clobber each other's snapshot across awaits.
 	let diffSwitchEpoch = 0;
+	// Older analysis-setting responses must not describe a superseded view.
+	let reviewAnalysisEpoch = 0;
 	// Tracks the base branch the user picked from the UI. Agent review prompts
 	// read this (not gitContext.defaultBranch) so they analyze the same diff
 	// the reviewer is currently looking at. Honors an explicit initialBase from
@@ -864,8 +867,11 @@ export async function startReviewServer(options: {
 		return next;
 	}
 
-	async function getSemanticDiffAdvert(diffType: DiffType = currentDiffType as DiffType) {
-		if (!semanticDiffEnabled()) return { available: false, enabled: false };
+	async function getSemanticDiffAdvert(
+		diffType: DiffType = currentDiffType as DiffType,
+		enabled = semanticDiffEnabled(),
+	) {
+		if (!enabled) return { available: false, enabled: false };
 		if (isGitButlerCommittedView(diffType)) return { available: false };
 		const availability = await getSemanticDiffAvailabilityForCwd(resolveSemanticDiffCwd(diffType));
 		return {
@@ -906,8 +912,11 @@ export async function startReviewServer(options: {
 		return result;
 	}
 
-	function getCallFlowAdvert(diffType: DiffType = currentDiffType as DiffType) {
-		return callFlowService.getAdvert(callFlowEnabled(), {
+	function getCallFlowAdvert(
+		diffType: DiffType = currentDiffType as DiffType,
+		enabled = callFlowEnabled(),
+	) {
+		return callFlowService.getAdvert(enabled, {
 			vcsType: workspace ? "workspace" : sessionVcsType,
 			diffType,
 		});
@@ -923,6 +932,14 @@ export async function startReviewServer(options: {
 		}
 		if (workspace) {
 			return { status: "unsupported", reason: "workspace-unsupported", message: "Call flow does not yet support multi-repository workspace reviews." };
+		}
+		const advert = await getCallFlowAdvert();
+		if (advert.state === "unsupported") {
+			return {
+				status: "unsupported",
+				reason: advert.reason ?? "view-unsupported",
+				message: advert.message ?? "Call flow is not available for this review view.",
+			};
 		}
 
 		let analysisCwd: string | undefined;
@@ -958,20 +975,25 @@ export async function startReviewServer(options: {
 		if (requestedSnapshot !== currentSnapshotId() || (baseline && before && baseline !== before)) {
 			return { status: "stale", reason: "snapshot-stale", message: "The files changed before call flow could start. Refresh the review first." };
 		}
-		const response = await callFlowService.analyze({
+		const materializationPatch = await getGitCallFlowMaterializationPatch(
+			reviewRuntime,
+			analysisDiffType as DiffType,
+			analysisBase,
+			analysisCwd,
+		);
+		return callFlowService.analyze({
 			snapshotId: requestedSnapshot,
 			cwd: analysisCwd,
 			diffType: analysisDiffType,
 			base: analysisBase,
-			rawPatch: currentPatch,
+			rawPatch: materializationPatch ?? currentPatch,
 			vcsType: isPRMode ? "git" : sessionVcsType,
 			...(prCommitPair ? { prCommitPair } : {}),
+			verifySnapshot: async () => {
+				const after = await computeDiffFingerprint();
+				return requestedSnapshot === currentSnapshotId() && !(before && after && before !== after);
+			},
 		});
-		const after = await computeDiffFingerprint();
-		if (requestedSnapshot !== currentSnapshotId() || (before && after && before !== after)) {
-			return { status: "stale", reason: "snapshot-changed", message: "The files changed during call-flow analysis. Refresh and run it again." };
-		}
-		return response;
 	}
 
 	const agentJobs = createAgentJobHandler({
@@ -1781,15 +1803,28 @@ export async function startReviewServer(options: {
 			res.setHeader("Cache-Control", "no-store");
 			json(res, result, result.status === "stale" ? 409 : 200);
 		} else if (url.pathname === "/api/review-analysis" && req.method === "POST") {
+			const analysisEpoch = ++reviewAnalysisEpoch;
+			const viewEpoch = diffSwitchEpoch;
+			const scopeEpoch = prScopeEpoch;
 			try {
 				const reviewAnalysis = parseReviewAnalysisConfig(await parseBody(req));
 				if (!reviewAnalysis) return json(res, { error: "Invalid analysis settings" }, 400);
-				saveConfig({ reviewAnalysis });
-				if (reviewAnalysis.callFlow === false) callFlowService.cancelAll();
+				if (analysisEpoch !== reviewAnalysisEpoch) return json(res, { superseded: true });
+				const nextSemanticDiffEnabled = reviewAnalysis.semanticDiff ?? semanticDiffEnabled();
+				const nextCallFlowEnabled = reviewAnalysis.callFlow ?? callFlowEnabled();
 				const [semanticDiff, callFlow] = await Promise.all([
-					getSemanticDiffAdvert(),
-					getCallFlowAdvert(),
+					getSemanticDiffAdvert(currentDiffType as DiffType, nextSemanticDiffEnabled),
+					getCallFlowAdvert(currentDiffType as DiffType, nextCallFlowEnabled),
 				]);
+				if (
+					analysisEpoch !== reviewAnalysisEpoch
+					|| viewEpoch !== diffSwitchEpoch
+					|| scopeEpoch !== prScopeEpoch
+				) {
+					return json(res, { superseded: true });
+				}
+				saveConfig({ reviewAnalysis });
+				if (!nextCallFlowEnabled) callFlowService.cancelAll();
 				json(res, { semanticDiff, callFlow });
 			} catch {
 				json(res, { error: "Invalid request" }, 400);

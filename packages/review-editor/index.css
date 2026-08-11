@@ -1027,6 +1027,24 @@ diffs-container {
   cursor: pointer;
 }
 
+.call-flow-retry {
+  min-height: 1.875rem;
+  margin-top: 0.25rem;
+  padding: 0 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.call-flow-retry:hover { background: var(--muted); }
+.call-flow-retry:focus-visible { outline: 1px solid var(--ring); outline-offset: 2px; }
+
 @media (pointer: coarse) {
   .call-flow-row { grid-template-columns: 2.75rem 1.25rem minmax(0, 1fr) 2.75rem; }
   .call-flow-expand,
@@ -1055,6 +1073,7 @@ diffs-container {
   .call-flow-spinner { animation: none; }
   .call-flow-file-badge { transition: none; }
   .call-flow-popover.popover-enter { animation: none; }
+  .call-flow-retry { transition: none; }
 }
 
 /* =====================================================

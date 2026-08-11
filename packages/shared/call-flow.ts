@@ -4,11 +4,14 @@
  * CallDiff is a Node-native, synchronous Tree-sitter library. Plannotator runs
  * it in a short-lived Node 22 worker and never imports it into Bun or Pi.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
+import { dirname, isAbsolute, join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import runtimePackageJson from "./call-flow-runtime/package.json" with { type: "json" };
+import runtimePackageLock from "./call-flow-runtime/package-lock.json" with { type: "json" };
 import { getPlannotatorDataDir } from "./data-dir";
 import { indexCallFlowImpacts, parseCallDiffWorkerResult } from "./call-flow-types";
 import type {
@@ -23,6 +26,8 @@ export const CALLDIFF_COMMIT = "a3194d20ca91ef6a314273d634e9b9c0db1c2707";
 export const CALLDIFF_SOURCE_SPEC = `https://github.com/tanishqkancharla/calldiff/archive/${CALLDIFF_COMMIT}.tar.gz`;
 export const CALLDIFF_SOURCE_INTEGRITY = "sha512-5y6tjre5UE00qPrVFPurnk9RBdk8WlRok+0w41lxLt1MyPLOlNUEaAT2/j/nz2xWlhDm3DfDYvW/5KBD2b9TLg==";
 export const CALLDIFF_TREE_SITTER_VERSION = "0.25.1";
+const CALLDIFF_ARCHIVE_FILE = `calldiff-${CALLDIFF_COMMIT}.tar.gz`;
+const MAX_CALLDIFF_ARCHIVE_BYTES = 20 * 1024 * 1024;
 
 /** Exact grammar set validated against CallDiff 0.4.1. */
 export const CALLDIFF_GRAMMAR_SPECS = [
@@ -72,6 +77,8 @@ export interface CallFlowAnalysisInput {
   vcsType?: string;
   /** Exact hosted-PR object pair, used only with a checkout that contains both. */
   prCommitPair?: { from: string; to: string };
+  /** Revalidate mutable review state before an ok result can enter the cache. */
+  verifySnapshot?: () => Promise<boolean>;
 }
 
 export type CallFlowRuntime = {
@@ -160,34 +167,17 @@ function resolvePackageEntry(packageRoot: string): string | null {
   return existsSync(entry) ? entry : null;
 }
 
-function readRuntimeLock(runtimeDir: string): {
-  sourceIntegrity: string | null;
-  rootDependencies: Record<string, string>;
-} | null {
-  try {
-    const lock = JSON.parse(readFileSync(join(runtimeDir, "package-lock.json"), "utf8")) as {
-      packages?: Record<string, { integrity?: unknown; dependencies?: unknown }>;
-    };
-    const integrity = lock.packages?.["node_modules/calldiff"]?.integrity;
-    const dependencies = lock.packages?.[""]?.dependencies;
-    return {
-      sourceIntegrity: typeof integrity === "string" ? integrity : null,
-      rootDependencies: dependencies && typeof dependencies === "object" && !Array.isArray(dependencies)
-        ? dependencies as Record<string, string>
-        : {},
-    };
-  } catch {
-    return null;
-  }
+function runtimeJson(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
-function hasPinnedRuntimeDependencies(rootDependencies: Record<string, string>): boolean {
-  if (rootDependencies.calldiff !== CALLDIFF_SOURCE_SPEC) return false;
-  if (rootDependencies["tree-sitter"] !== CALLDIFF_TREE_SITTER_VERSION) return false;
-  return CALLDIFF_GRAMMAR_SPECS.every((spec) => {
-    const packageName = packageNameFromSpec(spec);
-    return rootDependencies[packageName] === spec.slice(packageName.length + 1);
-  });
+function hasCommittedRuntimeLock(runtimeDir: string): boolean {
+  try {
+    const lock: unknown = JSON.parse(readFileSync(join(runtimeDir, "package-lock.json"), "utf8"));
+    return JSON.stringify(lock) === JSON.stringify(runtimePackageLock);
+  } catch {
+    return false;
+  }
 }
 
 async function checkNode22(nodePath: string): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -226,7 +216,14 @@ export async function resolveCallFlowRuntime(): Promise<CallFlowRuntimeResolutio
   if (!nodeCheck.ok) return { ok: false, reason: "node-version", message: nodeCheck.message };
 
   const override = process.env.PLANNOTATOR_CALLDIFF_PATH?.trim();
-  const runtimeDir = override ? resolve(override) : getCallFlowManagedRuntimeDir();
+  if (override && !isAbsolute(override)) {
+    return {
+      ok: false,
+      reason: "override-relative",
+      message: "PLANNOTATOR_CALLDIFF_PATH must be an absolute path.",
+    };
+  }
+  const runtimeDir = override ?? getCallFlowManagedRuntimeDir();
   const packageRoot = override ? runtimeDir : join(runtimeDir, "node_modules", "calldiff");
   const version = readPackageVersion(packageRoot);
   const packageEntry = resolvePackageEntry(packageRoot);
@@ -248,11 +245,7 @@ export async function resolveCallFlowRuntime(): Promise<CallFlowRuntimeResolutio
     if (installedRevision !== CALLDIFF_COMMIT) {
       return { ok: false, reason: "revision-mismatch", message: "The CallDiff runtime is stale. Re-run plannotator install-runtime call-flow." };
     }
-    const runtimeLock = readRuntimeLock(runtimeDir);
-    if (runtimeLock?.sourceIntegrity !== CALLDIFF_SOURCE_INTEGRITY) {
-      return { ok: false, reason: "integrity-mismatch", message: "The CallDiff runtime failed its pinned source-integrity check. Re-run plannotator install-runtime call-flow." };
-    }
-    if (!hasPinnedRuntimeDependencies(runtimeLock.rootDependencies)) {
+    if (!hasCommittedRuntimeLock(runtimeDir)) {
       return { ok: false, reason: "runtime-lock-mismatch", message: "The CallDiff runtime dependency lock is stale. Re-run plannotator install-runtime call-flow." };
     }
   }
@@ -267,28 +260,51 @@ export async function resolveCallFlowRuntime(): Promise<CallFlowRuntimeResolutio
   return { ok: true, runtime: { nodePath, packageEntry, runtimeDir, version } };
 }
 
-function writeRuntimePackageJson(runtimeDir: string): void {
-  const dependencies: Record<string, string> = {
-    calldiff: CALLDIFF_SOURCE_SPEC,
-    // CallDiff declares ranges for its parser and TypeScript grammar. Pin both
-    // at the host boundary so a reinstall cannot silently change the ABI.
-    "tree-sitter": CALLDIFF_TREE_SITTER_VERSION,
-    // CallDiff's pinned source archive intentionally has no built dist/.
-    // Keep the compiler exact and build once at install time.
-    typescript: "5.9.2",
-    "@types/node": "24.2.0",
-  };
-  for (const spec of CALLDIFF_GRAMMAR_SPECS) {
-    const packageName = packageNameFromSpec(spec);
-    dependencies[packageName] = spec.slice(packageName.length + 1);
+function writeRuntimeManifest(runtimeDir: string): void {
+  writeFileSync(join(runtimeDir, "package.json"), runtimeJson(runtimePackageJson), "utf8");
+  writeFileSync(join(runtimeDir, "package-lock.json"), runtimeJson(runtimePackageLock), "utf8");
+}
+
+function removeDirectoryBestEffort(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch {
+    // Antivirus and native grammar handles can briefly keep Windows directories
+    // busy. Cleanup must never replace the caller-visible analysis/install result.
   }
-  writeFileSync(join(runtimeDir, "package.json"), JSON.stringify({
-    name: "plannotator-call-flow-runtime",
-    private: true,
-    description: "Managed offline runtime for Plannotator call-flow analysis",
-    dependencies,
-    overrides: { "tree-sitter-typescript": { "tree-sitter": "$tree-sitter" } },
-  }, null, 2) + "\n", "utf8");
+}
+
+async function downloadVerifiedCallDiffArchive(destination: string): Promise<void> {
+  const response = await fetch(CALLDIFF_SOURCE_SPEC, {
+    redirect: "follow",
+    signal: AbortSignal.timeout(120_000),
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`CallDiff download failed with HTTP ${response.status}.`);
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  const hash = createHash("sha512");
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_CALLDIFF_ARCHIVE_BYTES) {
+      await reader.cancel();
+      throw new Error("CallDiff source archive exceeded the 20 MB install limit.");
+    }
+    hash.update(chunk);
+    chunks.push(chunk);
+  }
+  const integrity = `sha512-${hash.digest("base64")}`;
+  if (integrity !== CALLDIFF_SOURCE_INTEGRITY) {
+    throw new Error("CallDiff source archive failed its repository-pinned SHA-512 check.");
+  }
+  // No archive bytes are written, unpacked, or passed to npm until the digest
+  // above matches the repository-owned pin.
+  writeFileSync(destination, Buffer.concat(chunks, totalBytes));
 }
 
 export async function installCallFlowRuntime(): Promise<CallFlowRuntimeInstallResult> {
@@ -303,38 +319,85 @@ export async function installCallFlowRuntime(): Promise<CallFlowRuntimeInstallRe
   }
   const nodeCheck = await checkNode22(nodePath);
   if (!nodeCheck.ok) return { ok: false, status: "failed", runtimeDir, message: nodeCheck.message };
-  mkdirSync(runtimeDir, { recursive: true });
-  writeRuntimePackageJson(runtimeDir);
 
   const existing = await resolveCallFlowRuntime();
   if (existing.ok && existing.runtime.runtimeDir === runtimeDir) {
     return { ok: true, status: "already-installed", runtimeDir, message: `Call-flow runtime already installed at ${runtimeDir}.` };
   }
+  const runtimeParent = dirname(runtimeDir);
+  mkdirSync(runtimeParent, { recursive: true });
+  const installDir = await mkdtemp(join(runtimeParent, ".calldiff-install-"));
+  const backupDir = `${runtimeDir}.previous-${process.pid}-${Date.now()}`;
+  try {
+    writeRuntimeManifest(installDir);
+    await downloadVerifiedCallDiffArchive(join(installDir, CALLDIFF_ARCHIVE_FILE));
 
-  const install = await runCommand(npmPath, [
-    "install", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
-  ], { cwd: runtimeDir, timeoutMs: 240_000, maxOutputBytes: 4 * 1024 * 1024 });
-  if (install.exitCode !== 0) {
-    const detail = install.stderr.trim() || install.stdout.trim() || "npm install failed";
-    return { ok: false, status: "failed", runtimeDir, message: detail.slice(0, 2_000) };
+    const install = await runCommand(npmPath, [
+      "ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--no-fund", "--legacy-peer-deps",
+    ], { cwd: installDir, timeoutMs: 240_000, maxOutputBytes: 4 * 1024 * 1024 });
+    if (install.exitCode !== 0) {
+      throw new Error(install.stderr.trim() || install.stdout.trim() || "npm ci failed");
+    }
+
+    // npm ci intentionally ran with every lifecycle script disabled. Only the
+    // integrity-locked parser packages are rebuilt, as one explicit step.
+    const rebuild = await runCommand(npmPath, [
+      "rebuild", "--no-audit", "--no-fund", "--legacy-peer-deps",
+      "tree-sitter", ...REQUIRED_GRAMMAR_PACKAGES,
+    ], {
+      cwd: installDir,
+      timeoutMs: 240_000,
+      maxOutputBytes: 4 * 1024 * 1024,
+      env: {
+        ...process.env,
+        npm_config_ignore_scripts: "false",
+        NPM_CONFIG_IGNORE_SCRIPTS: "false",
+      },
+    });
+    if (rebuild.exitCode !== 0) {
+      throw new Error(rebuild.stderr.trim() || rebuild.stdout.trim() || "grammar rebuild failed");
+    }
+
+    const packageRoot = join(installDir, "node_modules", "calldiff");
+    const tscPath = process.platform === "win32"
+      ? join(installDir, "node_modules", ".bin", "tsc.cmd")
+      : join(installDir, "node_modules", ".bin", "tsc");
+    const build = await runCommand(tscPath, ["-p", "tsconfig.json"], {
+      cwd: packageRoot,
+      timeoutMs: 120_000,
+      maxOutputBytes: 4 * 1024 * 1024,
+    });
+    if (build.exitCode !== 0) {
+      throw new Error(build.stderr.trim() || build.stdout.trim() || "CallDiff TypeScript build failed");
+    }
+    rmSync(join(installDir, CALLDIFF_ARCHIVE_FILE), { force: true });
+    writeFileSync(join(installDir, ".calldiff-revision"), `${CALLDIFF_COMMIT}\n`, "utf8");
+    if (readPackageVersion(packageRoot) !== CALLDIFF_VERSION || !resolvePackageEntry(packageRoot)) {
+      throw new Error("The verified CallDiff package did not produce the expected runtime entry.");
+    }
+    const missing = missingGrammarPackages(installDir);
+    if (missing.length > 0) throw new Error(`The runtime is missing ${missing.length} grammar packages.`);
+    if (!hasCommittedRuntimeLock(installDir)) throw new Error("npm changed the committed call-flow dependency lock.");
+
+    if (existsSync(runtimeDir)) renameSync(runtimeDir, backupDir);
+    try {
+      renameSync(installDir, runtimeDir);
+    } catch (error) {
+      if (existsSync(backupDir)) renameSync(backupDir, runtimeDir);
+      throw error;
+    }
+    removeDirectoryBestEffort(backupDir);
+    return { ok: true, status: "installed", runtimeDir, message: `Installed CallDiff ${CALLDIFF_VERSION} and integrity-locked grammars at ${runtimeDir}.` };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "failed",
+      runtimeDir,
+      message: (error instanceof Error ? error.message : String(error)).slice(0, 2_000),
+    };
+  } finally {
+    removeDirectoryBestEffort(installDir);
   }
-  const packageRoot = join(runtimeDir, "node_modules", "calldiff");
-  const tscPath = process.platform === "win32"
-    ? join(runtimeDir, "node_modules", ".bin", "tsc.cmd")
-    : join(runtimeDir, "node_modules", ".bin", "tsc");
-  const build = await runCommand(tscPath, ["-p", "tsconfig.json"], {
-    cwd: packageRoot,
-    timeoutMs: 120_000,
-    maxOutputBytes: 4 * 1024 * 1024,
-  });
-  if (build.exitCode !== 0) {
-    const detail = build.stderr.trim() || build.stdout.trim() || "CallDiff TypeScript build failed";
-    return { ok: false, status: "failed", runtimeDir, message: detail.slice(0, 2_000) };
-  }
-  writeFileSync(join(runtimeDir, ".calldiff-revision"), `${CALLDIFF_COMMIT}\n`, "utf8");
-  const resolved = await resolveCallFlowRuntime();
-  if (!resolved.ok) return { ok: false, status: "failed", runtimeDir, message: resolved.message };
-  return { ok: true, status: "installed", runtimeDir, message: `Installed CallDiff ${CALLDIFF_VERSION} and pinned grammars at ${runtimeDir}.` };
 }
 
 async function runCommand(
@@ -362,7 +425,13 @@ async function runCommand(
     const kill = (): void => {
       try {
         if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
+        else if (process.platform === "win32" && child.pid) {
+          const killed = spawnSync("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+          if (killed.status !== 0) child.kill("SIGKILL");
+        } else child.kill("SIGKILL");
       } catch {
         try { child.kill("SIGKILL"); } catch { /* process already exited */ }
       }
@@ -470,7 +539,7 @@ async function createSyntheticPlan(
 ): Promise<SnapshotPlan> {
   const tempRoot = await mkdtemp(join(tmpdir(), "plannotator-call-flow-"));
   const cloneCwd = join(tempRoot, "repo");
-  const cleanup = () => rmSync(tempRoot, { recursive: true, force: true });
+  const cleanup = () => removeDirectoryBestEffort(tempRoot);
   try {
     await git(sourceCwd, ["clone", "--shared", "--no-checkout", "--quiet", "--", sourceCwd, cloneCwd]);
     await git(cloneCwd, ["read-tree", baseCommit]);
@@ -582,13 +651,53 @@ async function executeWorker(runtime: CallFlowRuntime, plan: SnapshotPlan, signa
   return parseCallDiffWorkerResult(parsed);
 }
 
+async function executeCallFlowAnalysis(
+  runtime: CallFlowRuntime,
+  input: CallFlowAnalysisInput,
+  signal: AbortSignal,
+): Promise<ParsedCallDiffWorkerResult> {
+  let plan: SnapshotPlan | undefined;
+  try {
+    plan = await createCallFlowSnapshotPlan(input);
+    if (signal.aborted) throw new Error("Call-flow analysis was superseded by a newer review snapshot.");
+    return await executeWorker(runtime, plan, signal);
+  } finally {
+    plan?.cleanup();
+  }
+}
+
+/** Injectable boundaries used to verify CallFlowService concurrency and cache policy. */
+export interface CallFlowServiceOptions {
+  readonly now?: () => number;
+  readonly runtimeProbeTtlMs?: number;
+  readonly resolveRuntime?: () => Promise<CallFlowRuntimeResolution>;
+  readonly executeAnalysis?: (
+    runtime: CallFlowRuntime,
+    input: CallFlowAnalysisInput,
+    signal: AbortSignal,
+  ) => Promise<ParsedCallDiffWorkerResult>;
+}
+
 /** Session-local cache + single execution slot for a review server. */
 export class CallFlowService {
   private readonly cache = new Map<string, Extract<CallFlowResponse, { status: "ok" }>>();
   private readonly failureCache = new Map<string, { expiresAt: number; response: CallFlowResponse }>();
   private readonly inFlight = new Map<string, Promise<CallFlowResponse>>();
   private readonly controllers = new Map<string, AbortController>();
+  private readonly now: () => number;
+  private readonly runtimeProbeTtlMs: number;
+  private readonly resolveRuntime: () => Promise<CallFlowRuntimeResolution>;
+  private readonly executeAnalysis: NonNullable<CallFlowServiceOptions["executeAnalysis"]>;
+  private runtimeProbe: { expiresAt: number; result: Promise<CallFlowRuntimeResolution> } | undefined;
   private queue: Promise<void> = Promise.resolve();
+
+  /** Create one session-owned service; omitted boundaries use the production runtime. */
+  constructor(options: CallFlowServiceOptions = {}) {
+    this.now = options.now ?? Date.now;
+    this.runtimeProbeTtlMs = options.runtimeProbeTtlMs ?? 30_000;
+    this.resolveRuntime = options.resolveRuntime ?? resolveCallFlowRuntime;
+    this.executeAnalysis = options.executeAnalysis ?? executeCallFlowAnalysis;
+  }
 
   private analysisKey(input: CallFlowAnalysisInput): string {
     const pair = input.prCommitPair ? `${input.prCommitPair.from}:${input.prCommitPair.to}` : "";
@@ -604,7 +713,7 @@ export class CallFlowService {
     if (effective === "all" || effective?.startsWith("jj-") || effective?.startsWith("gitbutler:") || effective?.startsWith("p4-")) {
       return { enabled: true, available: false, state: "unsupported", provider: "calldiff", reason: "view-unsupported", message: "Call flow is not available for this review view." };
     }
-    const resolved = await resolveCallFlowRuntime();
+    const resolved = await this.resolveRuntimeCached();
     if (!resolved.ok) return { enabled: true, available: false, state: "unavailable", provider: "calldiff", reason: resolved.reason, message: resolved.message };
     return { enabled: true, available: true, state: "available", provider: "calldiff", version: resolved.runtime.version };
   }
@@ -614,7 +723,7 @@ export class CallFlowService {
     const cached = this.cache.get(key);
     if (cached) return Promise.resolve(cached);
     const failed = this.failureCache.get(key);
-    if (failed && failed.expiresAt > Date.now()) return Promise.resolve(failed.response);
+    if (failed && failed.expiresAt > this.now()) return Promise.resolve(failed.response);
     if (failed) this.failureCache.delete(key);
     const running = this.inFlight.get(key);
     const runningController = this.controllers.get(key);
@@ -629,7 +738,12 @@ export class CallFlowService {
     void work.then(
       (response) => {
         if (response.status === "error") {
-          this.failureCache.set(key, { expiresAt: Date.now() + 30_000, response });
+          this.failureCache.set(key, { expiresAt: this.now() + 30_000, response });
+          while (this.failureCache.size > 4) {
+            const oldest = this.failureCache.keys().next().value;
+            if (oldest === undefined) break;
+            this.failureCache.delete(oldest);
+          }
         }
         this.finish(key, controller);
       },
@@ -660,19 +774,22 @@ export class CallFlowService {
     }
   }
 
+  private resolveRuntimeCached(): Promise<CallFlowRuntimeResolution> {
+    const current = this.runtimeProbe;
+    if (current && current.expiresAt > this.now()) return current.result;
+    const result = this.resolveRuntime();
+    this.runtimeProbe = { expiresAt: this.now() + this.runtimeProbeTtlMs, result };
+    return result;
+  }
+
   private async analyzeUncached(input: CallFlowAnalysisInput, signal: AbortSignal): Promise<CallFlowResponse> {
     if (signal.aborted) {
       return { status: "stale", reason: "snapshot-superseded", message: "Call-flow analysis was superseded by a newer review snapshot." };
     }
-    const runtime = await resolveCallFlowRuntime();
+    const runtime = await this.resolveRuntimeCached();
     if (!runtime.ok) return { status: "unavailable", reason: runtime.reason, message: runtime.message };
-    let plan: SnapshotPlan | undefined;
     try {
-      plan = await createCallFlowSnapshotPlan(input);
-      if (signal.aborted) {
-        return { status: "stale", reason: "snapshot-superseded", message: "Call-flow analysis was superseded by a newer review snapshot." };
-      }
-      const parsed = await executeWorker(runtime.runtime, plan, signal);
+      const parsed = await this.executeAnalysis(runtime.runtime, input, signal);
       const indexed = indexCallFlowImpacts(parsed.trees);
       const response: Extract<CallFlowResponse, { status: "ok" }> = {
         status: "ok",
@@ -688,16 +805,24 @@ export class CallFlowService {
         summary: { ...indexed.summary, warnings: parsed.diagnostics.filter((diagnostic) => diagnostic.level === "warning").length },
         diagnostics: parsed.diagnostics,
       };
+      if (signal.aborted) {
+        return { status: "stale", reason: "snapshot-superseded", message: "Call-flow analysis was superseded by a newer review snapshot." };
+      }
+      if (input.verifySnapshot && !(await input.verifySnapshot())) {
+        return { status: "stale", reason: "snapshot-changed", message: "The files changed during call-flow analysis. Refresh and run it again." };
+      }
       this.cache.set(this.analysisKey(input), response);
-      while (this.cache.size > 4) this.cache.delete(this.cache.keys().next().value!);
+      while (this.cache.size > 4) {
+        const oldest = this.cache.keys().next().value;
+        if (oldest === undefined) break;
+        this.cache.delete(oldest);
+      }
       return response;
     } catch (error) {
       if (signal.aborted) {
         return { status: "stale", reason: "snapshot-superseded", message: "Call-flow analysis was superseded by a newer review snapshot." };
       }
       return { status: "error", reason: "analysis-failed", message: error instanceof Error ? error.message : String(error) };
-    } finally {
-      plan?.cleanup();
     }
   }
 }

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Popover } from '@base-ui/react/popover';
 import type { CallFlowNode } from '@plannotator/shared/call-flow-types';
 import { getCallFlowTreesForFiles } from '@plannotator/shared/call-flow-types';
@@ -19,19 +19,22 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
   useEffect(() => () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
   }, []);
-  if (!state || !state.callFlowAvailable) return null;
-
-  const analysis = state.callFlowAnalysis;
-  const impacts = analysis.status === 'ready'
+  const analysis = state?.callFlowAnalysis;
+  const focusFiles = useMemo(
+    () => oldPath && oldPath !== filePath ? [filePath, oldPath] : [filePath],
+    [filePath, oldPath],
+  );
+  const impacts = useMemo(() => analysis?.status === 'ready'
     ? [
         ...(analysis.data.fileImpacts[filePath] ?? []),
         ...(oldPath && oldPath !== filePath ? analysis.data.fileImpacts[oldPath] ?? [] : []),
       ]
-    : [];
-  const focusFiles = oldPath && oldPath !== filePath ? [filePath, oldPath] : [filePath];
-  const trees = analysis.status === 'ready'
-    ? getCallFlowTreesForFiles(analysis.data.trees, focusFiles)
-    : [];
+    : [], [analysis, filePath, oldPath]);
+  const trees = useMemo(
+    () => analysis?.status === 'ready' ? getCallFlowTreesForFiles(analysis.data.trees, focusFiles) : [],
+    [analysis, focusFiles],
+  );
+  if (!state || !state.callFlowAvailable || !analysis) return null;
   const cancelClose = () => {
     if (!closeTimer.current) return;
     clearTimeout(closeTimer.current);
@@ -107,6 +110,7 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
               onOpenNode={openNode}
               onCommentNode={commentOnNode}
               focusFiles={focusFiles}
+              canInteractWithNode={state.isCallFlowNodeInPatch}
               compact
             />
             <button type="button" className="call-flow-open-dock" onClick={() => { setOpen(false); state.openCallFlowPanel(); }}>

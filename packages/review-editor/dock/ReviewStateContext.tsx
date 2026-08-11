@@ -12,7 +12,7 @@ import type { FeedbackDiffContext } from '../utils/exportFeedback';
 import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionComment } from '../edit/useEditSession';
 import type { CallFlowAnalysisState } from '../hooks/useCallFlowAnalysis';
-import type { CallFlowAdvert } from '@plannotator/shared/call-flow-types';
+import type { CallFlowAdvert, CallFlowNode } from '@plannotator/shared/call-flow-types';
 
 /** One-shot request to open the native code-annotation composer on a source range. */
 export interface LineAnnotationComposeRequest {
@@ -213,6 +213,9 @@ export interface ReviewState {
   callFlowAvailable: boolean;
   callFlowAdvert: CallFlowAdvert;
   callFlowAnalysis: CallFlowAnalysisState;
+  retryCallFlowAnalysis: () => void;
+  /** Whether the complete node range exists in the currently reviewed patch. */
+  isCallFlowNodeInPatch: (node: CallFlowNode) => boolean;
   isCallFlowActive: boolean;
   openCallFlowPanel: () => void;
 
