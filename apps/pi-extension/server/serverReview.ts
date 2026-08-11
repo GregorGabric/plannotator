@@ -6,7 +6,7 @@ import { basename, resolve as resolvePath } from "node:path";
 
 import { SingleFlight } from "../generated/single-flight.ts";
 import { contentHash, deleteDraft } from "../generated/draft.ts";
-import { loadConfig, saveConfig, detectGitUser, getServerConfig, resolveAIEnabled, resolveSharingEnabled, resolveCursorSandbox, resolveGuideHistory } from "../generated/config.ts";
+import { loadConfig, saveConfig, detectGitUser, getServerConfig, parseReviewAnalysisConfig, resolveAIEnabled, resolveSharingEnabled, resolveCursorSandbox, resolveGuideHistory } from "../generated/config.ts";
 
 export type {
 	DiffOption,
@@ -156,6 +156,8 @@ import {
 	SemanticDiffResponseCache,
 } from "../generated/semantic-diff.ts";
 import type { SemanticDiffAvailability, SemanticDiffResponse } from "../generated/semantic-diff-types.ts";
+import { CallFlowService } from "../generated/call-flow.ts";
+import type { CallFlowResponse } from "../generated/call-flow-types.ts";
 import { discoverCuratedSkills, resolveRequestedReviewProfile, listAllSkills, enableReviewSkill } from "../generated/review-skill-loader.ts";
 import { readGuideInstructions, writeGuideInstructions } from "../generated/guide-instructions-store.ts";
 import {
@@ -488,7 +490,11 @@ export async function startReviewServer(options: {
 	let fingerprintGeneration = 0;
 	let pendingFingerprintCapture: Promise<string | null> | null = null;
 	const fileContentFingerprintProbes = new SingleFlight<string | null>();
+	const callFlowService = new CallFlowService();
 	const captureDiffFingerprint = (knownFingerprint?: string): void => {
+		// A fingerprint capture marks a committed review-view change. Stop work
+		// for the prior snapshot even when the new view cannot run CallDiff.
+		callFlowService.cancelAll();
 		fileContentFingerprintProbes.clear();
 		const generation = ++fingerprintGeneration;
 		if (knownFingerprint !== undefined) {
@@ -713,6 +719,16 @@ export async function startReviewServer(options: {
 		}
 		return options.agentCwd && existsSync(options.agentCwd) ? options.agentCwd : null;
 	}
+	async function ensurePRCallFlowCwd(): Promise<string | null> {
+		if (options.worktreePool && prMeta) {
+			try {
+				return (await options.worktreePool.ensure(reviewRuntime, prMeta)).path;
+			} catch {
+				return null;
+			}
+		}
+		return resolvePRLocalCwd();
+	}
 	// Strict launch root for /api/open-in: in PR pool mode only the PR's own
 	// checkout is acceptable — never the launch-repo fallback resolveAgentCwd
 	// uses. Returns [] until ready so resolveOpenInTarget rejects (the button is
@@ -825,6 +841,9 @@ export async function startReviewServer(options: {
 	const semanticDiffCache = new SemanticDiffResponseCache();
 	const semanticDiffAvailabilityCache = new Map<string, Promise<SemanticDiffAvailability>>();
 
+	const semanticDiffEnabled = (): boolean => loadConfig().reviewAnalysis?.semanticDiff !== false;
+	const callFlowEnabled = (): boolean => loadConfig().reviewAnalysis?.callFlow === true;
+
 	function createSemanticDiffRuntime(cwd: string) {
 		return {
 			...createDefaultSemanticDiffRuntime(),
@@ -846,6 +865,7 @@ export async function startReviewServer(options: {
 	}
 
 	async function getSemanticDiffAdvert(diffType: DiffType = currentDiffType as DiffType) {
+		if (!semanticDiffEnabled()) return { available: false, enabled: false };
 		if (isGitButlerCommittedView(diffType)) return { available: false };
 		const availability = await getSemanticDiffAvailabilityForCwd(resolveSemanticDiffCwd(diffType));
 		return {
@@ -856,6 +876,9 @@ export async function startReviewServer(options: {
 	}
 
 	async function getSemanticDiff(url: URL): Promise<SemanticDiffResponse> {
+		if (!semanticDiffEnabled()) {
+			return { status: "unavailable", reason: "disabled", message: "Semantic diff is disabled in Settings → Analysis." };
+		}
 		if (isGitButlerCommittedView()) {
 			return {
 				status: "unavailable",
@@ -881,6 +904,74 @@ export async function startReviewServer(options: {
 			semanticDiffCache.setFailure(cacheKey, currentPatch, result);
 		}
 		return result;
+	}
+
+	function getCallFlowAdvert(diffType: DiffType = currentDiffType as DiffType) {
+		return callFlowService.getAdvert(callFlowEnabled(), {
+			vcsType: workspace ? "workspace" : sessionVcsType,
+			diffType,
+		});
+	}
+
+	async function getCallFlow(url: URL): Promise<CallFlowResponse> {
+		const requestedSnapshot = url.searchParams.get("snapshot");
+		if (!requestedSnapshot || requestedSnapshot !== currentSnapshotId()) {
+			return { status: "stale", reason: "snapshot-mismatch", message: "The review changed before call flow could start. Refresh and try again." };
+		}
+		if (!callFlowEnabled()) {
+			return { status: "disabled", reason: "disabled", message: "Call flow is disabled in Settings → Analysis." };
+		}
+		if (workspace) {
+			return { status: "unsupported", reason: "workspace-unsupported", message: "Call flow does not yet support multi-repository workspace reviews." };
+		}
+
+		let analysisCwd: string | undefined;
+		let analysisDiffType = currentDiffType as string;
+		let analysisBase = currentBase;
+		let prCommitPair: { from: string; to: string } | undefined;
+		if (isPRMode && prMeta) {
+			if (currentPRDiffScope === "layer" && layerPatchIncomplete) {
+				return { status: "unsupported", reason: "incomplete-patch", message: "Call flow is unavailable until the complete PR layer diff is available locally." };
+			}
+			analysisCwd = await ensurePRCallFlowCwd() ?? undefined;
+			if (!analysisCwd) {
+				return { status: "unavailable", reason: "checkout-unavailable", message: "Call flow needs a local PR checkout, which is not ready." };
+			}
+			if (currentPRDiffScope === "full-stack" && prMeta.defaultBranch) {
+				const baseRef = await resolvePRFullStackBaseRef(reviewRuntime, prMeta.defaultBranch, analysisCwd);
+				if (!baseRef) return { status: "unavailable", reason: "base-unavailable", message: "The full-stack base commit is unavailable locally." };
+				analysisDiffType = "merge-base";
+				analysisBase = baseRef;
+			} else {
+				prCommitPair = { from: prMeta.mergeBaseSha ?? prMeta.baseSha, to: prMeta.headSha };
+			}
+		} else {
+			analysisCwd = resolveVcsCwd(currentDiffType as DiffType, options.gitContext?.cwd)
+				?? options.gitContext?.cwd
+				?? options.agentCwd
+				?? process.cwd();
+		}
+		if (!analysisCwd) return { status: "unavailable", reason: "checkout-unavailable", message: "Call flow requires a local Git checkout." };
+
+		const baseline = pendingFingerprintCapture ? await pendingFingerprintCapture : currentFingerprint;
+		const before = await computeDiffFingerprint();
+		if (requestedSnapshot !== currentSnapshotId() || (baseline && before && baseline !== before)) {
+			return { status: "stale", reason: "snapshot-stale", message: "The files changed before call flow could start. Refresh the review first." };
+		}
+		const response = await callFlowService.analyze({
+			snapshotId: requestedSnapshot,
+			cwd: analysisCwd,
+			diffType: analysisDiffType,
+			base: analysisBase,
+			rawPatch: currentPatch,
+			vcsType: isPRMode ? "git" : sessionVcsType,
+			...(prCommitPair ? { prCommitPair } : {}),
+		});
+		const after = await computeDiffFingerprint();
+		if (requestedSnapshot !== currentSnapshotId() || (before && after && before !== after)) {
+			return { status: "stale", reason: "snapshot-changed", message: "The files changed during call-flow analysis. Refresh and run it again." };
+		}
+		return response;
 	}
 
 	const agentJobs = createAgentJobHandler({
@@ -1601,6 +1692,7 @@ export async function startReviewServer(options: {
 				...(baseBehindRemote && { baseBehindRemote: true }),
 				...(servedError && { error: servedError }),
 				semanticDiff: await getSemanticDiffAdvert(servedDiffType as DiffType),
+				callFlow: await getCallFlowAdvert(servedDiffType as DiffType),
 				serverConfig: getServerConfig(gitUser),
 			});
 		} else if (url.pathname === "/api/fetch-base" && req.method === "POST") {
@@ -1684,6 +1776,24 @@ export async function startReviewServer(options: {
 			});
 		} else if (url.pathname === "/api/semantic-diff" && req.method === "GET") {
 			json(res, await getSemanticDiff(url));
+		} else if (url.pathname === "/api/call-flow" && req.method === "GET") {
+			const result = await getCallFlow(url);
+			res.setHeader("Cache-Control", "no-store");
+			json(res, result, result.status === "stale" ? 409 : 200);
+		} else if (url.pathname === "/api/review-analysis" && req.method === "POST") {
+			try {
+				const reviewAnalysis = parseReviewAnalysisConfig(await parseBody(req));
+				if (!reviewAnalysis) return json(res, { error: "Invalid analysis settings" }, 400);
+				saveConfig({ reviewAnalysis });
+				if (reviewAnalysis.callFlow === false) callFlowService.cancelAll();
+				const [semanticDiff, callFlow] = await Promise.all([
+					getSemanticDiffAdvert(),
+					getCallFlowAdvert(),
+				]);
+				json(res, { semanticDiff, callFlow });
+			} catch {
+				json(res, { error: "Invalid request" }, 400);
+			}
 		} else if (url.pathname === "/api/commits" && req.method === "GET") {
 			// Linear commit history for the Commits panel (mirrors Bun review.ts).
 			// Git-local sessions only — PR/workspace/jj/p4 don't offer the view.
@@ -1765,6 +1875,7 @@ export async function startReviewServer(options: {
 						hideWhitespace: currentHideWhitespace,
 						...(currentError ? { error: currentError } : {}),
 						semanticDiff: await getSemanticDiffAdvert(),
+						callFlow: await getCallFlowAdvert(),
 					});
 					return;
 				}
@@ -1838,7 +1949,10 @@ export async function startReviewServer(options: {
 				).catch(() => false);
 				const sections = await buildSectionsSidecar(nextBase, newType as string);
 				const commitInfo = await buildCommitInfoSidecar(newType as string);
-				const switchSemanticDiff = await getSemanticDiffAdvert(newType as DiffType);
+				const [switchSemanticDiff, switchCallFlow] = await Promise.all([
+					getSemanticDiffAdvert(newType as DiffType),
+					getCallFlowAdvert(newType as DiffType),
+				]);
 				// Final guard: a newer switch during trailing awaits wins.
 				if (switchEpoch !== diffSwitchEpoch) {
 					json(res, { superseded: true });
@@ -1879,6 +1993,7 @@ export async function startReviewServer(options: {
 					...(updatedContext ? { gitContext: updatedContext } : {}),
 					...(currentError ? { error: currentError } : {}),
 					semanticDiff: switchSemanticDiff,
+					callFlow: switchCallFlow,
 				});
 			} catch (err) {
 				const message = err instanceof Error ? err.message : "Failed to switch diff";
@@ -1901,7 +2016,10 @@ export async function startReviewServer(options: {
 				// parked on an await: drop this request's writes and return the
 				// newest state so the client converges on it.
 				const respondSuperseded = async () => {
-					const semanticDiff = await getSemanticDiffAdvert();
+					const [semanticDiff, callFlow] = await Promise.all([
+						getSemanticDiffAdvert(),
+						getCallFlowAdvert(),
+					]);
 					json(res, {
 						rawPatch: currentPatch,
 						aiReviewContext: buildCurrentAiReviewContext(),
@@ -1911,6 +2029,7 @@ export async function startReviewServer(options: {
 						...(layerPatchIncomplete ? { prPatchIncomplete: true, prPatchUpgradeAvailable: layerUpgradeAvailable } : {}),
 						...(currentError ? { error: currentError } : {}),
 						semanticDiff,
+						callFlow,
 					});
 				};
 
@@ -1975,6 +2094,7 @@ export async function startReviewServer(options: {
 						...(layerPatchIncomplete ? { prPatchIncomplete: true, prPatchUpgradeAvailable: layerUpgradeAvailable } : {}),
 						...((currentError ?? upgradeError) ? { error: currentError ?? upgradeError } : {}),
 						semanticDiff: await getSemanticDiffAdvert(),
+						callFlow: await getCallFlowAdvert(),
 					});
 					return;
 				}
@@ -2011,6 +2131,7 @@ export async function startReviewServer(options: {
 					snapshotId: currentSnapshotId(),
 					prDiffScope: currentPRDiffScope,
 					semanticDiff: await getSemanticDiffAdvert(),
+					callFlow: await getCallFlowAdvert(),
 				});
 			} catch (err) {
 				const message = err instanceof Error ? err.message : "Failed to switch PR diff scope";
@@ -2105,6 +2226,7 @@ export async function startReviewServer(options: {
 					...(switchedViewedFiles.length > 0 && { viewedFiles: switchedViewedFiles }),
 					...(currentError ? { error: currentError } : {}),
 					semanticDiff: await getSemanticDiffAdvert(),
+					callFlow: await getCallFlowAdvert(),
 				});
 			} catch (err) {
 				return json(res, { error: err instanceof Error ? err.message : "Failed to switch PR" }, 500);
@@ -2481,11 +2603,17 @@ export async function startReviewServer(options: {
 			}
 		} else if (url.pathname === "/api/config" && req.method === "POST") {
 			try {
-				const body = (await parseBody(req)) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; conventionalComments?: boolean };
+				const body = (await parseBody(req)) as { displayName?: string; diffOptions?: Record<string, unknown>; theme?: Record<string, unknown>; reviewAnalysis?: Record<string, unknown>; conventionalComments?: boolean };
 				const toSave: Record<string, unknown> = {};
 				if (body.displayName !== undefined) toSave.displayName = body.displayName;
 				if (body.diffOptions !== undefined) toSave.diffOptions = body.diffOptions;
 				if (body.theme !== undefined) toSave.theme = body.theme;
+				if (body.reviewAnalysis !== undefined) {
+					const reviewAnalysis = parseReviewAnalysisConfig(body.reviewAnalysis);
+					if (!reviewAnalysis) return json(res, { error: "Invalid analysis settings" }, 400);
+					toSave.reviewAnalysis = reviewAnalysis;
+					if (reviewAnalysis.callFlow === false) callFlowService.cancelAll();
+				}
 				if (body.conventionalComments !== undefined) toSave.conventionalComments = body.conventionalComments;
 				if (Object.keys(toSave).length > 0) saveConfig(toSave as Parameters<typeof saveConfig>[0]);
 				json(res, { ok: true });
@@ -2787,6 +2915,7 @@ export async function startReviewServer(options: {
 			try {
 				process.removeListener("exit", exitHandler);
 				agentJobs.killAll();
+				callFlowService.cancelAll();
 				aiRuntime?.dispose();
 			} finally {
 				server.close();

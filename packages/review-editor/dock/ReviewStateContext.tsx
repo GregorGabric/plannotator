@@ -11,6 +11,15 @@ import type { PRDiffScope } from '@plannotator/shared/pr-stack';
 import type { FeedbackDiffContext } from '../utils/exportFeedback';
 import type { SuggestionHunk } from '../edit/deriveSuggestions';
 import type { EditSelectionComment } from '../edit/useEditSession';
+import type { CallFlowAnalysisState } from '../hooks/useCallFlowAnalysis';
+import type { CallFlowAdvert } from '@plannotator/shared/call-flow-types';
+
+/** One-shot request to open the native code-annotation composer on a source range. */
+export interface LineAnnotationComposeRequest {
+  readonly id: number;
+  readonly filePath: string;
+  readonly range: SelectedLineRange;
+}
 
 /**
  * Shared review state consumed by dockview panel wrappers.
@@ -61,6 +70,8 @@ export interface ReviewState {
   scrollTargetAnnotation: AnnotationScrollTarget | null;
   pendingSelection: SelectedLineRange | null;
   onLineSelection: (range: SelectedLineRange | null) => void;
+  /** Resolve a source path and open the native line-annotation composer. */
+  onRequestLineAnnotation: (filePath: string, range: SelectedLineRange) => void;
   onAddAnnotation: (type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
   onAddAnnotationForFile: (filePath: string, type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
   /** EXPERIMENTAL edit-to-suggestion flag (cookie setting, default OFF). Only
@@ -199,6 +210,11 @@ export interface ReviewState {
   onSemanticDiffUnavailable: () => void;
   onSemanticDiffLoadError: () => boolean;
   onSemanticDiffLoadSuccess: () => void;
+  callFlowAvailable: boolean;
+  callFlowAdvert: CallFlowAdvert;
+  callFlowAnalysis: CallFlowAnalysisState;
+  isCallFlowActive: boolean;
+  openCallFlowPanel: () => void;
 
   // Tour
   openTourPanel: (jobId: string) => void;
