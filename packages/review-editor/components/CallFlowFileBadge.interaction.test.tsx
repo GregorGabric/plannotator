@@ -130,6 +130,78 @@ afterEach(async () => {
 });
 
 describe('CallFlowFileBadge Lens', () => {
+  test.skipIf(!hasDom)('captures find for the active sticky Lens search', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <ReviewStateProvider value={lensState()}>
+          <CallFlowFileBadge filePath="src/order.ts" />
+        </ReviewStateProvider>,
+      );
+    });
+
+    const trigger = host.querySelector<HTMLButtonElement>('.call-flow-file-badge');
+    await act(async () => trigger?.click());
+    const popup = document.querySelector<HTMLElement>('.call-flow-popover');
+    expect(popup).not.toBeNull();
+
+    let shortcutEscapedLens = false;
+    const outsideShortcut = () => { shortcutEscapedLens = true; };
+    window.addEventListener('keydown', outsideShortcut);
+    await act(async () => {
+      popup?.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'f',
+        metaKey: true,
+      }));
+    });
+    window.removeEventListener('keydown', outsideShortcut);
+
+    const pathsInput = popup?.querySelector<HTMLInputElement>('input[placeholder="Find calls or files"]');
+    expect(pathsInput).not.toBeNull();
+    expect(document.activeElement).toBe(pathsInput);
+    expect(shortcutEscapedLens).toBe(false);
+
+    await act(async () => {
+      if (!pathsInput) return;
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(pathsInput), 'value')?.set;
+      setter?.call(pathsInput, 'save');
+      pathsInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    pathsInput?.setSelectionRange(4, 4);
+    pathsInput?.blur();
+    await act(async () => {
+      popup?.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'f',
+        metaKey: true,
+      }));
+    });
+    expect(document.activeElement).toBe(pathsInput);
+    expect(pathsInput?.selectionStart).toBe(0);
+    expect(pathsInput?.selectionEnd).toBe(4);
+
+    const rawTab = [...(popup?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+      .find((button) => button.textContent === 'Raw');
+    await act(async () => rawTab?.click());
+    expect(popup?.querySelector('.call-flow-raw-compact')).not.toBeNull();
+    await act(async () => {
+      popup?.dispatchEvent(new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'f',
+        ctrlKey: true,
+      }));
+    });
+    const rawInput = popup?.querySelector<HTMLInputElement>('input[placeholder="Find in raw output"]');
+    expect(rawInput).not.toBeNull();
+    expect(document.activeElement).toBe(rawInput);
+  });
+
   test.skipIf(!hasDom)('opens complete nearby paths and canonical per-entry raw output', async () => {
     host = document.createElement('div');
     document.body.appendChild(host);

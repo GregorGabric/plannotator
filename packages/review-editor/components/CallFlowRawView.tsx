@@ -94,17 +94,21 @@ export function CallFlowRawView({
   }, []);
 
   useEffect(() => {
-    if (compact) return;
     const onFind = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'f') return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (searchOpen) {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
       selectSearchInputRef.current = true;
       setSearchOpen(true);
     };
     window.addEventListener('keydown', onFind, { capture: true });
     return () => window.removeEventListener('keydown', onFind, { capture: true });
-  }, [compact]);
+  }, [searchOpen]);
 
   useEffect(() => {
     if (!searchOpen) {
