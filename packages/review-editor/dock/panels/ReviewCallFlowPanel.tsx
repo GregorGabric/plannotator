@@ -1,17 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { CallFlowAdvert, CallFlowInstallStage, CallFlowNode } from '@plannotator/shared/call-flow-types';
 import { getCallFlowLanguage, type CallFlowLanguageId } from '@plannotator/shared/call-flow-languages';
 import type { CallFlowInstallController } from '../../hooks/useCallFlowInstall';
-import { Check, Copy, Info } from 'lucide-react';
+import { Popover } from '@base-ui/react/popover';
+import { Check, ChevronDown, ChevronUp, Copy, Info, Search, Settings2, X } from 'lucide-react';
 import { Tooltip } from '@plannotator/ui/components/Tooltip';
 import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useReviewState } from '../ReviewStateContext';
 import {
-  annotationSelectionForCallFlowNode,
   CallFlowTreeView,
   selectionForCallFlowNode,
 } from '../../components/CallFlowTreeView';
-import { formatCallFlowInstallSize } from '../../utils/callFlowPresentation';
+import {
+  findCallFlowRawMatches,
+  formatCallFlowInstallSize,
+  getCallFlowRawLines,
+} from '../../utils/callFlowPresentation';
 
 function errorMessage(error: Exclude<import('@plannotator/shared/call-flow-types').CallFlowResponse, { status: 'ok' }> | Error): string {
   return error.message || 'Call-flow analysis failed.';
@@ -42,6 +46,91 @@ function installIncludesLanguage(
   languageId: CallFlowLanguageId,
 ): boolean {
   return status.state === 'running' && status.languageIds.includes(languageId);
+}
+
+function CallFlowLanguagesMenu({
+  languages,
+  installable,
+  install,
+}: {
+  readonly languages: NonNullable<CallFlowAdvert['languages']>;
+  readonly installable: boolean;
+  readonly install: CallFlowInstallController;
+}) {
+  const installed = languages.filter((language) => language.installed);
+  const installedSize = installed.reduce((total, language) => total + language.installSizeBytes, 0);
+  return (
+    <Popover.Root>
+      <Popover.Trigger render={
+        <button
+          type="button"
+          className="call-flow-languages-trigger"
+          aria-label={`Manage Call Flow languages. ${installed.length} of ${languages.length} installed.`}
+          aria-busy={install.status.state === 'running'}
+        />
+      }>
+        <Settings2 aria-hidden="true" size={14} strokeWidth={1.75} />
+        <span>Languages</span>
+        <span className="call-flow-languages-trigger-count">{installed.length}/{languages.length}</span>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner align="end" side="bottom" sideOffset={6} className="z-[110]">
+          <Popover.Popup
+            className="call-flow-languages-popover shadow-lg popover-enter"
+            aria-label="Call Flow language support"
+          >
+            <header className="call-flow-languages-popover-header">
+              <div>
+                <strong>Language support</strong>
+                <span>Install parsers ahead of the next review.</span>
+              </div>
+              <span>{formatCallFlowInstallSize(installedSize)} installed</span>
+            </header>
+            <ul aria-live="polite">
+              {languages.map((language) => {
+                const languageInstallError = installFailedForLanguage(install.status, language.id)
+                  ? install.status
+                  : undefined;
+                const languageInstalling = installIncludesLanguage(install.status, language.id);
+                const requirement = language.required
+                  ? `Needed for ${language.changedFiles} changed ${language.changedFiles === 1 ? 'file' : 'files'}`
+                  : 'Available';
+                return (
+                  <li key={language.id}>
+                    <span>
+                      <strong>{language.label}</strong>
+                      <small>
+                        {language.installed
+                          ? `Installed · ${formatCallFlowInstallSize(language.installSizeBytes)}`
+                          : `${requirement} · ${formatCallFlowInstallSize(language.installSizeBytes)}`}
+                      </small>
+                      {languageInstalling && <small className="call-flow-language-progress">Installing…</small>}
+                      {languageInstallError && (
+                        <small className="call-flow-language-error">Install failed: {languageInstallError.error}</small>
+                      )}
+                    </span>
+                    {!language.installed
+                      && language.kind === 'pack'
+                      && installable
+                      && !languageInstalling
+                      && (
+                      <button
+                        type="button"
+                        onClick={() => install.start([language.id])}
+                        disabled={install.status.state === 'running'}
+                      >
+                        {languageInstallError ? 'Retry' : 'Install'}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
 }
 
 /**
@@ -146,29 +235,221 @@ export function CallFlowInstallFunnel({
   );
 }
 
-export function ReviewCallFlowPanel() {
-  const state = useReviewState();
-  const analysis = state.callFlowAnalysis;
-  const [view, setView] = useState<'paths' | 'raw'>('paths');
+function CallFlowRawView({ raw }: { readonly raw: string }) {
+  const lines = useMemo(() => getCallFlowRawLines(raw), [raw]);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchTriggerRef = useRef<HTMLButtonElement>(null);
+  const selectSearchInputRef = useRef(false);
+  const searchWasOpenRef = useRef(false);
+  const rawPreRef = useRef<HTMLPreElement>(null);
+  const matches = useMemo(() => findCallFlowRawMatches(lines, query), [lines, query]);
+  const matchesByLine = useMemo(() => {
+    const byLine = new Map<number, Array<(typeof matches)[number] & { index: number }>>();
+    matches.forEach((match, index) => {
+      const lineMatches = byLine.get(match.lineIndex) ?? [];
+      lineMatches.push({ ...match, index });
+      byLine.set(match.lineIndex, lineMatches);
+    });
+    return byLine;
+  }, [matches]);
 
   useEffect(() => () => {
     if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
   }, []);
+
+  useEffect(() => {
+    const onFind = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'f') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      selectSearchInputRef.current = true;
+      setSearchOpen(true);
+    };
+    window.addEventListener('keydown', onFind, { capture: true });
+    return () => window.removeEventListener('keydown', onFind, { capture: true });
+  }, []);
+
+  useEffect(() => {
+    if (!searchOpen) {
+      if (searchWasOpenRef.current) {
+        searchWasOpenRef.current = false;
+        searchTriggerRef.current?.focus();
+      }
+      return;
+    }
+    searchWasOpenRef.current = true;
+    if (selectSearchInputRef.current) {
+      selectSearchInputRef.current = false;
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      return;
+    }
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (matches.length === 0) return;
+    const match = rawPreRef.current?.querySelector<HTMLElement>(`[data-raw-match="${currentMatchIndex}"]`);
+    match?.scrollIntoView?.({ block: 'nearest' });
+  }, [currentMatchIndex, matches]);
+
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setQuery('');
+    setCurrentMatchIndex(0);
+  };
+  const moveMatch = (direction: 1 | -1) => {
+    if (matches.length === 0) return;
+    setCurrentMatchIndex((index) => (index + direction + matches.length) % matches.length);
+  };
+  const updateQuery = (value: string) => {
+    setQuery(value);
+    setCurrentMatchIndex(0);
+  };
+  const copyRaw = async () => {
+    const copied = await copyTextToClipboard(raw);
+    setCopyState(copied ? 'copied' : 'error');
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
+    copyResetTimer.current = window.setTimeout(() => setCopyState('idle'), 1500);
+  };
+
+  return (
+    <section className="call-flow-raw" aria-label="Raw call diff">
+      <div className="call-flow-raw-toolbar">
+        {searchOpen ? (
+          <form
+            className="call-flow-raw-search"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              moveMatch(1);
+            }}
+          >
+            <label className="call-flow-raw-search-field">
+              <Search aria-hidden="true" size={13} strokeWidth={1.75} />
+              <span className="sr-only">Search raw call diff</span>
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={query}
+                onChange={(event) => updateQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeSearch();
+                  } else if (event.key === 'Enter') {
+                    event.preventDefault();
+                    moveMatch(event.shiftKey ? -1 : 1);
+                  }
+                }}
+                placeholder="Find in raw output"
+                autoComplete="off"
+                spellCheck={false}
+                data-1p-ignore
+                data-lpignore="true"
+              />
+            </label>
+            <span className="call-flow-raw-search-count" aria-live="polite">
+              {matches.length === 0 ? '0/0' : `${currentMatchIndex + 1}/${matches.length}`}
+            </span>
+            <button
+              type="button"
+              className="call-flow-raw-icon-button"
+              onClick={() => moveMatch(-1)}
+              disabled={matches.length === 0}
+              aria-label="Previous match"
+              title="Previous match (Shift+Enter)"
+            >
+              <ChevronUp aria-hidden="true" size={14} />
+            </button>
+            <button
+              type="button"
+              className="call-flow-raw-icon-button"
+              onClick={() => moveMatch(1)}
+              disabled={matches.length === 0}
+              aria-label="Next match"
+              title="Next match (Enter)"
+            >
+              <ChevronDown aria-hidden="true" size={14} />
+            </button>
+            <button
+              type="button"
+              className="call-flow-raw-icon-button"
+              onClick={closeSearch}
+              aria-label="Close search"
+            >
+              <X aria-hidden="true" size={14} />
+            </button>
+          </form>
+        ) : (
+          <button
+            ref={searchTriggerRef}
+            type="button"
+            className="call-flow-raw-icon-button"
+            onClick={() => setSearchOpen(true)}
+            aria-label="Search raw call diff"
+            title="Search raw output (Cmd/Ctrl+F)"
+          >
+            <Search aria-hidden="true" size={14} />
+          </button>
+        )}
+        <button type="button" onClick={() => void copyRaw()} aria-label="Copy raw call diff">
+          {copyState === 'copied' ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
+          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
+        </button>
+      </div>
+      <pre ref={rawPreRef} tabIndex={0}><code>{lines.map((line, lineIndex) => {
+        const lineMatches = matchesByLine.get(lineIndex);
+        if (!lineMatches || lineMatches.length === 0) {
+          return (
+            <span className={`call-flow-raw-line call-flow-raw-line-${line.kind}`} key={lineIndex}>
+              {line.content}
+            </span>
+          );
+        }
+        const content: React.ReactNode[] = [];
+        let cursor = 0;
+        lineMatches.forEach((match) => {
+          content.push(line.content.slice(cursor, match.start));
+          content.push(
+            <mark
+              className={match.index === currentMatchIndex ? 'call-flow-raw-match-current' : undefined}
+              data-raw-match={match.index}
+              key={`${match.start}:${match.end}`}
+            >
+              {line.content.slice(match.start, match.end)}
+            </mark>,
+          );
+          cursor = match.end;
+        });
+        content.push(line.content.slice(cursor));
+        return (
+          <span className={`call-flow-raw-line call-flow-raw-line-${line.kind}`} key={lineIndex}>
+            {content}
+          </span>
+        );
+      })}</code></pre>
+    </section>
+  );
+}
+
+export function ReviewCallFlowPanel() {
+  const state = useReviewState();
+  const analysis = state.callFlowAnalysis;
+  const [view, setView] = useState<'paths' | 'raw'>('paths');
 
   const openNode = (node: CallFlowNode) => {
     if (!node.file) return;
     state.openDiffFile(node.file);
     state.onLineSelection(selectionForCallFlowNode(node));
   };
-  const commentOnNode = (node: CallFlowNode) => {
-    if (!node.file) return;
-    const range = annotationSelectionForCallFlowNode(node);
-    if (!range) return;
-    state.onRequestLineAnnotation(node.file, range);
-  };
-
   if (!state.callFlowAdvert.available) {
     // The runtime-missing flavor of unavailable is the setup progress surface.
     // Unsupported views and the disabled state never offer the install.
@@ -233,12 +514,6 @@ export function ReviewCallFlowPanel() {
     installIncludesLanguage(state.callFlowInstall.status, languageId)
   ));
   const retrySkipped = () => state.callFlowInstall.start(skippedLanguageIds);
-  const copyRaw = async () => {
-    const copied = await copyTextToClipboard(data.raw);
-    setCopyState(copied ? 'copied' : 'error');
-    if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
-    copyResetTimer.current = window.setTimeout(() => setCopyState('idle'), 1500);
-  };
   return (
     <div className="call-flow-panel">
       <div className="call-flow-shell">
@@ -253,6 +528,13 @@ export function ReviewCallFlowPanel() {
               <button type="button" aria-pressed={view === 'paths'} onClick={() => setView('paths')}>Paths</button>
               <button type="button" aria-pressed={view === 'raw'} onClick={() => setView('raw')}>Raw</button>
             </div>
+            {state.callFlowAdvert.languages && (
+              <CallFlowLanguagesMenu
+                languages={state.callFlowAdvert.languages}
+                installable={state.callFlowAdvert.installable}
+                install={state.callFlowInstall}
+              />
+            )}
             <Tooltip
               content={`Generated by CallDiff ${data.version}. Syntactic analysis of ${data.from} to ${data.to}; not a runtime trace.`}
               side="bottom"
@@ -272,7 +554,7 @@ export function ReviewCallFlowPanel() {
             <span><b className="call-flow-status-added">+</b> added</span>
             <span><b className="call-flow-status-removed">−</b> removed</span>
             <span><b>·</b> unchanged context</span>
-            <span className="call-flow-legend-hint">Open a row or comment on a changed call.</span>
+            <span className="call-flow-legend-hint">Click any row to comment. Shift-click adds steps. Select a file path to open source.</span>
           </div>
         )}
 
@@ -306,16 +588,7 @@ export function ReviewCallFlowPanel() {
         )}
 
         {view === 'raw' ? (
-          <section className="call-flow-raw" aria-label="Raw call diff">
-            <div className="call-flow-raw-toolbar">
-              <span>Canonical CallDiff output</span>
-              <button type="button" onClick={() => void copyRaw()} aria-label="Copy raw call diff">
-                {copyState === 'copied' ? <Check aria-hidden="true" size={14} /> : <Copy aria-hidden="true" size={14} />}
-                {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
-              </button>
-            </div>
-            <pre tabIndex={0}>{data.raw}</pre>
-          </section>
+          <CallFlowRawView raw={data.raw} />
         ) : data.trees.length === 0 ? (
           <div className="call-flow-empty">
             <span className="call-flow-empty-kicker">Snapshots match structurally</span>
@@ -326,7 +599,7 @@ export function ReviewCallFlowPanel() {
           <CallFlowTreeView
             trees={data.trees}
             onOpenNode={openNode}
-            onCommentNode={commentOnNode}
+            onAnnotateTargets={state.onAddCallFlowAnnotation}
             canInteractWithNode={state.isCallFlowNodeInPatch}
           />
         )}
@@ -338,49 +611,6 @@ export function ReviewCallFlowPanel() {
           </details>
         )}
 
-        {state.callFlowAdvert.languages && (
-          <details className="call-flow-languages">
-            <summary>
-              Languages · {formatCallFlowInstallSize(state.callFlowAdvert.languages.reduce(
-                (total, language) => total + (language.installed ? language.installSizeBytes : 0),
-                0,
-              ))} installed
-            </summary>
-            <ul>
-              {state.callFlowAdvert.languages.map((language) => {
-                const languageInstallError = installFailedForLanguage(state.callFlowInstall.status, language.id)
-                  ? state.callFlowInstall.status
-                  : undefined;
-                const languageInstalling = installIncludesLanguage(state.callFlowInstall.status, language.id);
-                return (
-                  <li key={language.id}>
-                    <span>
-                      <strong>{language.label}</strong>
-                      <small>{language.installed ? `Installed · ${formatCallFlowInstallSize(language.installSizeBytes)}` : formatCallFlowInstallSize(language.installSizeBytes)}</small>
-                      {languageInstalling && <small className="call-flow-language-progress">Installing…</small>}
-                      {languageInstallError && (
-                        <small className="call-flow-language-error">Install failed: {languageInstallError.error}</small>
-                      )}
-                    </span>
-                    {!language.installed
-                      && language.kind === 'pack'
-                      && state.callFlowAdvert.installable
-                      && !languageInstalling
-                      && (
-                      <button
-                        type="button"
-                        onClick={() => state.callFlowInstall.start([language.id])}
-                        disabled={state.callFlowInstall.status.state === 'running'}
-                      >
-                        {languageInstallError ? 'Retry' : 'Install'}
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </details>
-        )}
       </div>
     </div>
   );

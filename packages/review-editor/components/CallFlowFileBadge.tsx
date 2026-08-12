@@ -4,7 +4,6 @@ import type { CallFlowNode } from '@plannotator/shared/call-flow-types';
 import { getCallFlowTreesForFiles } from '@plannotator/shared/call-flow-types';
 import { useReviewStateOptional } from '../dock/ReviewStateContext';
 import {
-  annotationSelectionForCallFlowNode,
   CallFlowTreeView,
   selectionForCallFlowNode,
 } from './CallFlowTreeView';
@@ -15,6 +14,7 @@ const CLOSE_DELAY_MS = 140;
 export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }> = ({ filePath, oldPath }) => {
   const state = useReviewStateOptional();
   const [open, setOpen] = useState(false);
+  const annotationDraftActiveRef = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -45,22 +45,20 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
   };
   const scheduleClose = () => {
     cancelClose();
-    closeTimer.current = setTimeout(() => setOpen(false), CLOSE_DELAY_MS);
+    closeTimer.current = setTimeout(() => {
+      if (!annotationDraftActiveRef.current) setOpen(false);
+    }, CLOSE_DELAY_MS);
+  };
+  const closeLens = () => {
+    annotationDraftActiveRef.current = false;
+    setOpen(false);
   };
   const openNode = (node: CallFlowNode) => {
     if (!node.file) return;
     state.openDiffFile(node.file);
     state.onLineSelection(selectionForCallFlowNode(node));
-    setOpen(false);
+    closeLens();
   };
-  const commentOnNode = (node: CallFlowNode) => {
-    if (!node.file) return;
-    const range = annotationSelectionForCallFlowNode(node);
-    if (!range) return;
-    setOpen(false);
-    state.onRequestLineAnnotation(node.file, range);
-  };
-
   if (skippedLanguage) {
     return (
       <button
@@ -92,7 +90,13 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen && annotationDraftActiveRef.current) return;
+        setOpen(nextOpen);
+      }}
+    >
       <Popover.Trigger render={
         <button
           type="button"
@@ -125,12 +129,16 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
             <CallFlowTreeView
               trees={trees}
               onOpenNode={openNode}
-              onCommentNode={commentOnNode}
+              onAnnotateTargets={state.onAddCallFlowAnnotation}
               focusFiles={focusFiles}
               canInteractWithNode={state.isCallFlowNodeInPatch}
+              onAnnotationDraftChange={(active) => {
+                annotationDraftActiveRef.current = active;
+                if (!active) setOpen(false);
+              }}
               compact
             />
-            <button type="button" className="call-flow-open-dock" onClick={() => { setOpen(false); state.openCallFlowPanel(); }}>
+            <button type="button" className="call-flow-open-dock" onClick={() => { closeLens(); state.openCallFlowPanel(); }}>
               Open full call flow
               <span aria-hidden="true">→</span>
             </button>
