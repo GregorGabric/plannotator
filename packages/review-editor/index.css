@@ -704,17 +704,31 @@ diffs-container {
   padding-top: 0.875rem;
 }
 
-.call-flow-context-control {
+.call-flow-tree-toolbar {
   display: flex;
   min-height: 1.875rem;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 0.625rem;
   color: var(--muted-foreground);
   font-family: var(--font-sans);
   font-size: 0.625rem;
 }
-.call-flow-context-control button {
+.call-flow-context-summary { margin-right: auto; }
+.call-flow-tree-actions {
+  display: flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.125rem;
+}
+.call-flow-tree-actions-searching { flex: 1 1 24rem; }
+.call-flow-tree-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 1.875rem;
   border: 0;
   border-radius: var(--radius-sm);
@@ -725,12 +739,23 @@ diffs-container {
   font-weight: 550;
   cursor: pointer;
 }
-.call-flow-context-control button:focus-visible {
+.call-flow-tree-toolbar button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+.call-flow-tree-toolbar .call-flow-icon-button {
+  width: 1.875rem;
+  padding: 0;
+}
+.call-flow-tree-toolbar button:focus-visible {
   outline: 1px solid var(--ring);
   outline-offset: 1px;
 }
 @media (hover: hover) and (pointer: fine) {
-  .call-flow-context-control button:hover { color: var(--foreground); }
+  .call-flow-tree-toolbar button:not(:disabled):hover {
+    background: var(--muted);
+    color: var(--foreground);
+  }
 }
 
 .call-flow-entry {
@@ -801,6 +826,16 @@ diffs-container {
   min-height: 2.25rem;
   padding-left: calc(var(--call-flow-depth) * 1.25rem + 0.375rem);
   border-bottom: 1px solid oklch(from var(--border) l c h / 0.35);
+}
+.call-flow-row.call-flow-row-search-current {
+  background: oklch(from var(--warning) l c h / 0.08);
+  box-shadow: inset 2px 0 0 oklch(from var(--warning) l c h / 0.72);
+}
+.call-flow-tree-match {
+  border-radius: 2px;
+  padding: 0;
+  background: oklch(from var(--warning) l c h / 0.32);
+  color: inherit;
 }
 
 .call-flow-file-boundary {
@@ -1093,13 +1128,13 @@ diffs-container {
   opacity: 0.38;
   cursor: default;
 }
-.call-flow-raw-toolbar .call-flow-raw-icon-button {
+.call-flow-raw-toolbar .call-flow-icon-button {
   width: 1.875rem;
   justify-content: center;
   padding: 0;
 }
 
-.call-flow-raw-search {
+.call-flow-search {
   display: flex;
   min-width: 0;
   flex: 1;
@@ -1107,21 +1142,21 @@ diffs-container {
   justify-content: flex-end;
   gap: 0.125rem;
 }
-.call-flow-raw-search-field {
+.call-flow-search-field {
   position: relative;
   display: flex;
   width: min(18rem, 100%);
   min-width: 8rem;
   align-items: center;
 }
-.call-flow-raw-search-field > svg {
+.call-flow-search-field > svg {
   position: absolute;
   left: 0.5rem;
   z-index: 1;
   color: var(--muted-foreground);
   pointer-events: none;
 }
-.call-flow-raw-search input {
+.call-flow-search input {
   width: 100%;
   min-height: 1.875rem;
   border: 1px solid var(--border);
@@ -1132,13 +1167,13 @@ diffs-container {
   font: inherit;
   outline: none;
 }
-.call-flow-raw-search input::placeholder { color: var(--muted-foreground); }
-.call-flow-raw-search input::-webkit-search-cancel-button { display: none; }
-.call-flow-raw-search input:focus-visible {
+.call-flow-search input::placeholder { color: var(--muted-foreground); }
+.call-flow-search input::-webkit-search-cancel-button { display: none; }
+.call-flow-search input:focus-visible {
   border-color: var(--ring);
   box-shadow: 0 0 0 1px oklch(from var(--ring) l c h / 0.18);
 }
-.call-flow-raw-search-count {
+.call-flow-search-count {
   min-width: 3.5rem;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
@@ -1515,10 +1550,10 @@ diffs-container {
   .call-flow-info,
   .call-flow-languages-trigger,
   .call-flow-languages-popover button,
-  .call-flow-context-control button,
+  .call-flow-tree-toolbar button,
   .call-flow-raw-toolbar button,
-  .call-flow-raw-search input { min-height: 2.75rem; }
-  .call-flow-raw-search input { font-size: 1rem; }
+  .call-flow-search input { min-height: 2.75rem; }
+  .call-flow-search input { font-size: 1rem; }
   .call-flow-expand { width: 2.75rem; }
 }
 

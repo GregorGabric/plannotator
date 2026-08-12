@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CallFlowNode, CallFlowTree } from '@plannotator/shared/call-flow-types';
+import { Search } from 'lucide-react';
 import { CommentPopover, type CommentTargetChip } from '@plannotator/ui/components/CommentPopover';
 import type { CallFlowAnnotationTarget, SelectedLineRange } from '@plannotator/ui/types';
 import {
@@ -8,6 +9,7 @@ import {
   type ComposerYieldState,
 } from '@plannotator/ui/utils/composerYield';
 import { splitCallFlowFilePath } from '../utils/callFlowPresentation';
+import { CallFlowSearchControls } from './CallFlowSearchControls';
 
 /** Map a located CallDiff node to the old/new source range used by code review. */
 export function selectionForCallFlowNode(node: CallFlowNode): SelectedLineRange | null {
@@ -50,6 +52,28 @@ function statusGlyph(status: CallFlowNode['status']): string {
   return '·';
 }
 
+function CallFlowSearchText({ text, query }: { readonly text: string; readonly query: string }) {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return text;
+  const lowerText = text.toLocaleLowerCase();
+  const lowerQuery = normalizedQuery.toLocaleLowerCase();
+  const content: React.ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = lowerText.indexOf(lowerQuery);
+  while (matchIndex !== -1) {
+    content.push(text.slice(cursor, matchIndex));
+    content.push(
+      <mark className="call-flow-tree-match" key={`${matchIndex}:${cursor}`}>
+        {text.slice(matchIndex, matchIndex + normalizedQuery.length)}
+      </mark>,
+    );
+    cursor = matchIndex + normalizedQuery.length;
+    matchIndex = lowerText.indexOf(lowerQuery, cursor);
+  }
+  content.push(text.slice(cursor));
+  return content;
+}
+
 interface CallFlowNodeRowProps {
   readonly node: CallFlowNode;
   readonly entry: string;
@@ -66,6 +90,10 @@ interface CallFlowNodeRowProps {
   readonly canInteractWithNode?: (node: CallFlowNode) => boolean;
   /** Nodes on a path to at least one added/removed step. */
   readonly changedSubtrees: ReadonlySet<CallFlowNode>;
+  /** Nodes on a path to at least one structured-search result. */
+  readonly searchSubtrees: ReadonlySet<CallFlowNode>;
+  readonly searchQuery: string;
+  readonly currentSearchPath?: string;
   readonly showAllContext: boolean;
   readonly collapsedPaths: ReadonlySet<string>;
   readonly fileBoundaryPaths: ReadonlySet<string>;
@@ -83,6 +111,9 @@ function CallFlowNodeRow({
   focusFiles,
   canInteractWithNode,
   changedSubtrees,
+  searchSubtrees,
+  searchQuery,
+  currentSearchPath,
   showAllContext,
   collapsedPaths,
   fileBoundaryPaths,
@@ -95,7 +126,7 @@ function CallFlowNodeRow({
   const expanded = !collapsedPaths.has(treePath);
   const hasChildren = showAllContext
     ? node.children.length > 0
-    : node.children.some((child) => changedSubtrees.has(child));
+    : node.children.some((child) => changedSubtrees.has(child) || searchSubtrees.has(child));
   const inPatch = canInteractWithNode?.(node) ?? true;
   const navigable = Boolean(node.file && node.line && inPatch);
   const annotationTarget = annotationTargetForCallFlowNode(node, entry, treePath);
@@ -130,7 +161,7 @@ function CallFlowNodeRow({
         </div>
       )}
       <div
-        className={`call-flow-row call-flow-row-${node.status}${focused ? ' call-flow-row-focused' : ''}${annotatable ? ' call-flow-row-selectable' : ''}${selected ? ' call-flow-row-selected' : ''}`}
+        className={`call-flow-row call-flow-row-${node.status}${focused ? ' call-flow-row-focused' : ''}${annotatable ? ' call-flow-row-selectable' : ''}${selected ? ' call-flow-row-selected' : ''}${currentSearchPath === treePath ? ' call-flow-row-search-current' : ''}`}
         style={{ '--call-flow-depth': depth } as React.CSSProperties}
         data-call-flow-target={treePath}
       >
@@ -165,7 +196,7 @@ function CallFlowNodeRow({
           }}
           title={targetTitle}
         >
-          <span className="call-flow-node-label">{node.label}</span>
+          <span className="call-flow-node-label"><CallFlowSearchText text={node.label} query={searchQuery} /></span>
           {node.kind === 'branch' && <span className="call-flow-node-kind">branch</span>}
         </button>
         {path && node.line ? (
@@ -178,10 +209,12 @@ function CallFlowNodeRow({
             aria-label={navigable ? `Open ${location}` : `Source ${location} is outside the reviewed patch`}
           >
             <span className="call-flow-node-location-main">
-              <span className="call-flow-node-file">{path.name}</span>
+              <span className="call-flow-node-file"><CallFlowSearchText text={path.name} query={searchQuery} /></span>
               <span className="call-flow-node-line">:{node.line}</span>
             </span>
-            {path.directory && <span className="call-flow-node-directory">{path.directory}</span>}
+            {path.directory && (
+              <span className="call-flow-node-directory"><CallFlowSearchText text={path.directory} query={searchQuery} /></span>
+            )}
           </button>
         ) : (
           <span className="call-flow-node-location-placeholder" aria-hidden="true" />
@@ -190,7 +223,7 @@ function CallFlowNodeRow({
       {hasChildren && expanded && (
         <ol className="call-flow-children">
           {node.children.map((child, index) => (
-            !showAllContext && !changedSubtrees.has(child) ? null : (
+            !showAllContext && !changedSubtrees.has(child) && !searchSubtrees.has(child) ? null : (
               <CallFlowNodeRow
                 key={`${treePath}/${child.key}:${child.status}:${index}`}
                 node={child}
@@ -203,6 +236,9 @@ function CallFlowNodeRow({
                 focusFiles={focusFiles}
                 canInteractWithNode={canInteractWithNode}
                 changedSubtrees={changedSubtrees}
+                searchSubtrees={searchSubtrees}
+                searchQuery={searchQuery}
+                currentSearchPath={currentSearchPath}
                 showAllContext={showAllContext}
                 collapsedPaths={collapsedPaths}
                 fileBoundaryPaths={fileBoundaryPaths}
@@ -233,11 +269,20 @@ interface CallFlowTreeViewProps {
   readonly compact?: boolean;
 }
 
+interface CallFlowTreeSearchMatch {
+  readonly treePath: string;
+  readonly entryPath: string;
+  readonly ancestorPaths: readonly string[];
+}
+
 function CallFlowEntrySection({
   entry,
   index,
   changedCount,
   changedSubtrees,
+  searchSubtrees,
+  searchQuery,
+  currentSearchPath,
   showAllContext,
   onOpenNode,
   onAnnotate,
@@ -247,11 +292,16 @@ function CallFlowEntrySection({
   collapsedPaths,
   fileBoundaryPaths,
   onToggleNode,
+  expanded,
+  onToggleEntry,
 }: {
   readonly entry: CallFlowTree;
   readonly index: number;
   readonly changedCount: number;
   readonly changedSubtrees: ReadonlySet<CallFlowNode>;
+  readonly searchSubtrees: ReadonlySet<CallFlowNode>;
+  readonly searchQuery: string;
+  readonly currentSearchPath?: string;
   readonly showAllContext: boolean;
   readonly onOpenNode: (node: CallFlowNode) => void;
   readonly onAnnotate?: CallFlowNodeRowProps['onAnnotate'];
@@ -261,8 +311,9 @@ function CallFlowEntrySection({
   readonly collapsedPaths: ReadonlySet<string>;
   readonly fileBoundaryPaths: ReadonlySet<string>;
   readonly onToggleNode: (treePath: string) => void;
+  readonly expanded: boolean;
+  readonly onToggleEntry: (treePath: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(index === 0);
   const treePath = `${entry.entry}:${index}`;
   return (
     <section className="call-flow-entry">
@@ -270,7 +321,7 @@ function CallFlowEntrySection({
         type="button"
         className="call-flow-entry-header"
         aria-expanded={expanded}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={() => onToggleEntry(treePath)}
       >
         <span className="call-flow-entry-mark" aria-hidden="true">{expanded ? '⌄' : '›'}</span>
         <span className="call-flow-entry-label">{entry.entry}</span>
@@ -291,6 +342,9 @@ function CallFlowEntrySection({
             focusFiles={focused}
             canInteractWithNode={canInteractWithNode}
             changedSubtrees={changedSubtrees}
+            searchSubtrees={searchSubtrees}
+            searchQuery={searchQuery}
+            currentSearchPath={currentSearchPath}
             showAllContext={showAllContext}
             collapsedPaths={collapsedPaths}
             fileBoundaryPaths={fileBoundaryPaths}
@@ -342,9 +396,154 @@ export function CallFlowTreeView({
   const hiddenContextNodes = totalNodes - changedSubtrees.size;
   const [showAllContext, setShowAllContext] = useState(false);
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set());
+  const entryPaths = useMemo(() => trees.map((entry, index) => `${entry.entry}:${index}`), [trees]);
+  const [expandedEntryPaths, setExpandedEntryPaths] = useState<ReadonlySet<string>>(
+    () => new Set(entryPaths.slice(0, 1)),
+  );
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchTriggerRef = useRef<HTMLButtonElement>(null);
+  const selectSearchInputRef = useRef(false);
+  const searchWasOpenRef = useRef(false);
+  const treesRef = useRef<HTMLDivElement>(null);
+  const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase();
+  const treeSearch = useMemo(() => {
+    const matches: CallFlowTreeSearchMatch[] = [];
+    const subtrees = new Set<CallFlowNode>();
+    if (!normalizedSearchQuery) return { matches, subtrees };
+    for (const [entryIndex, entry] of trees.entries()) {
+      const entryPath = `${entry.entry}:${entryIndex}`;
+      const visit = (
+        node: CallFlowNode,
+        treePath: string,
+        ancestorPaths: readonly string[],
+      ): boolean => {
+        const matchesNode = `${node.label}\n${node.file ?? ''}`
+          .toLocaleLowerCase()
+          .includes(normalizedSearchQuery);
+        if (matchesNode) {
+          matches.push({ treePath, entryPath, ancestorPaths: [...ancestorPaths, treePath] });
+        }
+        let containsMatch = matchesNode;
+        node.children.forEach((child, childIndex) => {
+          if (visit(child, `${treePath}/${child.key}:${childIndex}`, [...ancestorPaths, treePath])) {
+            containsMatch = true;
+          }
+        });
+        if (containsMatch) subtrees.add(node);
+        return containsMatch;
+      };
+      visit(entry.tree, entryPath, []);
+    }
+    return { matches, subtrees };
+  }, [normalizedSearchQuery, trees]);
+  const searchMatches = treeSearch.matches;
+  const searchSubtrees = treeSearch.subtrees as ReadonlySet<CallFlowNode>;
+  const currentSearchMatch = searchMatches[currentSearchIndex];
+  const allEntriesExpanded = entryPaths.length > 0
+    && entryPaths.every((entryPath) => expandedEntryPaths.has(entryPath));
+
   useEffect(() => {
     setCollapsedPaths(new Set());
+    setExpandedEntryPaths(new Set(entryPaths.slice(0, 1)));
+    setCurrentSearchIndex(0);
   }, [trees]);
+
+  useEffect(() => {
+    if (currentSearchIndex < searchMatches.length || searchMatches.length === 0) return;
+    setCurrentSearchIndex(Math.max(0, searchMatches.length - 1));
+  }, [currentSearchIndex, searchMatches.length]);
+
+  useEffect(() => {
+    if (compact) return;
+    const onFind = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'f') return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      selectSearchInputRef.current = true;
+      setSearchOpen(true);
+    };
+    window.addEventListener('keydown', onFind, { capture: true });
+    return () => window.removeEventListener('keydown', onFind, { capture: true });
+  }, [compact]);
+
+  useEffect(() => {
+    if (!searchOpen) {
+      if (searchWasOpenRef.current) {
+        searchWasOpenRef.current = false;
+        searchTriggerRef.current?.focus();
+      }
+      return;
+    }
+    searchWasOpenRef.current = true;
+    if (selectSearchInputRef.current) {
+      selectSearchInputRef.current = false;
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+      return;
+    }
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: fine)').matches) {
+      searchInputRef.current?.focus();
+    }
+  }, [searchOpen]);
+
+  useEffect(() => {
+    if (!currentSearchMatch) return;
+    setExpandedEntryPaths((current) => {
+      if (current.has(currentSearchMatch.entryPath)) return current;
+      const next = new Set(current);
+      next.add(currentSearchMatch.entryPath);
+      return next;
+    });
+    setCollapsedPaths((current) => {
+      if (!currentSearchMatch.ancestorPaths.some((path) => current.has(path))) return current;
+      const next = new Set(current);
+      currentSearchMatch.ancestorPaths.forEach((path) => next.delete(path));
+      return next;
+    });
+  }, [currentSearchMatch, normalizedSearchQuery]);
+
+  useEffect(() => {
+    if (!currentSearchMatch) return;
+    const target = Array.from(
+      treesRef.current?.querySelectorAll<HTMLElement>('[data-call-flow-target]') ?? [],
+    ).find((element) => element.dataset.callFlowTarget === currentSearchMatch.treePath);
+    target?.scrollIntoView?.({ block: 'nearest' });
+  }, [collapsedPaths, currentSearchMatch, expandedEntryPaths]);
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchQuery('');
+    setCurrentSearchIndex(0);
+  }, []);
+  const updateSearchQuery = useCallback((query: string) => {
+    setSearchQuery(query);
+    setCurrentSearchIndex(0);
+  }, []);
+  const moveSearchMatch = useCallback((direction: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    setCurrentSearchIndex((index) => (
+      (index + direction + searchMatches.length) % searchMatches.length
+    ));
+  }, [searchMatches.length]);
+  const toggleEntry = useCallback((entryPath: string) => {
+    setExpandedEntryPaths((current) => {
+      const next = new Set(current);
+      if (next.has(entryPath)) next.delete(entryPath);
+      else next.add(entryPath);
+      return next;
+    });
+  }, []);
+  const toggleAllEntries = useCallback(() => {
+    if (allEntriesExpanded) {
+      setExpandedEntryPaths(new Set());
+      return;
+    }
+    setExpandedEntryPaths(new Set(entryPaths));
+    setCollapsedPaths(new Set());
+  }, [allEntriesExpanded, entryPaths]);
   const toggleNode = useCallback((treePath: string) => {
     setCollapsedPaths((current) => {
       const next = new Set(current);
@@ -362,14 +561,14 @@ export function CallFlowTreeView({
         if (node.file) previousFile = node.file;
         if (collapsedPaths.has(treePath)) return;
         node.children.forEach((child, childIndex) => {
-          if (!showAllContext && !changedSubtrees.has(child)) return;
+          if (!showAllContext && !changedSubtrees.has(child) && !searchSubtrees.has(child)) return;
           visit(child, `${treePath}/${child.key}:${childIndex}`);
         });
       };
       visit(entry.tree, `${entry.entry}:${entryIndex}`);
     }
     return boundaries;
-  }, [changedSubtrees, collapsedPaths, showAllContext, trees]);
+  }, [changedSubtrees, collapsedPaths, searchSubtrees, showAllContext, trees]);
   const treeInstanceId = useId();
   const [draftTargets, setDraftTargets] = useState<CallFlowAnnotationTarget[]>([]);
   const [refocusToken, setRefocusToken] = useState(0);
@@ -479,21 +678,58 @@ export function CallFlowTreeView({
 
   return (
     <>
-      <div className={`call-flow-trees${compact ? ' call-flow-trees-compact' : ''}`}>
-        {hiddenContextNodes > 0 && (
-          <div className="call-flow-context-control">
-            <span>
+      <div ref={treesRef} className={`call-flow-trees${compact ? ' call-flow-trees-compact' : ''}`}>
+        {(hiddenContextNodes > 0 || !compact) && (
+          <div className="call-flow-tree-toolbar">
+            {hiddenContextNodes > 0 && <span className="call-flow-context-summary">
               {showAllContext
                 ? `${totalNodes.toLocaleString()} inferred steps`
                 : `${hiddenContextNodes.toLocaleString()} unchanged context steps hidden`}
-            </span>
-            <button
-              type="button"
-              aria-pressed={showAllContext}
-              onClick={() => setShowAllContext((visible) => !visible)}
-            >
-              {showAllContext ? 'Show changed paths' : 'Show all context'}
-            </button>
+            </span>}
+            <div className={`call-flow-tree-actions${searchOpen ? ' call-flow-tree-actions-searching' : ''}`}>
+              {hiddenContextNodes > 0 && (
+                <button
+                  type="button"
+                  aria-pressed={showAllContext}
+                  onClick={() => setShowAllContext((visible) => !visible)}
+                >
+                  {showAllContext ? 'Show changed paths' : 'Show all context'}
+                </button>
+              )}
+              {!compact && (searchOpen ? (
+                <CallFlowSearchControls
+                  inputRef={searchInputRef}
+                  label="Search call paths"
+                  placeholder="Find calls or files"
+                  query={searchQuery}
+                  currentMatchIndex={currentSearchIndex}
+                  matchCount={searchMatches.length}
+                  onQueryChange={updateSearchQuery}
+                  onMoveMatch={moveSearchMatch}
+                  onClose={closeSearch}
+                />
+              ) : (
+                <button
+                  ref={searchTriggerRef}
+                  type="button"
+                  className="call-flow-icon-button"
+                  onClick={() => setSearchOpen(true)}
+                  aria-label="Search call paths"
+                  title="Search call paths (Cmd/Ctrl+F)"
+                >
+                  <Search aria-hidden="true" size={14} />
+                </button>
+              ))}
+              {!compact && (
+                <button
+                  type="button"
+                  onClick={toggleAllEntries}
+                  aria-label={allEntriesExpanded ? 'Collapse all paths' : 'Expand all paths'}
+                >
+                  {allEntriesExpanded ? 'Collapse all' : 'Expand all'}
+                </button>
+              )}
+            </div>
           </div>
         )}
         {trees.map((entry, index) => (
@@ -503,6 +739,9 @@ export function CallFlowTreeView({
             index={index}
             changedCount={entryChangedCounts.get(entry) ?? 0}
             changedSubtrees={changedSubtrees}
+            searchSubtrees={searchSubtrees}
+            searchQuery={searchQuery}
+            currentSearchPath={currentSearchMatch?.treePath}
             showAllContext={showAllContext}
             onOpenNode={onOpenNode}
             onAnnotate={onAnnotateTargets ? selectTarget : undefined}
@@ -512,6 +751,8 @@ export function CallFlowTreeView({
             collapsedPaths={collapsedPaths}
             fileBoundaryPaths={fileBoundaryPaths}
             onToggleNode={toggleNode}
+            expanded={expandedEntryPaths.has(`${entry.entry}:${index}`)}
+            onToggleEntry={toggleEntry}
           />
         ))}
       </div>

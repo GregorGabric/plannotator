@@ -3,7 +3,7 @@ import type { CallFlowAdvert, CallFlowInstallStage, CallFlowNode } from '@planno
 import { getCallFlowLanguage, type CallFlowLanguageId } from '@plannotator/shared/call-flow-languages';
 import type { CallFlowInstallController } from '../../hooks/useCallFlowInstall';
 import { Popover } from '@base-ui/react/popover';
-import { Check, ChevronDown, ChevronUp, Copy, Info, Search, Settings2, X } from 'lucide-react';
+import { Check, Copy, Info, Search, Settings2 } from 'lucide-react';
 import { Tooltip } from '@plannotator/ui/components/Tooltip';
 import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useReviewState } from '../ReviewStateContext';
@@ -16,6 +16,7 @@ import {
   formatCallFlowInstallSize,
   getCallFlowRawLines,
 } from '../../utils/callFlowPresentation';
+import { CallFlowSearchControls } from '../../components/CallFlowSearchControls';
 
 function errorMessage(error: Exclude<import('@plannotator/shared/call-flow-types').CallFlowResponse, { status: 'ok' }> | Error): string {
   return error.message || 'Call-flow analysis failed.';
@@ -324,75 +325,22 @@ function CallFlowRawView({ raw }: { readonly raw: string }) {
     <section className="call-flow-raw" aria-label="Raw call diff">
       <div className="call-flow-raw-toolbar">
         {searchOpen ? (
-          <form
-            className="call-flow-raw-search"
-            role="search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              moveMatch(1);
-            }}
-          >
-            <label className="call-flow-raw-search-field">
-              <Search aria-hidden="true" size={13} strokeWidth={1.75} />
-              <span className="sr-only">Search raw call diff</span>
-              <input
-                ref={searchInputRef}
-                type="search"
-                value={query}
-                onChange={(event) => updateQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') {
-                    event.preventDefault();
-                    closeSearch();
-                  } else if (event.key === 'Enter') {
-                    event.preventDefault();
-                    moveMatch(event.shiftKey ? -1 : 1);
-                  }
-                }}
-                placeholder="Find in raw output"
-                autoComplete="off"
-                spellCheck={false}
-                data-1p-ignore
-                data-lpignore="true"
-              />
-            </label>
-            <span className="call-flow-raw-search-count" aria-live="polite">
-              {matches.length === 0 ? '0/0' : `${currentMatchIndex + 1}/${matches.length}`}
-            </span>
-            <button
-              type="button"
-              className="call-flow-raw-icon-button"
-              onClick={() => moveMatch(-1)}
-              disabled={matches.length === 0}
-              aria-label="Previous match"
-              title="Previous match (Shift+Enter)"
-            >
-              <ChevronUp aria-hidden="true" size={14} />
-            </button>
-            <button
-              type="button"
-              className="call-flow-raw-icon-button"
-              onClick={() => moveMatch(1)}
-              disabled={matches.length === 0}
-              aria-label="Next match"
-              title="Next match (Enter)"
-            >
-              <ChevronDown aria-hidden="true" size={14} />
-            </button>
-            <button
-              type="button"
-              className="call-flow-raw-icon-button"
-              onClick={closeSearch}
-              aria-label="Close search"
-            >
-              <X aria-hidden="true" size={14} />
-            </button>
-          </form>
+          <CallFlowSearchControls
+            inputRef={searchInputRef}
+            label="Search raw call diff"
+            placeholder="Find in raw output"
+            query={query}
+            currentMatchIndex={currentMatchIndex}
+            matchCount={matches.length}
+            onQueryChange={updateQuery}
+            onMoveMatch={moveMatch}
+            onClose={closeSearch}
+          />
         ) : (
           <button
             ref={searchTriggerRef}
             type="button"
-            className="call-flow-raw-icon-button"
+            className="call-flow-icon-button"
             onClick={() => setSearchOpen(true)}
             aria-label="Search raw call diff"
             title="Search raw output (Cmd/Ctrl+F)"

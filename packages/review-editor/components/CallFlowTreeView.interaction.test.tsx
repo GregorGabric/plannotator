@@ -97,6 +97,62 @@ describe('CallFlowTreeView annotation interaction', () => {
     expect(host.querySelectorAll('.call-flow-tree')).toHaveLength(2);
   });
 
+  test.skipIf(!hasDom)('expands and collapses every entry path from one control', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    await act(async () => {
+      root?.render(<CallFlowTreeView trees={multipleEntryTrees} onOpenNode={() => {}} />);
+    });
+
+    expect(host.querySelectorAll('.call-flow-tree')).toHaveLength(1);
+    const expandAll = host.querySelector<HTMLButtonElement>('[aria-label="Expand all paths"]');
+    expect(expandAll).not.toBeNull();
+    await act(async () => expandAll?.click());
+    expect(host.querySelectorAll('.call-flow-tree')).toHaveLength(2);
+
+    const collapseAll = host.querySelector<HTMLButtonElement>('[aria-label="Collapse all paths"]');
+    expect(collapseAll).not.toBeNull();
+    await act(async () => collapseAll?.click());
+    expect(host.querySelectorAll('.call-flow-tree')).toHaveLength(0);
+  });
+
+  test.skipIf(!hasDom)('searches complete structured paths and reveals hidden context matches', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+
+    await act(async () => {
+      root?.render(<CallFlowTreeView trees={contextTrees} onOpenNode={() => {}} />);
+    });
+
+    expect(host.textContent).not.toContain('unchangedContext()');
+    const search = host.querySelector<HTMLButtonElement>('[aria-label="Search call paths"]');
+    expect(search).not.toBeNull();
+    await act(async () => search?.click());
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="Find calls or files"]');
+    expect(input).not.toBeNull();
+
+    await act(async () => {
+      if (!input) return;
+      const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), 'value')?.set;
+      setter?.call(input, 'unchangedContext');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    expect(host.textContent).toContain('unchangedContext()');
+    expect(host.textContent).toContain('1/1');
+    expect(host.querySelectorAll('.call-flow-tree-match')).toHaveLength(1);
+    expect(host.querySelector('.call-flow-row-search-current')?.textContent).toContain('unchangedContext()');
+
+    await act(async () => {
+      input?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+    });
+    expect(host.querySelector('input[placeholder="Find calls or files"]')).toBeNull();
+    expect(host.textContent).not.toContain('unchangedContext()');
+  });
+
   test.skipIf(!hasDom)('reveals the complete inferred context only when requested', async () => {
     host = document.createElement('div');
     document.body.appendChild(host);
