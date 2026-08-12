@@ -7,7 +7,7 @@ import { BaseBranchPicker } from './BaseBranchPicker';
 import { EvoLogPicker } from './EvoLogPicker';
 import { DiffTypePicker } from './DiffTypePicker';
 import { WorktreePicker } from './WorktreePicker';
-import { PanelViewToggle } from './PanelViewToggle';
+import { PanelViewToggle, type ReviewPanelView } from './PanelViewToggle';
 import { getReviewSearchSideLabel, type ReviewSearchFileGroup, type ReviewSearchMatch } from '../utils/reviewSearch';
 import type { DiffFile } from '../types';
 import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea';
@@ -92,10 +92,16 @@ interface FileTreeProps {
   scrollHighlightIndex?: number;
   /** Absolute repo root for the "Copy full path" context menu item. Null/undefined hides the option (e.g. PR review mode). */
   repoRoot?: string | null;
+  /** Current panel-view selection. The tree also renders as the FALLBACK for a
+   * latent 'sections'/'commits' selection the session can't offer, so the
+   * toggle must reflect the real selection, not assume 'tree'. */
+  panelView?: ReviewPanelView;
   /** When the since-base sections view is available, renders a nav row back to it. */
   onSwitchToSections?: () => void;
   /** When the commit-history view is available, offers its toggle segment. */
   onSwitchToCommits?: () => void;
+  /** Selects the tree view through the app's shared panel-view funnel. */
+  onSwitchToTree?: () => void;
   /** Sections sidecar while the since-base diff is displayed as a tree —
    * powers per-row U/staged markers and the stage button. */
   sinceBaseSections?: SinceBaseSections | null;
@@ -168,8 +174,10 @@ export const FileTree: React.FC<FileTreeProps> = ({
   isAllFilesActive = false,
   scrollHighlightIndex,
   repoRoot,
+  panelView = 'tree',
   onSwitchToSections,
   onSwitchToCommits,
+  onSwitchToTree,
   sinceBaseSections,
   onStageFile,
   stagingFile,
@@ -308,12 +316,13 @@ export const FileTree: React.FC<FileTreeProps> = ({
             </span>
           ) : onSwitchToSections || onSwitchToCommits ? (
             <PanelViewToggle
-              view="tree"
+              view={panelView}
               showSections={!!onSwitchToSections}
               showCommits={!!onSwitchToCommits}
               onSelect={(view) => {
                 if (view === 'sections') onSwitchToSections?.();
                 else if (view === 'commits') onSwitchToCommits?.();
+                else onSwitchToTree?.();
               }}
             />
           ) : (
