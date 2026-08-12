@@ -1,6 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { CallFlowAdvert, CallFlowInstallStage, CallFlowNode } from '@plannotator/shared/call-flow-types';
 import { getCallFlowLanguage, type CallFlowLanguageId } from '@plannotator/shared/call-flow-languages';
+import type { CallFlowAnnotationTarget } from '@plannotator/ui/types';
+import { CommentPopover, type CommentTargetChip } from '@plannotator/ui/components/CommentPopover';
 import type { CallFlowInstallController } from '../../hooks/useCallFlowInstall';
 import { Popover } from '@base-ui/react/popover';
 import { Check, Copy, Info, Search, Settings2 } from 'lucide-react';
@@ -12,9 +14,11 @@ import {
   selectionForCallFlowNode,
 } from '../../components/CallFlowTreeView';
 import {
+  annotationTargetForCallFlowRawLine,
   findCallFlowRawMatches,
   formatCallFlowInstallSize,
   getCallFlowRawLines,
+  type CallFlowRawAnnotationTarget,
 } from '../../utils/callFlowPresentation';
 import { CallFlowSearchControls } from '../../components/CallFlowSearchControls';
 
@@ -236,8 +240,21 @@ export function CallFlowInstallFunnel({
   );
 }
 
-function CallFlowRawView({ raw }: { readonly raw: string }) {
+function CallFlowRawView({
+  raw,
+  onAnnotateTargets,
+}: {
+  readonly raw: string;
+  readonly onAnnotateTargets: (
+    targets: readonly CallFlowAnnotationTarget[],
+    text: string,
+  ) => boolean;
+}) {
   const lines = useMemo(() => getCallFlowRawLines(raw), [raw]);
+  const annotationTargets = useMemo(
+    () => lines.map(annotationTargetForCallFlowRawLine),
+    [lines],
+  );
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'error'>('idle');
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -248,6 +265,18 @@ function CallFlowRawView({ raw }: { readonly raw: string }) {
   const selectSearchInputRef = useRef(false);
   const searchWasOpenRef = useRef(false);
   const rawPreRef = useRef<HTMLPreElement>(null);
+  const rawInstanceId = useId();
+  const [draftTargets, setDraftTargets] = useState<CallFlowRawAnnotationTarget[]>([]);
+  const [refocusToken, setRefocusToken] = useState(0);
+  const [activeLineIndex, setActiveLineIndex] = useState(0);
+  const targetElements = useRef(new Map<string, HTMLButtonElement>());
+  const selectedTargetKeys = useMemo(
+    () => new Set(draftTargets.map((target) => target.treePath)),
+    [draftTargets],
+  );
+  const anchorEl = draftTargets[0]
+    ? targetElements.current.get(draftTargets[0].treePath)
+    : undefined;
   const matches = useMemo(() => findCallFlowRawMatches(lines, query), [lines, query]);
   const matchesByLine = useMemo(() => {
     const byLine = new Map<number, Array<(typeof matches)[number] & { index: number }>>();
@@ -320,10 +349,43 @@ function CallFlowRawView({ raw }: { readonly raw: string }) {
     if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
     copyResetTimer.current = window.setTimeout(() => setCopyState('idle'), 1500);
   };
+  const selectTarget = (
+    target: CallFlowRawAnnotationTarget,
+    anchor: HTMLButtonElement,
+    extend: boolean,
+  ) => {
+    targetElements.current.set(target.treePath, anchor);
+    if (!extend || draftTargets.length === 0) {
+      setDraftTargets([target]);
+      return;
+    }
+    const existingIndex = draftTargets.findIndex((candidate) => candidate.treePath === target.treePath);
+    setDraftTargets(existingIndex === -1
+      ? [...draftTargets, target]
+      : draftTargets.filter((_, index) => index !== existingIndex));
+    setRefocusToken((token) => token + 1);
+  };
+  const removeTarget = (chipKey: string) => {
+    setDraftTargets(draftTargets.filter((target) => `${rawInstanceId}:${target.treePath}` !== chipKey));
+    setRefocusToken((token) => token + 1);
+  };
+  const targetChips = useMemo<CommentTargetChip[]>(() => draftTargets.map((target) => ({
+    key: `${rawInstanceId}:${target.treePath}`,
+    label: `Line ${target.rawLine}`,
+    excerpt: target.label,
+  })), [draftTargets, rawInstanceId]);
+  const moveLineFocus = (lineIndex: number) => {
+    const boundedIndex = Math.max(0, Math.min(lineIndex, annotationTargets.length - 1));
+    const target = annotationTargets[boundedIndex];
+    if (!target) return;
+    setActiveLineIndex(boundedIndex);
+    targetElements.current.get(target.treePath)?.focus();
+  };
 
   return (
     <section className="call-flow-raw" aria-label="Raw call diff">
       <div className="call-flow-raw-toolbar">
+        <span className="call-flow-raw-hint">Click a line to comment · Shift-click adds lines</span>
         {searchOpen ? (
           <CallFlowSearchControls
             inputRef={searchInputRef}
@@ -353,37 +415,84 @@ function CallFlowRawView({ raw }: { readonly raw: string }) {
           {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
         </button>
       </div>
-      <pre ref={rawPreRef} tabIndex={0}><code>{lines.map((line, lineIndex) => {
+      <pre ref={rawPreRef}><code>{lines.map((line, lineIndex) => {
         const lineMatches = matchesByLine.get(lineIndex);
-        if (!lineMatches || lineMatches.length === 0) {
-          return (
-            <span className={`call-flow-raw-line call-flow-raw-line-${line.kind}`} key={lineIndex}>
-              {line.content}
-            </span>
-          );
-        }
         const content: React.ReactNode[] = [];
-        let cursor = 0;
-        lineMatches.forEach((match) => {
-          content.push(line.content.slice(cursor, match.start));
-          content.push(
-            <mark
-              className={match.index === currentMatchIndex ? 'call-flow-raw-match-current' : undefined}
-              data-raw-match={match.index}
-              key={`${match.start}:${match.end}`}
-            >
-              {line.content.slice(match.start, match.end)}
-            </mark>,
-          );
-          cursor = match.end;
-        });
-        content.push(line.content.slice(cursor));
+        if (!lineMatches || lineMatches.length === 0) {
+          content.push(line.content);
+        } else {
+          let cursor = 0;
+          lineMatches.forEach((match) => {
+            content.push(line.content.slice(cursor, match.start));
+            content.push(
+              <mark
+                className={match.index === currentMatchIndex ? 'call-flow-raw-match-current' : undefined}
+                data-raw-match={match.index}
+                key={`${match.start}:${match.end}`}
+              >
+                {line.content.slice(match.start, match.end)}
+              </mark>,
+            );
+            cursor = match.end;
+          });
+          content.push(line.content.slice(cursor));
+        }
+        const target = annotationTargets[lineIndex];
+        if (!target) return null;
         return (
-          <span className={`call-flow-raw-line call-flow-raw-line-${line.kind}`} key={lineIndex}>
+          <button
+            type="button"
+            className={`call-flow-raw-line call-flow-raw-line-${line.kind}`}
+            key={target.treePath}
+            ref={(element) => {
+              if (element) targetElements.current.set(target.treePath, element);
+              else targetElements.current.delete(target.treePath);
+            }}
+            aria-label={`Raw line ${target.rawLine}, ${line.kind}: ${target.label}`}
+            aria-pressed={selectedTargetKeys.has(target.treePath)}
+            tabIndex={activeLineIndex === lineIndex ? 0 : -1}
+            onFocus={() => setActiveLineIndex(lineIndex)}
+            onKeyDown={(event) => {
+              const nextIndex = event.key === 'ArrowDown'
+                ? lineIndex + 1
+                : event.key === 'ArrowUp'
+                  ? lineIndex - 1
+                  : event.key === 'Home'
+                    ? 0
+                    : event.key === 'End'
+                      ? annotationTargets.length - 1
+                      : undefined;
+              if (nextIndex === undefined) return;
+              event.preventDefault();
+              moveLineFocus(nextIndex);
+            }}
+            onClick={(event) => selectTarget(target, event.currentTarget, event.shiftKey)}
+          >
             {content}
-          </span>
+          </button>
         );
       })}</code></pre>
+      {anchorEl && draftTargets.length > 0 && (
+        <CommentPopover
+          anchorEl={anchorEl}
+          contextText={`Raw line ${draftTargets[0]?.rawLine}: ${draftTargets[0]?.label}`}
+          isGlobal={false}
+          allowImages={false}
+          targetChips={targetChips}
+          onRemoveTargetChip={removeTarget}
+          refocusToken={refocusToken}
+          captureStrayKeys
+          onSubmit={(text) => {
+            if (onAnnotateTargets(draftTargets, text)) setDraftTargets([]);
+          }}
+          onClose={() => setDraftTargets([])}
+        />
+      )}
+      <span className="sr-only" aria-live="polite">
+        {draftTargets.length > 0
+          ? `${draftTargets.length} raw CallDiff ${draftTargets.length === 1 ? 'line' : 'lines'} selected.`
+          : ''}
+      </span>
     </section>
   );
 }
@@ -536,7 +645,7 @@ export function ReviewCallFlowPanel() {
         )}
 
         {view === 'raw' ? (
-          <CallFlowRawView raw={data.raw} />
+          <CallFlowRawView raw={data.raw} onAnnotateTargets={state.onAddCallFlowAnnotation} />
         ) : data.trees.length === 0 ? (
           <div className="call-flow-empty">
             <span className="call-flow-empty-kicker">Snapshots match structurally</span>

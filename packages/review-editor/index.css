@@ -1110,6 +1110,10 @@ diffs-container {
   font-family: var(--font-sans);
   font-size: 0.6875rem;
 }
+.call-flow-raw-hint {
+  margin-right: auto;
+  color: var(--muted-foreground);
+}
 
 .call-flow-raw-toolbar button {
   display: inline-flex;
@@ -1201,8 +1205,19 @@ diffs-container {
 .call-flow-raw pre code { display: block; min-width: max-content; }
 .call-flow-raw-line {
   display: block;
+  width: 100%;
   min-height: 1.6em;
+  min-width: max-content;
+  appearance: none;
+  border: 0;
   padding: 0 1rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: text;
 }
 .call-flow-raw-line-added {
   background: oklch(from var(--success) l c h / 0.08);
@@ -1211,6 +1226,22 @@ diffs-container {
 .call-flow-raw-line-removed {
   background: oklch(from var(--destructive) l c h / 0.075);
   color: oklch(from var(--destructive) 0.76 c h);
+}
+@media (hover: hover) and (pointer: fine) {
+  .call-flow-raw-line:hover {
+    box-shadow: inset 0 0 0 1px oklch(from var(--primary) l c h / 0.38);
+  }
+}
+.call-flow-raw-line[aria-pressed="true"] {
+  box-shadow:
+    inset 2px 0 0 var(--primary),
+    inset 0 0 0 1px oklch(from var(--primary) l c h / 0.68);
+}
+.call-flow-raw-line:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 1px solid var(--ring);
+  outline-offset: -1px;
 }
 .call-flow-raw mark {
   border-radius: 2px;

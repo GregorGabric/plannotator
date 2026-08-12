@@ -98,6 +98,24 @@ describe("exportReviewFeedback", () => {
     expect(result).toContain('`checkout()` → `if (authorized)` — `inferred step`');
   });
 
+  it("exports exact raw CallDiff lines as review-scoped feedback", () => {
+    const result = exportReviewFeedback([ann({
+      scope: 'general',
+      filePath: '',
+      lineStart: 0,
+      lineEnd: 0,
+      callFlowTargets: [{
+        treePath: 'raw:11',
+        entry: 'Raw CallDiff output',
+        label: '- existingCall()',
+        rawLine: 12,
+        side: 'old',
+      }],
+    })]);
+
+    expect(result).toContain('`Raw CallDiff output` → `- existingCall()` — `raw CallDiff line 12`');
+  });
+
   it("local mode: uses generic header, no PR content", () => {
     const result = exportReviewFeedback([ann()]);
     expect(result).toStartWith("# Code Review Feedback\n\n");

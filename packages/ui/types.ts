@@ -162,8 +162,10 @@ export type CodeAnnotationScope = 'line' | 'file' | 'general';
  * without a concrete line. `CodeAnnotation` uses an in-patch located target
  * as its native inline anchor when one exists; otherwise the annotation is
  * file- or review-scoped while this target remains its durable Call Flow
- * anchor. This lets every rendered Call Flow row participate in feedback
- * without pretending an out-of-hunk line can be posted inline.
+ * anchor. Raw output selections use a one-based `rawLine` instead of a source
+ * location. This lets every rendered Call Flow row and raw line participate in
+ * feedback without pretending an out-of-hunk or diagnostic line can be posted
+ * as an inline source comment.
  */
 interface CallFlowAnnotationTargetBase {
   treePath: string;
@@ -173,9 +175,10 @@ interface CallFlowAnnotationTargetBase {
 }
 
 export type CallFlowAnnotationTarget = CallFlowAnnotationTargetBase & (
-  | { filePath: string; lineStart: number; lineEnd: number }
-  | { filePath: string; lineStart?: undefined; lineEnd?: undefined }
-  | { filePath?: undefined; lineStart?: undefined; lineEnd?: undefined }
+  | { filePath: string; lineStart: number; lineEnd: number; rawLine?: undefined }
+  | { filePath: string; lineStart?: undefined; lineEnd?: undefined; rawLine?: undefined }
+  | { rawLine: number; filePath?: undefined; lineStart?: undefined; lineEnd?: undefined }
+  | { rawLine?: undefined; filePath?: undefined; lineStart?: undefined; lineEnd?: undefined }
 );
 
 /** Conventional Comments label — see https://conventionalcomments.org */

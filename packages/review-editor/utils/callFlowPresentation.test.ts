@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  annotationTargetForCallFlowRawLine,
   findCallFlowRawMatches,
   formatCallFlowInstallSize,
   getCallFlowRawLines,
@@ -53,5 +54,23 @@ describe('Call Flow raw output', () => {
       { lineIndex: 2, start: 8, end: 13 },
     ]);
     expect(findCallFlowRawMatches(lines, '')).toEqual([]);
+  });
+
+  test('creates one-based review targets without inventing source locations', () => {
+    const [added, removed] = getCallFlowRawLines('+ newCall()\n- oldCall()');
+    expect(added && annotationTargetForCallFlowRawLine(added, 0)).toEqual({
+      treePath: 'raw:0',
+      entry: 'Raw CallDiff output',
+      label: '+ newCall()',
+      rawLine: 1,
+      side: 'new',
+    });
+    expect(removed && annotationTargetForCallFlowRawLine(removed, 1)).toEqual({
+      treePath: 'raw:1',
+      entry: 'Raw CallDiff output',
+      label: '- oldCall()',
+      rawLine: 2,
+      side: 'old',
+    });
   });
 });

@@ -1,3 +1,5 @@
+import type { CallFlowAnnotationTarget } from '@plannotator/ui/types';
+
 export function formatCallFlowInstallSize(bytes: number): string {
   const megabytes = Math.ceil(bytes / (1024 * 1024));
   return `~${megabytes.toLocaleString()} MB`;
@@ -24,6 +26,23 @@ export interface CallFlowRawSearchMatch {
   readonly lineIndex: number;
   readonly start: number;
   readonly end: number;
+}
+
+/** A raw-output annotation target with a required one-based line number. */
+export type CallFlowRawAnnotationTarget = Extract<CallFlowAnnotationTarget, { rawLine: number }>;
+
+/** Build the durable, review-scoped annotation target for one raw output line. */
+export function annotationTargetForCallFlowRawLine(
+  line: CallFlowRawLine,
+  lineIndex: number,
+): CallFlowRawAnnotationTarget {
+  return {
+    treePath: `raw:${lineIndex}`,
+    entry: 'Raw CallDiff output',
+    label: line.content || '(blank line)',
+    rawLine: lineIndex + 1,
+    side: line.kind === 'removed' ? 'old' : 'new',
+  };
 }
 
 /**

@@ -143,6 +143,8 @@ export function formatCallFlowAnnotationTargets(annotation: CodeAnnotation): str
       source = `${target.filePath}:${line}`;
     } else if (target.filePath) {
       source = target.filePath;
+    } else if (target.rawLine) {
+      source = `raw CallDiff line ${target.rawLine}`;
     }
     return `- ${callFlowInlineCode(target.entry)} → ${callFlowInlineCode(target.label)} — ${callFlowInlineCode(source)}`;
   });
