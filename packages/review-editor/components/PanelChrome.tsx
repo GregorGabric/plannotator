@@ -266,7 +266,12 @@ export function PanelControlsRow({
                     type="button"
                     role="switch"
                     aria-checked={showViewedControls}
-                    onClick={onToggleShowViewedControls}
+                    onClick={() => {
+                      // Hiding the only filter affordance must never leave the
+                      // file list silently filtered.
+                      if (showViewedControls && hideViewedFiles) onToggleHideViewed?.();
+                      onToggleShowViewedControls();
+                    }}
                     className="flex w-full items-center gap-3 rounded px-2 py-2 text-left hover:bg-muted focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary/60"
                   >
                     <span className="min-w-0 flex-1">

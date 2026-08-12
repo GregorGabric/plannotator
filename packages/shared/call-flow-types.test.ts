@@ -48,6 +48,64 @@ describe("parseCallDiffWorkerResult", () => {
     expect(parsed.diagnostics).toEqual([{ level: "warning", message: "one file was skipped" }]);
   });
 
+  test("keeps structured analysis when an entry raw slice cannot be aligned", () => {
+    const parsed = parseCallDiffWorkerResult({
+      protocol: 1,
+      ok: true,
+      version: "0.4.1",
+      result: {
+        from: "abc",
+        to: "def",
+        ascii: "calldiff diff abc → def\n\n+ canonical()",
+        trees: [{
+          entry: "canonical",
+          ascii: "+ differently-rendered()",
+          tree: {
+            key: "canonical",
+            label: "canonical()",
+            status: "added",
+            file: "src/main.ts",
+            line: 1,
+            children: [],
+          },
+        }],
+      },
+    });
+
+    expect(parsed.trees).toHaveLength(1);
+    expect(parsed.trees[0]?.tree.label).toBe("canonical()");
+    expect(parsed.trees[0]?.raw).toBeUndefined();
+    expect(parsed.raw).toContain("canonical()");
+  });
+
+  test("aligns entry raw slices without assuming tree-array order", () => {
+    const parsed = parseCallDiffWorkerResult({
+      protocol: 1,
+      ok: true,
+      version: "0.4.1",
+      result: {
+        from: "abc",
+        to: "def",
+        ascii: "header\n\n+ first()\n\n+ second()",
+        trees: [
+          {
+            entry: "second",
+            ascii: "+ second()",
+            tree: { key: "second", label: "second()", status: "added", children: [] },
+          },
+          {
+            entry: "first",
+            ascii: "+ first()",
+            tree: { key: "first", label: "first()", status: "added", children: [] },
+          },
+        ],
+      },
+    });
+
+    expect(parsed.trees[0]).toMatchObject({ raw: "+ second()", rawLineStart: 5 });
+    expect(parsed.trees[1]).toMatchObject({ raw: "+ first()", rawLineStart: 3 });
+  });
+
   test("rejects malformed nodes at the process boundary", () => {
     expect(() => parseCallDiffWorkerResult({
       protocol: 1,

@@ -13,6 +13,7 @@ let root: Root | null = null;
 
 function readyState(
   onAddCallFlowAnnotation: ReviewState['onAddCallFlowAnnotation'] = () => true,
+  isCallFlowActive = true,
 ): ReviewState {
   return {
     callFlowAdvert: {
@@ -33,16 +34,39 @@ function readyState(
         from: 'before',
         to: 'after',
         raw: '+ CallFlowTreeView({})\n- callflowtreeview()\n  unrelated()',
-        trees: [],
-        fileImpacts: {},
-        summary: { entries: 0, changedNodes: 2, added: 1, removed: 1, impactedFiles: 1, warnings: 0 },
+        trees: [{
+          entry: 'CallFlowTreeView',
+          raw: '+ CallFlowTreeView({})\n- callflowtreeview()',
+          rawLineStart: 1,
+          tree: {
+            key: 'CallFlowTreeView',
+            label: 'CallFlowTreeView({})',
+            status: 'added',
+            file: 'src/CallFlowTreeView.tsx',
+            line: 1,
+            children: [],
+          },
+        }],
+        fileImpacts: {
+          'src/CallFlowTreeView.tsx': [{
+            entry: 'CallFlowTreeView',
+            entries: ['CallFlowTreeView'],
+            key: 'CallFlowTreeView',
+            label: 'CallFlowTreeView({})',
+            status: 'added',
+            file: 'src/CallFlowTreeView.tsx',
+            line: 1,
+            depth: 0,
+          }],
+        },
+        summary: { entries: 1, changedNodes: 2, added: 1, removed: 1, impactedFiles: 1, warnings: 0 },
         diagnostics: [],
         skippedLanguages: [],
       },
     },
     retryCallFlowAnalysis: () => {},
     isCallFlowNodeInPatch: () => false,
-    isCallFlowActive: true,
+    isCallFlowActive,
     openCallFlowPanel: () => {},
     callFlowInstall: { status: { state: 'idle' }, start: () => {} },
     openDiffFile: () => {},
@@ -60,6 +84,54 @@ afterEach(async () => {
 });
 
 describe('ReviewCallFlowPanel raw search', () => {
+  test.skipIf(!hasDom)('captures find only while the Dock panel owns the foreground', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(
+        <ReviewStateProvider value={readyState(() => true, false)}>
+          <ReviewCallFlowPanel />
+        </ReviewStateProvider>,
+      );
+    });
+
+    let escapedShortcutCount = 0;
+    const outsideShortcut = () => { escapedShortcutCount += 1; };
+    window.addEventListener('keydown', outsideShortcut);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true }));
+    });
+    expect(host.querySelector('input[type="search"]')).toBeNull();
+    expect(escapedShortcutCount).toBe(1);
+
+    await act(async () => {
+      root?.render(
+        <ReviewStateProvider value={readyState(() => true, true)}>
+          <ReviewCallFlowPanel />
+        </ReviewStateProvider>,
+      );
+    });
+    const lens = document.createElement('div');
+    lens.dataset.callFlowLens = 'true';
+    document.body.appendChild(lens);
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true }));
+    });
+    expect(host.querySelector('input[type="search"]')).toBeNull();
+    expect(escapedShortcutCount).toBe(2);
+
+    lens.remove();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', metaKey: true }));
+    });
+    window.removeEventListener('keydown', outsideShortcut);
+    const input = host.querySelector<HTMLInputElement>('input[placeholder="Find calls or files"]');
+    expect(input).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(escapedShortcutCount).toBe(2);
+  });
+
   test.skipIf(!hasDom)('uses a utility-only toolbar and navigates raw matches', async () => {
     host = document.createElement('div');
     document.body.appendChild(host);

@@ -10,6 +10,10 @@ import {
 } from '@plannotator/ui/utils/composerYield';
 import { splitCallFlowFilePath } from '../utils/callFlowPresentation';
 import { CallFlowSearchControls } from './CallFlowSearchControls';
+import {
+  useCallFlowFindShortcut,
+  type CallFlowFindShortcutSurface,
+} from '../hooks/useCallFlowFindShortcut';
 
 /** Map a located CallDiff node to the old/new source range used by code review. */
 export function selectionForCallFlowNode(node: CallFlowNode): SelectedLineRange | null {
@@ -276,6 +280,10 @@ interface CallFlowTreeViewProps {
   readonly defaultExpandedEntries?: 'first' | 'all';
   /** Amount of unchanged structural context shown before the user asks for all of it. */
   readonly initialContext?: 'changed' | 'nearby' | 'all';
+  /** True only while this mounted renderer owns the foreground find shortcut. */
+  readonly findShortcutActive?: boolean;
+  /** Distinguishes a foreground Lens from a retained Dockview portal. */
+  readonly findShortcutSurface?: CallFlowFindShortcutSurface;
 }
 
 interface CallFlowTreeSearchMatch {
@@ -376,6 +384,8 @@ export function CallFlowTreeView({
   compact = false,
   defaultExpandedEntries = 'first',
   initialContext = 'changed',
+  findShortcutActive = false,
+  findShortcutSurface = 'dock',
 }: CallFlowTreeViewProps) {
   const focused = useMemo(() => focusFiles ? new Set(focusFiles) : undefined, [focusFiles]);
   const treeShape = useMemo(() => {
@@ -485,22 +495,17 @@ export function CallFlowTreeView({
     setCurrentSearchIndex(Math.max(0, searchMatches.length - 1));
   }, [currentSearchIndex, searchMatches.length]);
 
-  useEffect(() => {
-    const onFind = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'f') return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (searchOpen) {
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      selectSearchInputRef.current = true;
-      setSearchOpen(true);
-    };
-    window.addEventListener('keydown', onFind, { capture: true });
-    return () => window.removeEventListener('keydown', onFind, { capture: true });
-  }, [searchOpen]);
+  const openSearchFromShortcut = useCallback(() => {
+    selectSearchInputRef.current = true;
+    setSearchOpen(true);
+  }, []);
+  useCallFlowFindShortcut({
+    active: findShortcutActive,
+    surface: findShortcutSurface,
+    searchOpen,
+    inputRef: searchInputRef,
+    openSearch: openSearchFromShortcut,
+  });
 
   useEffect(() => {
     if (!searchOpen) {

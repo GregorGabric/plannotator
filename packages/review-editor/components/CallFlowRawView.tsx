@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, Copy, Search } from 'lucide-react';
 import { CommentPopover, type CommentTargetChip } from '@plannotator/ui/components/CommentPopover';
 import type { CallFlowAnnotationTarget } from '@plannotator/ui/types';
@@ -11,6 +11,10 @@ import {
   type CallFlowRawLine,
 } from '../utils/callFlowPresentation';
 import { CallFlowSearchControls } from './CallFlowSearchControls';
+import {
+  useCallFlowFindShortcut,
+  type CallFlowFindShortcutSurface,
+} from '../hooks/useCallFlowFindShortcut';
 
 /** One canonical raw CallDiff slice and its position in the complete response. */
 export interface CallFlowRawSection {
@@ -30,6 +34,8 @@ export function CallFlowRawView({
   onAnnotateTargets,
   onAnnotationDraftChange,
   compact = false,
+  findShortcutActive = false,
+  findShortcutSurface = 'dock',
 }: {
   readonly sections: readonly CallFlowRawSection[];
   readonly onAnnotateTargets: (
@@ -38,6 +44,10 @@ export function CallFlowRawView({
   ) => boolean;
   readonly onAnnotationDraftChange?: (active: boolean) => void;
   readonly compact?: boolean;
+  /** True only while this mounted renderer owns the foreground find shortcut. */
+  readonly findShortcutActive?: boolean;
+  /** Distinguishes a foreground Lens from a retained Dockview portal. */
+  readonly findShortcutSurface?: CallFlowFindShortcutSurface;
 }) {
   const indexedSections = useMemo<IndexedRawSection[]>(() => {
     let lineIndex = 0;
@@ -93,22 +103,17 @@ export function CallFlowRawView({
     if (copyResetTimer.current) clearTimeout(copyResetTimer.current);
   }, []);
 
-  useEffect(() => {
-    const onFind = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLocaleLowerCase() !== 'f') return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      if (searchOpen) {
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
-        return;
-      }
-      selectSearchInputRef.current = true;
-      setSearchOpen(true);
-    };
-    window.addEventListener('keydown', onFind, { capture: true });
-    return () => window.removeEventListener('keydown', onFind, { capture: true });
-  }, [searchOpen]);
+  const openSearchFromShortcut = useCallback(() => {
+    selectSearchInputRef.current = true;
+    setSearchOpen(true);
+  }, []);
+  useCallFlowFindShortcut({
+    active: findShortcutActive,
+    surface: findShortcutSurface,
+    searchOpen,
+    inputRef: searchInputRef,
+    openSearch: openSearchFromShortcut,
+  });
 
   useEffect(() => {
     if (!searchOpen) {

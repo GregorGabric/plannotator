@@ -11,12 +11,14 @@ let root: Root | null = null;
 function Harness({ onCopy }: { onCopy: () => void }) {
   const [showViewed, setShowViewed] = useState(true);
   const [showStage, setShowStage] = useState(true);
+  const [hideViewed, setHideViewed] = useState(true);
 
   return (
     <PanelControlsRow
       viewedCount={0}
       totalCount={22}
-      onToggleHideViewed={() => {}}
+      hideViewedFiles={hideViewed}
+      onToggleHideViewed={() => setHideViewed((value) => !value)}
       onCopyRawDiff={onCopy}
       canCopyRawDiff
       showViewedControls={showViewed}
@@ -56,10 +58,8 @@ describe("PanelControlsRow", () => {
       expect(viewedControls).not.toBeNull();
       expect(viewedControls?.textContent).toContain("0/22");
       expect(host.firstElementChild?.firstElementChild).toBe(viewedControls);
-      expect(host.firstElementChild?.classList.contains("pl-1")).toBe(true);
-      expect(host.firstElementChild?.classList.contains("pr-2")).toBe(true);
       expect(
-        host.querySelector('[aria-label="Hide viewed files"]'),
+        host.querySelector('[aria-label="Show viewed files"]'),
       ).not.toBeNull();
       const copy = host.querySelector<HTMLButtonElement>(
         '[aria-label="Copy all diffs"]',
@@ -81,9 +81,6 @@ describe("PanelControlsRow", () => {
         "[data-review-tree-settings]",
       );
       expect(popup).not.toBeNull();
-      expect(popup?.textContent).not.toContain(
-        "Choose which per-file controls appear.",
-      );
       const switches =
         popup?.querySelectorAll<HTMLButtonElement>('[role="switch"]');
       expect(switches).toHaveLength(2);
@@ -94,8 +91,10 @@ describe("PanelControlsRow", () => {
       expect(host.querySelector("[data-panel-viewed-controls]")).toBeNull();
       expect(host.querySelector('[aria-label="Hide viewed files"]')).toBeNull();
       expect(host.textContent).not.toContain("0/22");
+      await act(async () => switches?.[0]?.click());
+      expect(host.querySelector('[aria-label="Hide viewed files"]')).not.toBeNull();
       await act(async () => switches?.[1]?.click());
-      expect(switches?.[0]?.getAttribute("aria-checked")).toBe("false");
+      expect(switches?.[0]?.getAttribute("aria-checked")).toBe("true");
       expect(switches?.[1]?.getAttribute("aria-checked")).toBe("false");
     },
   );

@@ -16,14 +16,26 @@ export interface CallFlowNode {
   children: CallFlowNode[];
 }
 
-export interface CallFlowTree {
+interface CallFlowTreeBase {
   entry: string;
+  tree: CallFlowNode;
+}
+
+interface CallFlowTreeWithRaw extends CallFlowTreeBase {
   /** Canonical colorless CallDiff rendering for this complete entry tree. */
   raw: string;
   /** One-based line where `raw` begins inside the response-level raw output. */
   rawLineStart: number;
-  tree: CallFlowNode;
 }
+
+interface CallFlowTreeWithoutRaw extends CallFlowTreeBase {
+  /** Omitted when upstream's per-entry rendering cannot be aligned safely. */
+  raw?: undefined;
+  rawLineStart?: undefined;
+}
+
+/** One structured inferred entry tree, optionally aligned to canonical raw output. */
+export type CallFlowTree = CallFlowTreeWithRaw | CallFlowTreeWithoutRaw;
 
 export interface CallFlowFileImpact {
   entry: string;
@@ -241,29 +253,23 @@ export function parseCallDiffWorkerResult(value: unknown): ParsedCallDiffWorkerR
   };
 
   const raw = boundedRaw(value.result.ascii);
-  let rawSearchOffset = 0;
-  let rawSearchLine = 1;
   const trees = value.result.trees.map((candidate): CallFlowTree => {
     if (!isRecord(candidate)) throw new Error("CallDiff worker returned an invalid tree.");
+    const entry = boundedString(candidate.entry, "tree entry");
     const tree = parseNode(candidate.tree, 0);
-    const treeRaw = boundedRaw(candidate.ascii);
-    if (treeRaw.length === 0) {
-      throw new Error("CallDiff worker returned an empty entry raw diff.");
+    const treeRaw = typeof candidate.ascii === "string"
+      && candidate.ascii.length > 0
+      && candidate.ascii.length <= MAX_RAW_LENGTH
+        ? candidate.ascii
+        : undefined;
+    const rawOffset = treeRaw ? raw.indexOf(treeRaw) : -1;
+    if (treeRaw === undefined || rawOffset === -1) return { entry, tree };
+    let rawLineStart = 1;
+    for (let index = 0; index < rawOffset; index += 1) {
+      if (raw.charCodeAt(index) === 10) rawLineStart += 1;
     }
-    const rawOffset = raw.indexOf(treeRaw, rawSearchOffset);
-    if (rawOffset === -1) {
-      throw new Error("CallDiff worker returned an entry raw diff outside its canonical output.");
-    }
-    for (let index = rawSearchOffset; index < rawOffset; index += 1) {
-      if (raw.charCodeAt(index) === 10) rawSearchLine += 1;
-    }
-    const rawLineStart = rawSearchLine;
-    for (let index = 0; index < treeRaw.length; index += 1) {
-      if (treeRaw.charCodeAt(index) === 10) rawSearchLine += 1;
-    }
-    rawSearchOffset = rawOffset + treeRaw.length;
     return {
-      entry: boundedString(candidate.entry, "tree entry"),
+      entry,
       raw: treeRaw,
       rawLineStart,
       tree,

@@ -37,12 +37,16 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
     () => analysis?.status === 'ready' ? getCallFlowTreesForFiles(analysis.data.trees, focusFiles) : [],
     [analysis, focusFiles],
   );
-  const rawSections = useMemo(() => trees.map((tree, index) => ({
-    key: `${tree.entry}:${index}`,
-    label: tree.entry,
-    raw: tree.raw,
-    rawLineStart: tree.rawLineStart,
-  })), [trees]);
+  const rawSections = useMemo(() => trees.flatMap((tree, index) => (
+    tree.raw === undefined
+      ? []
+      : [{
+          key: `${tree.entry}:${index}`,
+          label: tree.entry,
+          raw: tree.raw,
+          rawLineStart: tree.rawLineStart,
+        }]
+  )), [trees]);
   const displayPath = useMemo(() => splitCallFlowFilePath(filePath), [filePath]);
   const skippedLanguage = useMemo(() => analysis?.status === 'ready'
     ? analysis.data.skippedLanguages.find((language) => language.files.some((file) => focusFiles.includes(file)))
@@ -124,6 +128,7 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
         <Popover.Positioner align="end" sideOffset={6} className="z-[100]">
           <Popover.Popup
             className="call-flow-popover shadow-lg popover-enter"
+            data-call-flow-lens="true"
             initialFocus={false}
             onMouseEnter={cancelClose}
             onMouseLeave={scheduleClose}
@@ -153,6 +158,8 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
                 }}
                 defaultExpandedEntries="all"
                 initialContext="nearby"
+                findShortcutActive={open}
+                findShortcutSurface="lens"
                 compact
               />
             ) : (
@@ -163,6 +170,8 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
                   annotationDraftActiveRef.current = active;
                   if (!active) setOpen(false);
                 }}
+                findShortcutActive={open}
+                findShortcutSurface="lens"
                 compact
               />
             )}

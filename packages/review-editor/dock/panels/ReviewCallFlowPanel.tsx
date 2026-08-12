@@ -382,6 +382,7 @@ export function ReviewCallFlowPanel() {
           <CallFlowRawView
             sections={[{ key: 'complete', raw: data.raw, rawLineStart: 1 }]}
             onAnnotateTargets={state.onAddCallFlowAnnotation}
+            findShortcutActive={state.isCallFlowActive}
           />
         ) : data.trees.length === 0 ? (
           <div className="call-flow-empty">
@@ -395,6 +396,7 @@ export function ReviewCallFlowPanel() {
             onOpenNode={openNode}
             onAnnotateTargets={state.onAddCallFlowAnnotation}
             canInteractWithNode={state.isCallFlowNodeInPatch}
+            findShortcutActive={state.isCallFlowActive}
           />
         )}
 
