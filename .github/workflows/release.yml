@@ -1009,11 +1009,11 @@ jobs:
 
       - name: Pack @plannotator/opencode
         working-directory: apps/opencode-plugin
-        run: bun pm pack --filename ../../npm-packages/plannotator-opencode.tgz
+        run: bun pm pack --filename "$GITHUB_WORKSPACE/npm-packages/plannotator-opencode.tgz"
 
       - name: Pack @plannotator/pi-extension
         working-directory: apps/pi-extension
-        run: bun pm pack --filename ../../npm-packages/plannotator-pi-extension.tgz
+        run: bun pm pack --filename "$GITHUB_WORKSPACE/npm-packages/plannotator-pi-extension.tgz"
 
       - name: Upload npm package artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
