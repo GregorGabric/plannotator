@@ -59,7 +59,7 @@ export function PanelControlsRow({
 
   return (
     <div
-      className="flex items-center justify-between gap-2 px-2 py-1"
+      className="flex items-center justify-between gap-2 pl-1 pr-2 py-1"
       data-panel-controls-row
     >
       {showViewedControls && (

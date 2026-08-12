@@ -56,6 +56,8 @@ describe("PanelControlsRow", () => {
       expect(viewedControls).not.toBeNull();
       expect(viewedControls?.textContent).toContain("0/22");
       expect(host.firstElementChild?.firstElementChild).toBe(viewedControls);
+      expect(host.firstElementChild?.classList.contains("pl-1")).toBe(true);
+      expect(host.firstElementChild?.classList.contains("pr-2")).toBe(true);
       expect(
         host.querySelector('[aria-label="Hide viewed files"]'),
       ).not.toBeNull();
