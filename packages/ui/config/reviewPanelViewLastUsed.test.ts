@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { resetStorageBackend, setStorageBackend } from '../utils/storage';
 import { SETTINGS } from './settings';
-import { configStore } from './configStore';
+import { ConfigStoreForTest } from './configStore';
 import { setReviewPanelView } from './reviewView';
 
 function installMemoryBackend(): Map<string, string> {
@@ -12,6 +12,14 @@ function installMemoryBackend(): Map<string, string> {
     removeItem: (key) => { values.delete(key); },
   });
   return values;
+}
+
+/** Fresh store per test — never the singleton, which lives for the whole
+ * bun process and must not be resolved against a throwaway backend. */
+function makeStore() {
+  const store = new ConfigStoreForTest();
+  store.setServerSync(() => {}); // no /api/config in tests
+  return store;
 }
 
 afterEach(() => {
@@ -46,19 +54,24 @@ describe('reviewPanelViewLastUsed setting', () => {
 
   test('setReviewPanelView syncs last-used so an explicit Settings choice is not shadowed', () => {
     const values = installMemoryBackend();
-    const priorView = configStore.get('reviewPanelView');
-    const priorLastUsed = configStore.get('reviewPanelViewLastUsed');
-    try {
-      // 'tree' exercises the sync without touching the server-synced
-      // defaultDiffType half of the coupled pair.
-      setReviewPanelView('tree');
-      expect(configStore.get('reviewPanelViewLastUsed')).toBe('tree');
-      expect(values.get('plannotator-review-panel-view-last-used')).toBe('tree');
-    } finally {
-      // Restore the singleton's in-memory values (cookie writes land in the
-      // discarded memory backend; both settings are cookie-only).
-      configStore.set('reviewPanelView', priorView);
-      configStore.set('reviewPanelViewLastUsed', priorLastUsed);
-    }
+    const store = makeStore();
+
+    setReviewPanelView('tree', undefined, store);
+    expect(store.get('reviewPanelViewLastUsed')).toBe('tree');
+    expect(values.get('plannotator-review-panel-view-last-used')).toBe('tree');
+  });
+
+  test('recordLastUsed: false (the self-heal) repairs the pair without stomping the memo', () => {
+    installMemoryBackend();
+    const store = makeStore();
+
+    setReviewPanelView('tree', undefined, store);
+    setReviewPanelView('sections', { recordLastUsed: false }, store);
+
+    // The pair was repaired...
+    expect(store.get('reviewPanelView')).toBe('sections');
+    expect(store.get('defaultDiffType')).toBe('since-base');
+    // ...but the user's last-used view survived.
+    expect(store.get('reviewPanelViewLastUsed')).toBe('tree');
   });
 });

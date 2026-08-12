@@ -21,7 +21,7 @@ export const PanelViewToggle: React.FC<{
   const segment = (key: ReviewPanelView, label: string, title: string) => (
     <button
       onClick={() => onSelect(key)}
-      className={`flex-1 px-1 py-0.5 rounded-sm text-xs leading-none whitespace-nowrap text-center transition-colors ${
+      className={`flex-1 min-w-0 truncate px-1 py-0.5 rounded-sm text-xs leading-none whitespace-nowrap text-center transition-colors ${
         view === key ? 'bg-background text-foreground shadow-sm font-medium' : 'text-muted-foreground hover:text-foreground'
       }`}
       title={title}

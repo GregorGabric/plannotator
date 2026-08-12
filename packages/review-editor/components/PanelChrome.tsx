@@ -133,19 +133,26 @@ export function CopyDiffFooter({
         ) : (
           <span />
         )}
-        {onCopyRawDiff ? (
-          // Pinned copy: tooltip text specified verbatim by the maintainer.
-          <Tooltip content="click to copy the entire diff set" side="top" delayDuration={300}>
+        {onCopyRawDiff ? (() => {
+          const copyButton = (
             <button
               onClick={onCopyRawDiff}
               disabled={!canCopyRawDiff}
-              aria-label="Copy the entire diff set"
+              aria-label={`Copy the entire diff set (+${additions}/-${deletions})`}
               className="cursor-pointer rounded px-1 -mx-1 hover:bg-muted/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline focus-visible:outline-1 focus-visible:outline-primary/60"
             >
               {stats}
             </button>
-          </Tooltip>
-        ) : (
+          );
+          // No tooltip while disabled: several browsers swallow hover events
+          // on a disabled native button, so the trigger would never fire.
+          return canCopyRawDiff ? (
+            // Pinned copy: tooltip text specified verbatim by the maintainer.
+            <Tooltip content="click to copy the entire diff set" side="top" delayDuration={300}>
+              {copyButton}
+            </Tooltip>
+          ) : copyButton;
+        })() : (
           stats
         )}
       </div>
