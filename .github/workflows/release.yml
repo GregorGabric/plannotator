@@ -1021,7 +1021,7 @@ jobs:
           name: npm-packages
           path: npm-packages/*.tgz
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7
 
   # Publish only the tarballs produced by the credential-free job. Automatic
   # tag releases are unchanged; a manual publish must also target a v* tag.
