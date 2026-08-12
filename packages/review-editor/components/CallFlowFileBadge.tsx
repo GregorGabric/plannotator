@@ -7,6 +7,8 @@ import {
   CallFlowTreeView,
   selectionForCallFlowNode,
 } from './CallFlowTreeView';
+import { CallFlowRawView } from './CallFlowRawView';
+import { splitCallFlowFilePath } from '../utils/callFlowPresentation';
 
 const CLOSE_DELAY_MS = 140;
 
@@ -14,6 +16,7 @@ const CLOSE_DELAY_MS = 140;
 export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }> = ({ filePath, oldPath }) => {
   const state = useReviewStateOptional();
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<'paths' | 'raw'>('paths');
   const annotationDraftActiveRef = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -34,6 +37,13 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
     () => analysis?.status === 'ready' ? getCallFlowTreesForFiles(analysis.data.trees, focusFiles) : [],
     [analysis, focusFiles],
   );
+  const rawSections = useMemo(() => trees.map((tree, index) => ({
+    key: `${tree.entry}:${index}`,
+    label: tree.entry,
+    raw: tree.raw,
+    rawLineStart: tree.rawLineStart,
+  })), [trees]);
+  const displayPath = useMemo(() => splitCallFlowFilePath(filePath), [filePath]);
   const skippedLanguage = useMemo(() => analysis?.status === 'ready'
     ? analysis.data.skippedLanguages.find((language) => language.files.some((file) => focusFiles.includes(file)))
     : undefined, [analysis, focusFiles]);
@@ -119,25 +129,43 @@ export const CallFlowFileBadge: React.FC<{ filePath: string; oldPath?: string }>
             onMouseLeave={scheduleClose}
           >
             <div className="call-flow-popover-header">
-              <span className="call-flow-file-badge-label">flow</span>
-              <span className="call-flow-popover-path" title={filePath}>{filePath}</span>
-              <span className="call-flow-file-badge-count">{impacts.length}</span>
+              <div className="call-flow-popover-title" title={filePath}>
+                <span className="call-flow-popover-path">{displayPath.name}</span>
+                <span className="call-flow-popover-meta">
+                  {trees.length} {trees.length === 1 ? 'path' : 'paths'} · {impacts.length} changed
+                </span>
+              </div>
+              <div className="call-flow-popover-view-switch" aria-label="Call flow Lens view">
+                <button type="button" aria-pressed={view === 'paths'} onClick={() => setView('paths')}>Paths</button>
+                <button type="button" aria-pressed={view === 'raw'} onClick={() => setView('raw')}>Raw</button>
+              </div>
             </div>
-            <div className="call-flow-popover-summary">
-              {trees.length} complete entry {trees.length === 1 ? 'path' : 'paths'} containing {impacts.length} changed {impacts.length === 1 ? 'step' : 'steps'} in this file
-            </div>
-            <CallFlowTreeView
-              trees={trees}
-              onOpenNode={openNode}
-              onAnnotateTargets={state.onAddCallFlowAnnotation}
-              focusFiles={focusFiles}
-              canInteractWithNode={state.isCallFlowNodeInPatch}
-              onAnnotationDraftChange={(active) => {
-                annotationDraftActiveRef.current = active;
-                if (!active) setOpen(false);
-              }}
-              compact
-            />
+            {view === 'paths' ? (
+              <CallFlowTreeView
+                trees={trees}
+                onOpenNode={openNode}
+                onAnnotateTargets={state.onAddCallFlowAnnotation}
+                focusFiles={focusFiles}
+                canInteractWithNode={state.isCallFlowNodeInPatch}
+                onAnnotationDraftChange={(active) => {
+                  annotationDraftActiveRef.current = active;
+                  if (!active) setOpen(false);
+                }}
+                defaultExpandedEntries="all"
+                initialContext="nearby"
+                compact
+              />
+            ) : (
+              <CallFlowRawView
+                sections={rawSections}
+                onAnnotateTargets={state.onAddCallFlowAnnotation}
+                onAnnotationDraftChange={(active) => {
+                  annotationDraftActiveRef.current = active;
+                  if (!active) setOpen(false);
+                }}
+                compact
+              />
+            )}
             <button type="button" className="call-flow-open-dock" onClick={() => { closeLens(); state.openCallFlowPanel(); }}>
               Open full call flow
               <span aria-hidden="true">→</span>

@@ -12,6 +12,8 @@ let root: Root | null = null;
 
 const trees: CallFlowTree[] = [{
   entry: 'checkout()',
+  raw: '+ checkout()',
+  rawLineStart: 1,
   tree: {
     key: 'checkout',
     label: 'checkout()',
@@ -31,6 +33,8 @@ const trees: CallFlowTree[] = [{
 
 const contextTrees: CallFlowTree[] = [{
   entry: 'checkout()',
+  raw: '  checkout()\n+ └─ changedCall()',
+  rawLineStart: 1,
   tree: {
     key: 'checkout',
     label: 'checkout()',
@@ -58,6 +62,8 @@ const multipleEntryTrees: CallFlowTree[] = [
   trees[0]!,
   {
     entry: 'refund()',
+    raw: '+ refund()',
+    rawLineStart: 3,
     tree: {
       key: 'refund',
       label: 'refund()',

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { CallFlowNode } from '@plannotator/shared/call-flow-types';
+import type { CallFlowNode, CallFlowTree } from '@plannotator/shared/call-flow-types';
 import {
   annotationSelectionForCallFlowNode,
   annotationTargetForCallFlowNode,
@@ -20,6 +20,10 @@ function node(overrides: Partial<CallFlowNode>): CallFlowNode {
     children: [],
     ...overrides,
   };
+}
+
+function callTree(entry: string, tree: CallFlowNode): CallFlowTree {
+  return { entry, raw: entry, rawLineStart: 1, tree };
 }
 
 describe('Call Flow source selections', () => {
@@ -78,13 +82,13 @@ describe('Call Flow source selections', () => {
   test('keeps outside-patch rows annotatable while disabling only source navigation', () => {
     const treeNode = node({});
     const outside = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
-      trees: [{ entry: 'checkout()', tree: treeNode }],
+      trees: [callTree('checkout()', treeNode)],
       onOpenNode: () => {},
       onAnnotateTargets: () => true,
       canInteractWithNode: () => false,
     }));
     const inside = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
-      trees: [{ entry: 'checkout()', tree: treeNode }],
+      trees: [callTree('checkout()', treeNode)],
       onOpenNode: () => {},
       onAnnotateTargets: () => true,
       canInteractWithNode: () => true,
@@ -106,7 +110,7 @@ describe('Call Flow source selections', () => {
       ],
     });
     const markup = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
-      trees: [{ entry: 'checkout()', tree: treeNode }],
+      trees: [callTree('checkout()', treeNode)],
       onOpenNode: () => {},
     }));
 
@@ -125,7 +129,7 @@ describe('Call Flow source selections', () => {
       ],
     });
     const markup = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
-      trees: [{ entry: 'CallFlowTreeView({})', tree: treeNode }],
+      trees: [callTree('CallFlowTreeView({})', treeNode)],
       onOpenNode: () => {},
     }));
 
@@ -152,7 +156,7 @@ describe('Call Flow source selections', () => {
       ],
     });
     const markup = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
-      trees: [{ entry: 'checkout()', tree: treeNode }],
+      trees: [callTree('checkout()', treeNode)],
       onOpenNode: () => {},
     }));
 
@@ -161,7 +165,34 @@ describe('Call Flow source selections', () => {
     expect(markup).toContain('changedPath()');
     expect(markup).toContain('changedCall()');
     expect(markup).toContain('aria-label="Collapse changedPath()"');
-    expect(markup).toContain('unchanged context steps hidden');
+    expect(markup).toContain('more context steps hidden');
+    expect(markup).toContain('Show all context');
+  });
+
+  test('shows adjacent structural context without expanding the complete tree', () => {
+    const treeNode = node({
+      status: 'same',
+      children: [
+        node({
+          key: 'nearby-context',
+          label: 'nearbyContext()',
+          status: 'same',
+          children: [node({ key: 'deep-context', label: 'deepContext()', status: 'same' })],
+        }),
+        node({ key: 'changed-call', label: 'changedCall()', status: 'added' }),
+        node({ key: 'after-context', label: 'afterContext()', status: 'same' }),
+      ],
+    });
+    const markup = renderToStaticMarkup(React.createElement(CallFlowTreeView, {
+      trees: [callTree('checkout()', treeNode)],
+      onOpenNode: () => {},
+      initialContext: 'nearby',
+    }));
+
+    expect(markup).toContain('nearbyContext()');
+    expect(markup).toContain('changedCall()');
+    expect(markup).toContain('afterContext()');
+    expect(markup).not.toContain('deepContext()');
     expect(markup).toContain('Show all context');
   });
 });

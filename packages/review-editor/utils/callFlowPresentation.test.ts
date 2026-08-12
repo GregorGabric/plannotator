@@ -58,19 +58,25 @@ describe('Call Flow raw output', () => {
 
   test('creates one-based review targets without inventing source locations', () => {
     const [added, removed] = getCallFlowRawLines('+ newCall()\n- oldCall()');
-    expect(added && annotationTargetForCallFlowRawLine(added, 0)).toEqual({
-      treePath: 'raw:0',
+    expect(added && annotationTargetForCallFlowRawLine(added)).toEqual({
+      treePath: 'raw:1',
       entry: 'Raw CallDiff output',
       label: '+ newCall()',
       rawLine: 1,
       side: 'new',
     });
-    expect(removed && annotationTargetForCallFlowRawLine(removed, 1)).toEqual({
-      treePath: 'raw:1',
+    expect(removed && annotationTargetForCallFlowRawLine(removed)).toEqual({
+      treePath: 'raw:2',
       entry: 'Raw CallDiff output',
       label: '- oldCall()',
       rawLine: 2,
       side: 'old',
+    });
+
+    const [offsetLine] = getCallFlowRawLines('+ laterCall()', 41);
+    expect(offsetLine && annotationTargetForCallFlowRawLine(offsetLine)).toMatchObject({
+      treePath: 'raw:41',
+      rawLine: 41,
     });
   });
 });

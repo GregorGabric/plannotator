@@ -33,17 +33,22 @@ export function annotationTargetForCallFlowNode(
   treePath: string,
 ): CallFlowAnnotationTarget | null {
   const range = annotationSelectionForCallFlowNode(node);
-  return {
+  const target = {
     treePath,
     entry,
     label: node.label,
-    ...(node.file ? { filePath: node.file } : {}),
-    ...(range ? {
+    side: range?.side === 'deletions' || node.status === 'removed' ? 'old' as const : 'new' as const,
+  };
+  if (node.file && range) {
+    return {
+      ...target,
+      filePath: node.file,
       lineStart: Math.min(range.start, range.end),
       lineEnd: Math.max(range.start, range.end),
-    } : {}),
-    side: range?.side === 'deletions' || node.status === 'removed' ? 'old' : 'new',
-  };
+    };
+  }
+  if (node.file) return { ...target, filePath: node.file };
+  return target;
 }
 
 function statusGlyph(status: CallFlowNode['status']): string {
@@ -88,7 +93,7 @@ interface CallFlowNodeRowProps {
   readonly selectedTargetKeys: ReadonlySet<string>;
   readonly focusFiles?: ReadonlySet<string>;
   readonly canInteractWithNode?: (node: CallFlowNode) => boolean;
-  /** Nodes on a path to at least one added/removed step. */
+  /** Nodes visible in the current focused-context projection. */
   readonly changedSubtrees: ReadonlySet<CallFlowNode>;
   /** Nodes on a path to at least one structured-search result. */
   readonly searchSubtrees: ReadonlySet<CallFlowNode>;
@@ -267,6 +272,10 @@ interface CallFlowTreeViewProps {
   /** Notify a containing popover while the multi-target composer is open. */
   readonly onAnnotationDraftChange?: (active: boolean) => void;
   readonly compact?: boolean;
+  /** Entry disclosure used when a new tree result is mounted. */
+  readonly defaultExpandedEntries?: 'first' | 'all';
+  /** Amount of unchanged structural context shown before the user asks for all of it. */
+  readonly initialContext?: 'changed' | 'nearby' | 'all';
 }
 
 interface CallFlowTreeSearchMatch {
@@ -365,20 +374,35 @@ export function CallFlowTreeView({
   canInteractWithNode,
   onAnnotationDraftChange,
   compact = false,
+  defaultExpandedEntries = 'first',
+  initialContext = 'changed',
 }: CallFlowTreeViewProps) {
   const focused = useMemo(() => focusFiles ? new Set(focusFiles) : undefined, [focusFiles]);
   const treeShape = useMemo(() => {
     const nodes = new Set<CallFlowNode>();
+    const nearbyNodes = new Set<CallFlowNode>();
     const entryChangedCounts = new Map<CallFlowTree, number>();
     let totalNodes = 0;
     const visit = (node: CallFlowNode): { containsChange: boolean; changedCount: number } => {
       totalNodes += 1;
       let containsChange = node.status !== 'same';
       let changedCount = node.status === 'same' ? 0 : 1;
-      for (const child of node.children) {
-        const childResult = visit(child);
+      const childResults = node.children.map(visit);
+      for (const childResult of childResults) {
         if (childResult.containsChange) containsChange = true;
         changedCount += childResult.changedCount;
+      }
+      childResults.forEach((childResult, childIndex) => {
+        if (!childResult.containsChange) return;
+        const firstNearbyIndex = Math.max(0, childIndex - 1);
+        const lastNearbyIndex = Math.min(node.children.length - 1, childIndex + 1);
+        for (let nearbyIndex = firstNearbyIndex; nearbyIndex <= lastNearbyIndex; nearbyIndex += 1) {
+          const nearbyNode = node.children[nearbyIndex];
+          if (nearbyNode) nearbyNodes.add(nearbyNode);
+        }
+      });
+      if (node.status !== 'same') {
+        node.children.slice(0, 2).forEach((child) => nearbyNodes.add(child));
       }
       if (containsChange) nodes.add(node);
       return { containsChange, changedCount };
@@ -386,19 +410,23 @@ export function CallFlowTreeView({
     for (const tree of trees) {
       entryChangedCounts.set(tree, visit(tree.tree).changedCount);
     }
+    nodes.forEach((node) => nearbyNodes.add(node));
     return {
       changedSubtrees: nodes as ReadonlySet<CallFlowNode>,
+      nearbySubtrees: nearbyNodes as ReadonlySet<CallFlowNode>,
       entryChangedCounts: entryChangedCounts as ReadonlyMap<CallFlowTree, number>,
       totalNodes,
     };
   }, [trees]);
-  const { changedSubtrees, entryChangedCounts, totalNodes } = treeShape;
-  const hiddenContextNodes = totalNodes - changedSubtrees.size;
-  const [showAllContext, setShowAllContext] = useState(false);
+  const { changedSubtrees, nearbySubtrees, entryChangedCounts, totalNodes } = treeShape;
+  const defaultSubtrees = initialContext === 'nearby' ? nearbySubtrees : changedSubtrees;
+  const focusedContextLabel = initialContext === 'nearby' ? 'Show nearby context' : 'Show changed paths';
+  const hiddenContextNodes = initialContext === 'all' ? 0 : totalNodes - defaultSubtrees.size;
+  const [showAllContext, setShowAllContext] = useState(initialContext === 'all');
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const entryPaths = useMemo(() => trees.map((entry, index) => `${entry.entry}:${index}`), [trees]);
   const [expandedEntryPaths, setExpandedEntryPaths] = useState<ReadonlySet<string>>(
-    () => new Set(entryPaths.slice(0, 1)),
+    () => new Set(defaultExpandedEntries === 'all' ? entryPaths : entryPaths.slice(0, 1)),
   );
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -447,9 +475,10 @@ export function CallFlowTreeView({
 
   useEffect(() => {
     setCollapsedPaths(new Set());
-    setExpandedEntryPaths(new Set(entryPaths.slice(0, 1)));
+    setExpandedEntryPaths(new Set(defaultExpandedEntries === 'all' ? entryPaths : entryPaths.slice(0, 1)));
+    setShowAllContext(initialContext === 'all');
     setCurrentSearchIndex(0);
-  }, [trees]);
+  }, [defaultExpandedEntries, entryPaths, initialContext, trees]);
 
   useEffect(() => {
     if (currentSearchIndex < searchMatches.length || searchMatches.length === 0) return;
@@ -561,14 +590,14 @@ export function CallFlowTreeView({
         if (node.file) previousFile = node.file;
         if (collapsedPaths.has(treePath)) return;
         node.children.forEach((child, childIndex) => {
-          if (!showAllContext && !changedSubtrees.has(child) && !searchSubtrees.has(child)) return;
+          if (!showAllContext && !defaultSubtrees.has(child) && !searchSubtrees.has(child)) return;
           visit(child, `${treePath}/${child.key}:${childIndex}`);
         });
       };
       visit(entry.tree, `${entry.entry}:${entryIndex}`);
     }
     return boundaries;
-  }, [changedSubtrees, collapsedPaths, searchSubtrees, showAllContext, trees]);
+  }, [collapsedPaths, defaultSubtrees, searchSubtrees, showAllContext, trees]);
   const treeInstanceId = useId();
   const [draftTargets, setDraftTargets] = useState<CallFlowAnnotationTarget[]>([]);
   const [refocusToken, setRefocusToken] = useState(0);
@@ -679,12 +708,12 @@ export function CallFlowTreeView({
   return (
     <>
       <div ref={treesRef} className={`call-flow-trees${compact ? ' call-flow-trees-compact' : ''}`}>
-        {(hiddenContextNodes > 0 || !compact) && (
+        {trees.length > 0 && (
           <div className="call-flow-tree-toolbar">
             {hiddenContextNodes > 0 && <span className="call-flow-context-summary">
               {showAllContext
                 ? `${totalNodes.toLocaleString()} inferred steps`
-                : `${hiddenContextNodes.toLocaleString()} unchanged context steps hidden`}
+                : `${hiddenContextNodes.toLocaleString()} more context steps hidden`}
             </span>}
             <div className={`call-flow-tree-actions${searchOpen ? ' call-flow-tree-actions-searching' : ''}`}>
               {hiddenContextNodes > 0 && (
@@ -693,10 +722,10 @@ export function CallFlowTreeView({
                   aria-pressed={showAllContext}
                   onClick={() => setShowAllContext((visible) => !visible)}
                 >
-                  {showAllContext ? 'Show changed paths' : 'Show all context'}
+                  {showAllContext ? focusedContextLabel : 'Show all context'}
                 </button>
               )}
-              {!compact && (searchOpen ? (
+              {searchOpen ? (
                 <CallFlowSearchControls
                   inputRef={searchInputRef}
                   label="Search call paths"
@@ -719,16 +748,14 @@ export function CallFlowTreeView({
                 >
                   <Search aria-hidden="true" size={14} />
                 </button>
-              ))}
-              {!compact && (
-                <button
-                  type="button"
-                  onClick={toggleAllEntries}
-                  aria-label={allEntriesExpanded ? 'Collapse all paths' : 'Expand all paths'}
-                >
-                  {allEntriesExpanded ? 'Collapse all' : 'Expand all'}
-                </button>
               )}
+              <button
+                type="button"
+                onClick={toggleAllEntries}
+                aria-label={allEntriesExpanded ? 'Collapse all paths' : 'Expand all paths'}
+              >
+                {allEntriesExpanded ? 'Collapse all' : 'Expand all'}
+              </button>
             </div>
           </div>
         )}
@@ -738,7 +765,7 @@ export function CallFlowTreeView({
             entry={entry}
             index={index}
             changedCount={entryChangedCounts.get(entry) ?? 0}
-            changedSubtrees={changedSubtrees}
+            changedSubtrees={defaultSubtrees}
             searchSubtrees={searchSubtrees}
             searchQuery={searchQuery}
             currentSearchPath={currentSearchMatch?.treePath}

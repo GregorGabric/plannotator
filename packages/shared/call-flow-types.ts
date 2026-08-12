@@ -18,6 +18,10 @@ export interface CallFlowNode {
 
 export interface CallFlowTree {
   entry: string;
+  /** Canonical colorless CallDiff rendering for this complete entry tree. */
+  raw: string;
+  /** One-based line where `raw` begins inside the response-level raw output. */
+  rawLineStart: number;
   tree: CallFlowNode;
 }
 
@@ -236,11 +240,33 @@ export function parseCallDiffWorkerResult(value: unknown): ParsedCallDiffWorkerR
     };
   };
 
+  const raw = boundedRaw(value.result.ascii);
+  let rawSearchOffset = 0;
+  let rawSearchLine = 1;
   const trees = value.result.trees.map((candidate): CallFlowTree => {
     if (!isRecord(candidate)) throw new Error("CallDiff worker returned an invalid tree.");
+    const tree = parseNode(candidate.tree, 0);
+    const treeRaw = boundedRaw(candidate.ascii);
+    if (treeRaw.length === 0) {
+      throw new Error("CallDiff worker returned an empty entry raw diff.");
+    }
+    const rawOffset = raw.indexOf(treeRaw, rawSearchOffset);
+    if (rawOffset === -1) {
+      throw new Error("CallDiff worker returned an entry raw diff outside its canonical output.");
+    }
+    for (let index = rawSearchOffset; index < rawOffset; index += 1) {
+      if (raw.charCodeAt(index) === 10) rawSearchLine += 1;
+    }
+    const rawLineStart = rawSearchLine;
+    for (let index = 0; index < treeRaw.length; index += 1) {
+      if (treeRaw.charCodeAt(index) === 10) rawSearchLine += 1;
+    }
+    rawSearchOffset = rawOffset + treeRaw.length;
     return {
       entry: boundedString(candidate.entry, "tree entry"),
-      tree: parseNode(candidate.tree, 0),
+      raw: treeRaw,
+      rawLineStart,
+      tree,
     };
   });
 
@@ -262,7 +288,7 @@ export function parseCallDiffWorkerResult(value: unknown): ParsedCallDiffWorkerR
     ...(typeof value.result.message === "string" && value.result.message.length > 0
       ? { message: value.result.message.slice(0, MAX_TEXT_LENGTH) }
       : {}),
-    raw: boundedRaw(value.result.ascii),
+    raw,
     trees,
     diagnostics,
   };

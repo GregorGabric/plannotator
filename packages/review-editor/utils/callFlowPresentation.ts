@@ -20,6 +20,8 @@ export type CallFlowRawLineKind = 'added' | 'removed' | 'context';
 export interface CallFlowRawLine {
   readonly content: string;
   readonly kind: CallFlowRawLineKind;
+  /** One-based position in the response-level canonical CallDiff output. */
+  readonly rawLine: number;
 }
 
 export interface CallFlowRawSearchMatch {
@@ -34,13 +36,12 @@ export type CallFlowRawAnnotationTarget = Extract<CallFlowAnnotationTarget, { ra
 /** Build the durable, review-scoped annotation target for one raw output line. */
 export function annotationTargetForCallFlowRawLine(
   line: CallFlowRawLine,
-  lineIndex: number,
 ): CallFlowRawAnnotationTarget {
   return {
-    treePath: `raw:${lineIndex}`,
+    treePath: `raw:${line.rawLine}`,
     entry: 'Raw CallDiff output',
     label: line.content || '(blank line)',
-    rawLine: lineIndex + 1,
+    rawLine: line.rawLine,
     side: line.kind === 'removed' ? 'old' : 'new',
   };
 }
@@ -50,15 +51,15 @@ export function annotationTargetForCallFlowRawLine(
  * the first column for its status marker (`+`, `-`, or a space), so operators,
  * path hyphens, and headings later in a line remain neutral.
  */
-export function getCallFlowRawLines(raw: string): CallFlowRawLine[] {
-  return raw.split('\n').map((content) => {
+export function getCallFlowRawLines(raw: string, rawLineStart = 1): CallFlowRawLine[] {
+  return raw.split('\n').map((content, lineIndex) => {
     const marker = content.match(/^([+−-])(?=\s)/)?.[1];
     const kind: CallFlowRawLineKind = marker === '+'
       ? 'added'
       : marker === '-' || marker === '−'
         ? 'removed'
         : 'context';
-    return { content, kind };
+    return { content, kind, rawLine: rawLineStart + lineIndex };
   });
 }
 
