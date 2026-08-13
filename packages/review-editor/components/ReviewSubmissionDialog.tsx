@@ -364,7 +364,6 @@ export function ReviewSubmissionDialog({
         {/* General comment */}
         <textarea
           ref={generalCommentRef}
-          autoFocus={!isCompactTouchLayout && !bodyLocked}
           data-pn-mobile-editable
           value={generalComment}
           onChange={e => onGeneralCommentChange(e.target.value)}
