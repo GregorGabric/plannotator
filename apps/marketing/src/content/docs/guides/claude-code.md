@@ -2,7 +2,7 @@
 title: "Claude Code"
 description: "How Plannotator works with Claude Code — hooks, permission modes, and the plan review lifecycle."
 sidebar:
-  order: 5
+  order: 4
 section: "Getting Started"
 ---
 
