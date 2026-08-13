@@ -32,7 +32,10 @@ describe('review entry assets', () => {
 
     expect(editor).toContain("const browserCanvas = isHtmlSurface || gridEnabled ? 'background' : 'card';");
     expect(editor).toContain('data-pn-browser-canvas={browserCanvas}');
+    expect(editor).toContain("data-pn-document-scroll={usesDocumentScroll ? 'true' : undefined}");
+    expect(editor).toContain("overflowY={usesDocumentScroll ? 'visible' : 'auto'}");
     expect(theme).toContain('html:has([data-pn-browser-canvas="card"])');
+    expect(theme).toContain('html:has([data-pn-document-scroll="true"])');
     expect(theme).toContain('background-color: var(--card);');
   });
 

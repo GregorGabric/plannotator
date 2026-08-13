@@ -444,15 +444,22 @@ responsive Chromium did not reproduce. The entry body still claimed a
 allowing Safari to scroll the entire app upward into a blank body region when
 browser chrome was visible. Hook and Review entries now lock outer overflow
 and delegate scrolling exclusively to their application viewports. The next
-physical pass showed that this was not the remaining dark region around
-Safari's floating bottom controls: the nested Plan surface painted `--card`,
-while the outer application and page canvas behind the browser controls still
-painted the nearly black `--background`. A non-grid Plan now extends its card
-canvas through those outer layers; grid, HTML, Review, and loading surfaces
-retain their existing background. The Plan composer also suppresses its
-hardware-keyboard submit hint when any coarse pointer is present; the explicit
-Save action remains the mobile instruction. These changes require a fresh
-physical retest before the checkpoint passes.
+physical pass showed that the remaining boundary around Safari's floating
+bottom controls was not cosmetic. Matching the outer canvas removed the black
+color, but the document still ended above browser chrome and Safari never
+collapsed its controls because the gesture scrolled a nested `<main>`, not the
+page. WebKit documents that body scrolling shifts Safari UI while scrolling a
+vertical element intentionally leaves it still
+([WebKit #240861](https://bugs.webkit.org/show_bug.cgi?id=240861)). Compact
+coarse-pointer Plan layouts now use `document.scrollingElement`; shared
+viewport consumers distinguish that page viewport for scroll events,
+IntersectionObserver roots, geometry, TOC/hash navigation, Pinpoint, and Vim
+motion. The fixed nested application shell remains the desktop path, and Code
+Review keeps its existing workspace shell pending its own mobile-composition
+phase. The Plan composer also suppresses its hardware-keyboard submit hint when
+any coarse pointer is present; the explicit Save action remains the mobile
+instruction. These changes require a fresh physical retest before the
+checkpoint passes.
 
 This record does not pass Checkpoint 1B. Mobile Safari focus zoom, real
 software-keyboard geometry, rotation, safe-area clearance, and background /

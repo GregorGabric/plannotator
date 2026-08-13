@@ -52,10 +52,16 @@ import { requestVimDocumentFocus } from '@plannotator/ui/hooks/useVimDocumentFoc
 import { useResizablePanel } from '@plannotator/ui/hooks/useResizablePanel';
 import { ResizeHandle } from '@plannotator/ui/components/ResizeHandle';
 import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea';
-import { ScrollViewportProvider } from '@plannotator/ui/hooks/useScrollViewport';
+import {
+  getDocumentScrollViewport,
+  ScrollViewportProvider,
+} from '@plannotator/ui/hooks/useScrollViewport';
 import { useOverlayViewport } from '@plannotator/ui/hooks/useOverlayViewport';
 import { useIsMobile } from '@plannotator/ui/hooks/useIsMobile';
-import { useViewportEnvironment } from '@plannotator/ui/hooks/useViewportEnvironment';
+import {
+  hasCoarsePointer,
+  useViewportEnvironment,
+} from '@plannotator/ui/hooks/useViewportEnvironment';
 import {
   getPermissionModeSettings,
   needsPermissionModeSetup,
@@ -517,17 +523,31 @@ const App: React.FC = () => {
   });
   const [showLookAndFeelAnnouncement, setShowLookAndFeelAnnouncement] = useState(needsLookAndFeelAnnouncement);
   const isMobile = useIsMobile();
+  const isMobilePageScrollWidth = useIsMobile(1025);
+  const usesDocumentScroll = isMobilePageScrollWidth && hasCoarsePointer();
 
   const viewerRef = useRef<ViewerHandle>(null);
-  // containerRef + scrollViewport both point at the OverlayScrollbars
-  // viewport element (the node that actually scrolls), not the <main>
-  // host. Consumers: useActiveSection (IntersectionObserver root) and
-  // everything reading ScrollViewportContext.
+  // Desktop uses the main document element as its native scroll viewport.
+  // Compact coarse-pointer browsers use the page scroller so Mobile Safari
+  // receives the document scroll gesture it requires to collapse its chrome.
   const {
-    ref: containerRef,
     viewport: scrollViewport,
     onViewportReady: handleViewportReady,
   } = useOverlayViewport();
+  const mainViewportRef = useRef<HTMLElement | null>(null);
+  const handleDocumentViewportReady = useCallback((next: HTMLElement | null) => {
+    mainViewportRef.current = next;
+    handleViewportReady(next && usesDocumentScroll
+      ? getDocumentScrollViewport()
+      : next);
+  }, [handleViewportReady, usesDocumentScroll]);
+
+  useEffect(() => {
+    if (!mainViewportRef.current) return;
+    handleViewportReady(usesDocumentScroll
+      ? getDocumentScrollViewport()
+      : mainViewportRef.current);
+  }, [handleViewportReady, usesDocumentScroll]);
 
   usePrintMode();
 
@@ -1383,7 +1403,7 @@ const App: React.FC = () => {
 
   // Track active section for TOC highlighting
   const headingCount = useMemo(() => blocks.filter(b => b.type === 'heading').length, [blocks]);
-  const activeSection = useActiveSection(containerRef, headingCount, scrollViewport);
+  const activeSection = useActiveSection(planAreaRef, headingCount, scrollViewport);
 
   const { editorAnnotations, deleteEditorAnnotation } = useEditorAnnotations();
   const { externalAnnotations, updateExternalAnnotation, deleteExternalAnnotation } = useExternalAnnotations<Annotation>({
@@ -4235,7 +4255,8 @@ const App: React.FC = () => {
       <div
         data-print-region="root"
         data-pn-browser-canvas={browserCanvas}
-        className={`pn-app-viewport flex flex-col overflow-hidden ${browserCanvas === 'card' ? 'bg-card' : 'bg-background'}`}
+        data-pn-document-scroll={usesDocumentScroll ? 'true' : undefined}
+        className={`pn-app-viewport flex flex-col ${usesDocumentScroll ? 'overflow-visible' : 'overflow-hidden'} ${browserCanvas === 'card' ? 'bg-card' : 'bg-background'}`}
       >
         <AppHeader
           htmlSurface={isHtmlSurface}
@@ -4368,7 +4389,7 @@ const App: React.FC = () => {
 
         {/* Main Content */}
         <ScrollViewportProvider viewport={scrollViewport}>
-        <div data-print-region="content" className={`flex-1 flex overflow-hidden relative z-0 ${isResizing ? 'select-none' : ''}`}>
+        <div data-print-region="content" className={`flex-1 flex ${usesDocumentScroll ? 'overflow-visible' : 'overflow-hidden'} relative z-0 ${isResizing ? 'select-none' : ''}`}>
           {/* Tater sprites — inside content wrapper so z-0 stacking context applies */}
           {taterMode && <TaterSpriteRunning />}
           {shouldRenderAgentTerminal && agentTerminalCapability && (
@@ -4507,7 +4528,9 @@ const App: React.FC = () => {
             element="main"
             className={`flex-1 min-w-0 ${isHtmlSurface ? 'bg-background' : `${gridEnabled ? "bg-grid " : "bg-card "}${!goalSetupMode && !sidebar.isOpen && !isAgentTerminalOpen && wideModeType === null ? 'lg:pl-[30px]' : ''}`}`}
             data-print-region="document"
-            onViewportReady={handleViewportReady}
+            overflowX={usesDocumentScroll ? 'visible' : 'hidden'}
+            overflowY={usesDocumentScroll ? 'visible' : 'auto'}
+            onViewportReady={handleDocumentViewportReady}
           >
             <ConfirmDialog
               isOpen={!!draftBanner}

@@ -726,6 +726,28 @@ body:has([data-pn-browser-canvas="background"]) {
   background-color: var(--background);
 }
 
+/* Mobile Safari only collapses its browser controls for page scrolling; it
+ * deliberately leaves them expanded when a gesture scrolls a nested element.
+ * Plan opts compact coarse-pointer layouts into document scrolling while the
+ * fixed application-stage architecture remains unchanged everywhere else. */
+html:has([data-pn-document-scroll="true"]),
+body:has([data-pn-document-scroll="true"]) {
+  height: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: auto;
+}
+
+body:has([data-pn-document-scroll="true"]) > #root {
+  height: auto;
+  overflow: visible;
+}
+
+.pn-app-viewport[data-pn-document-scroll="true"] {
+  height: auto;
+  min-height: 100dvh;
+}
+
 /* The application stage owns the top and lateral safe areas. Bottom-edge
  * surfaces opt into `.pn-safe-bottom` themselves so the home-indicator inset
  * is never counted twice. The ordered height declarations preserve desktop
