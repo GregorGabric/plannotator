@@ -132,6 +132,12 @@ import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMen
 import { FolderAnnotationEmptyState } from './components/FolderAnnotationEmptyState';
 import { CompactAnnotationControls } from './components/CompactAnnotationControls';
 import { CompactEditControls } from './components/CompactEditControls';
+import { CompactPlanStage } from './components/CompactPlanStage';
+import {
+  CompactPlanCompletion,
+  CompactPlanReview,
+  type CompactPlanReviewAction,
+} from './components/CompactPlanReview';
 import {
   COMPACT_PLAN_ARTIFACT,
   openCompactPlanNavigator,
@@ -286,6 +292,10 @@ const feedbackLossDescription = (annotationCount: number, hasDirectEdits: boolea
 };
 
 type SourceFileEditWarningAction = 'send-feedback' | 'approve' | 'close';
+type CompactPlanTransientSurface = Extract<
+  CompactPlanSurface,
+  { readonly type: 'annotations' | 'ai' | 'review' }
+>['type'];
 
 /** Hint shown following the cursor while hovering a sidebar/panel resize handle. */
 const RESIZE_HANDLE_TOOLTIP = 'Click to close · Drag to resize';
@@ -537,12 +547,16 @@ const App: React.FC = () => {
   const effectiveEditorMode: EditorMode = isCompactTouchLayout ? 'selection' : editorMode;
   const effectiveInputMethod = isCompactTouchLayout ? compactInputMethod : inputMethod;
   const [compactPlanSurface, setCompactPlanSurface] = useState<CompactPlanSurface>(COMPACT_PLAN_ARTIFACT);
+  const compactPlanSurfaceTriggerRef = useRef<HTMLElement | null>(null);
   const [compactNavigatorTab, setCompactNavigatorTab] = useState<SidebarTab>('toc');
   const isCompactNavigatorOpen = isCompactTouchLayout && compactPlanSurface.type === 'navigator';
   const isCompactFilesSurfaceOpen =
     isCompactNavigatorOpen && compactPlanSurface.type === 'navigator' && compactPlanSurface.tab === 'files';
   const isCompactContentsSurfaceOpen =
     isCompactNavigatorOpen && compactPlanSurface.type === 'navigator' && compactPlanSurface.tab === 'toc';
+  const isCompactAnnotationsOpen = isCompactTouchLayout && compactPlanSurface.type === 'annotations';
+  const isCompactAIOpen = isCompactTouchLayout && compactPlanSurface.type === 'ai';
+  const isCompactReviewOpen = isCompactTouchLayout && compactPlanSurface.type === 'review';
   const effectivePanelOpen = shouldPresentDesktopPlanPanel(isCompactTouchLayout, isPanelOpen);
 
   // Compact interactions never write into the remembered desktop rail/panel
@@ -551,6 +565,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (isCompactTouchLayout) return;
     setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
+    compactPlanSurfaceTriggerRef.current = null;
     // Keep the session-only compact method ready to inherit the latest
     // explicit desktop choice without letting compact changes write it back.
     setCompactInputMethod(inputMethod);
@@ -691,7 +706,33 @@ const App: React.FC = () => {
     }, 0);
   }, []);
 
+  const openCompactPlanSurface = useCallback((type: CompactPlanTransientSurface) => {
+    const activeElement = document.activeElement;
+    compactPlanSurfaceTriggerRef.current = activeElement instanceof HTMLElement ? activeElement : null;
+    setCompactPlanSurface({ type });
+  }, []);
+
+  const switchCompactPlanSurface = useCallback((type: CompactPlanTransientSurface) => {
+    setCompactPlanSurface({ type });
+  }, []);
+
+  const closeCompactPlanSurface = useCallback((restoreFocus = true) => {
+    const trigger = compactPlanSurfaceTriggerRef.current;
+    compactPlanSurfaceTriggerRef.current = null;
+    setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
+    if (!restoreFocus) return;
+    window.setTimeout(() => {
+      const fallback = document.getElementById('pn-compact-plan-options-trigger');
+      const focusTarget = trigger?.isConnected ? trigger : fallback;
+      focusTarget?.focus({ preventScroll: true });
+    }, 0);
+  }, []);
+
   const handleAnnotationPanelToggle = useCallback(() => {
+    if (isCompactTouchLayout) {
+      openCompactPlanSurface('annotations');
+      return;
+    }
     if (wideModeType !== null) {
       exitWideMode({ restore: false, panelOpen: true });
       setRightSidebarTab('annotations');
@@ -699,7 +740,7 @@ const App: React.FC = () => {
     }
     setRightSidebarTab('annotations');
     setIsPanelOpen(prev => rightSidebarTab === 'annotations' ? !prev : true);
-  }, [exitWideMode, rightSidebarTab, wideModeType]);
+  }, [exitWideMode, isCompactTouchLayout, openCompactPlanSurface, rightSidebarTab, wideModeType]);
 
   const dismissLookAndFeelAnnouncement = useCallback(() => {
     // Persist even when the user accepts the displayed default without first
@@ -710,6 +751,10 @@ const App: React.FC = () => {
   }, [gridEnabled]);
 
   const handleAIChatToggle = useCallback(() => {
+    if (isCompactTouchLayout) {
+      openCompactPlanSurface('ai');
+      return;
+    }
     if (wideModeType !== null) {
       exitWideMode({ restore: false, panelOpen: true });
       setRightSidebarTab('ai');
@@ -717,7 +762,7 @@ const App: React.FC = () => {
     }
     setRightSidebarTab('ai');
     setIsPanelOpen(prev => rightSidebarTab === 'ai' ? !prev : true);
-  }, [exitWideMode, rightSidebarTab, wideModeType]);
+  }, [exitWideMode, isCompactTouchLayout, openCompactPlanSurface, rightSidebarTab, wideModeType]);
 
   const hideAgentTerminal = useCallback(() => {
     setIsAgentTerminalOpen(false);
@@ -3449,8 +3494,8 @@ const App: React.FC = () => {
   const handleSelectAnnotation = React.useCallback((id: string | null) => {
     setSelectedAnnotationId(id);
     if (id) setSelectedCodeAnnotationId(null);
-    if (id && isMobile && wideModeType === null) setIsPanelOpen(true);
-  }, [isMobile, wideModeType]);
+    if (id && isMobile && !isCompactTouchLayout && wideModeType === null) setIsPanelOpen(true);
+  }, [isCompactTouchLayout, isMobile, wideModeType]);
 
   const handleAddCodeAnnotation = React.useCallback((input: CodeFileAnnotationInput) => {
     if (documentReadOnly) return;
@@ -3482,8 +3527,8 @@ const App: React.FC = () => {
     setSelectedAnnotationId(null);
     setSelectedCodeAnnotationId(id);
     codeFilePopout.open(annotation.filePath);
-    if (isMobile && wideModeType === null) setIsPanelOpen(true);
-  }, [codeAnnotations, codeFilePopout.open, isMobile, wideModeType]);
+    if (isMobile && !isCompactTouchLayout && wideModeType === null) setIsPanelOpen(true);
+  }, [codeAnnotations, codeFilePopout.open, isCompactTouchLayout, isMobile, wideModeType]);
 
   const handleDeleteCodeAnnotation = React.useCallback((id: string) => {
     if (documentReadOnly) return;
@@ -3728,19 +3773,25 @@ const App: React.FC = () => {
 
   // Opening the Ask AI surface with a provider selected is the other explicit
   // gesture that should surface the provider's real model list.
-  const aiSurfaceOpen = effectivePanelOpen && rightSidebarTab === 'ai';
+  const aiSurfaceOpen = isCompactTouchLayout
+    ? compactPlanSurface.type === 'ai'
+    : effectivePanelOpen && rightSidebarTab === 'ai';
   useEffect(() => {
     if (!aiAvailable || !aiSurfaceOpen) return;
     activateAIProvider(aiConfig.providerId);
   }, [aiAvailable, aiSurfaceOpen, aiConfig.providerId, activateAIProvider]);
 
   const openAIChat = useCallback(() => {
+    if (isCompactTouchLayout) {
+      openCompactPlanSurface('ai');
+      return;
+    }
     if (wideModeType !== null) {
       exitWideMode({ restore: false, panelOpen: true });
     }
     setRightSidebarTab('ai');
     setIsPanelOpen(true);
-  }, [exitWideMode, wideModeType]);
+  }, [exitWideMode, isCompactTouchLayout, openCompactPlanSurface, wideModeType]);
 
   const handleAskAI = useCallback((question: string, context?: CommentAskAIContext): boolean => {
     if (isAgentTerminalReady) {
@@ -4292,7 +4343,7 @@ const App: React.FC = () => {
     ? Boolean(shareUrl || shortShareUrl || (renderAs === 'html' && (shareHtml || rawHtml)))
     : true;
   const compactActionBusy = isSubmitting || isExiting || goalSetupAction.isSubmitting;
-  const compactSessionActions: CompactPlanAction[] = !isCompactTouchLayout
+  const compactReviewActions: CompactPlanReviewAction[] = !isCompactTouchLayout
     ? []
     : callbackConfig && !isApiMode && isSharedSession
       ? [
@@ -4309,68 +4360,127 @@ const App: React.FC = () => {
             disabled: compactActionBusy || !callbackShareUrlReady,
           },
         ]
-      : isApiMode && !linkedDocHook.isActive && archive.archiveMode
+      : isApiMode && (!linkedDocHook.isActive || annotateMode) && !archive.archiveMode && !goalSetupMode
         ? [
-            { id: 'copy', label: 'Copy plan', onSelect: archive.copy },
-            { id: 'done', label: 'Done', onSelect: archive.done },
-          ]
-        : isApiMode && !linkedDocHook.isActive && goalSetupMode
-          ? [
-              {
-                id: 'exit',
-                label: 'Close goal setup',
-                onSelect: handleGoalSetupExit,
-                disabled: compactActionBusy,
-              },
-              {
-                id: 'approve',
-                label: goalSetupAction.submitLabel,
-                onSelect: handleGoalSetupSubmit,
-                disabled: !goalSetupAction.canSubmit || compactActionBusy,
-              },
-            ]
-          : isApiMode && (!linkedDocHook.isActive || annotateMode) && !archive.archiveMode && !goalSetupMode
-            ? [
-                ...(annotateMode
-                  ? [
-                      {
-                        id: 'exit' as const,
-                        label: 'Close session',
-                        onSelect: handleHeaderAnnotateExit,
+            ...(annotateMode
+              ? [
+                  {
+                    id: 'exit' as const,
+                    label: 'Close session',
+                    onSelect: handleHeaderAnnotateExit,
+                    disabled: compactActionBusy,
+                  },
+                  ...(hasFeedbackContent
+                    ? [{
+                        id: 'feedback' as const,
+                        label: 'Send feedback',
+                        subtitle: feedbackAnnotationCount > 0
+                          ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
+                          : 'Edited document',
+                        onSelect: handleHeaderAnnotateFeedback,
                         disabled: compactActionBusy,
-                      },
-                      ...(hasFeedbackContent
-                        ? [{
-                            id: 'feedback' as const,
-                            label: 'Send feedback',
-                            subtitle: feedbackAnnotationCount > 0
-                              ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
-                              : 'Edited document',
-                            onSelect: handleHeaderAnnotateFeedback,
-                            disabled: compactActionBusy,
-                          }]
-                        : []),
-                    ]
-                  : [{
-                      id: 'feedback' as const,
-                      label: 'Send feedback',
-                      subtitle: hasFeedbackToSend
-                        ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
-                        : 'Add general feedback',
-                      onSelect: handleHeaderFeedback,
-                      disabled: compactActionBusy,
-                    }]),
-                ...((!annotateMode || gate)
-                  ? [{
-                      id: 'approve' as const,
-                      label: annotateMode ? annotateApprovalPolicy.label : 'Approve',
-                      subtitle: !annotateMode && hasFeedbackToSend ? 'Feedback remains unsent' : undefined,
-                      onSelect: handleHeaderApprove,
-                      disabled: compactActionBusy,
-                    }]
-                  : []),
-              ]
-            : [];
+                      }]
+                    : []),
+                ]
+              : [{
+                  id: 'feedback' as const,
+                  label: 'Send feedback',
+                  subtitle: hasFeedbackToSend
+                    ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
+                    : 'Add general feedback',
+                  onSelect: handleHeaderFeedback,
+                  disabled: compactActionBusy,
+                }]),
+            ...((!annotateMode || gate)
+              ? [{
+                  id: 'approve' as const,
+                  label: annotateMode ? annotateApprovalPolicy.label : 'Approve',
+                  subtitle: !annotateMode && hasFeedbackToSend ? 'Feedback remains unsent' : undefined,
+                  onSelect: handleHeaderApprove,
+                  disabled: compactActionBusy,
+                }]
+              : []),
+          ]
+        : [];
+  const compactModeActions: CompactPlanAction[] = !isCompactTouchLayout
+    ? []
+    : isApiMode && !linkedDocHook.isActive && archive.archiveMode
+      ? [
+          { id: 'copy', label: 'Copy plan', onSelect: archive.copy },
+          { id: 'done', label: 'Done', onSelect: archive.done },
+        ]
+      : isApiMode && !linkedDocHook.isActive && goalSetupMode
+        ? [
+            {
+              id: 'exit',
+              label: 'Close goal setup',
+              onSelect: handleGoalSetupExit,
+              disabled: compactActionBusy,
+            },
+            {
+              id: 'approve',
+              label: goalSetupAction.submitLabel,
+              onSelect: handleGoalSetupSubmit,
+              disabled: !goalSetupAction.canSubmit || compactActionBusy,
+            },
+          ]
+        : [];
+  const hasReviewDocumentChanges = hasDirectEdits || hasSavedFileChanges;
+  const compactCanApprove = compactReviewActions.some((action) => action.id === 'approve');
+  const compactFeedbackSummary = showAgentTerminalDeliveryStatus
+    ? 'Feedback was sent to the agent. You can keep reviewing or close the session.'
+    : feedbackAnnotationCount > 0 && hasReviewDocumentChanges
+      ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'} and document edits are ready.`
+      : feedbackAnnotationCount > 0
+        ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'} ${feedbackAnnotationCount === 1 ? 'is' : 'are'} ready.`
+        : hasReviewDocumentChanges
+          ? 'Document edits are ready to send with your review.'
+          : compactCanApprove
+            ? 'No feedback added. You can approve or keep reviewing.'
+            : 'No feedback added. You can keep reviewing or close the session.';
+  const compactPrimaryReviewActionId: CompactPlanReviewAction['id'] | undefined =
+    compactReviewActions.some((action) => action.id === 'feedback') &&
+    (hasFeedbackToSend || !compactCanApprove)
+      ? 'feedback'
+      : compactReviewActions.find((action) => action.id === 'approve')?.id
+        ?? compactReviewActions.find((action) => action.id !== 'exit')?.id
+        ?? compactReviewActions[0]?.id;
+  const compactSessionActions: CompactPlanAction[] = !isCompactTouchLayout
+    ? []
+    : [
+        ...(!goalSetupMode
+          ? [{
+              id: 'annotations' as const,
+              label: 'Annotations',
+              subtitle: feedbackAnnotationCount > 0
+                ? `${feedbackAnnotationCount} item${feedbackAnnotationCount === 1 ? '' : 's'}`
+                : undefined,
+              onSelect: () => openCompactPlanSurface('annotations'),
+            }]
+          : []),
+        ...(!goalSetupMode && canUseAskAI
+          ? [{
+              id: 'ai' as const,
+              label: 'Ask AI',
+              subtitle: visibleAIMessages.length > 0
+                ? `${visibleAIMessages.length} message${visibleAIMessages.length === 1 ? '' : 's'}`
+                : undefined,
+              onSelect: () => openCompactPlanSurface('ai'),
+            }]
+          : []),
+        ...(compactReviewActions.length > 0
+          ? [{
+              id: 'review' as const,
+              label: 'Review and finish',
+              subtitle: hasFeedbackToSend
+                ? 'Feedback ready'
+                : compactCanApprove
+                  ? 'Approve or send feedback'
+                  : 'Close when finished',
+              onSelect: () => openCompactPlanSurface('review'),
+            }]
+          : compactModeActions),
+      ];
   const compactDocumentActions: CompactPlanAction[] = !isCompactTouchLayout
     ? []
     : [
@@ -4539,6 +4649,70 @@ const App: React.FC = () => {
       />
     );
   };
+
+  const renderAnnotationPanel = (presentation: 'panel' | 'embedded', isOpen = true) => (
+    <AnnotationPanel
+      isOpen={isOpen}
+      presentation={presentation}
+      blocks={blocks}
+      annotations={allAnnotations}
+      selectedId={selectedAnnotationId ?? selectedCodeAnnotationId}
+      onSelect={handleSelectAnnotation}
+      onDelete={handleDeleteAnnotation}
+      onEdit={handleEditAnnotation}
+      codeAnnotations={codeAnnotations}
+      onSelectCodeAnnotation={handleSelectCodeAnnotation}
+      onDeleteCodeAnnotation={handleDeleteCodeAnnotation}
+      onEditCodeAnnotation={handleEditCodeAnnotation}
+      sharingEnabled={canShareCurrentSession}
+      width={presentation === 'panel' ? `var(--rpanel-w, ${panelResize.width}px)` : undefined}
+      editorAnnotations={editorAnnotations}
+      onDeleteEditorAnnotation={deleteEditorAnnotation}
+      onClose={presentation === 'panel' ? () => setIsPanelOpen(false) : closeCompactPlanSurface}
+      onQuickCopy={async () => {
+        const output = getCurrentFeedbackPayload();
+        return copyTextToClipboard(wrapCopiedFeedback(output));
+      }}
+      onShare={canShareCurrentSession ? () => {
+        if (presentation === 'panel') setIsPanelOpen(false);
+        else closeCompactPlanSurface(false);
+        setInitialExportTab('share');
+        setShowExport(true);
+      } : undefined}
+      otherFileAnnotations={otherFileAnnotations}
+      directEdits={directEditsPanelInfo?.map((item) => ({
+        ...item,
+        onDiscard: item.id === 'plan' ? () => handleDiscardEdits() : undefined,
+      })) ?? null}
+      onOtherFileAnnotationsClick={handleFlashAnnotatedFiles}
+      readOnly={documentReadOnly}
+    />
+  );
+
+  const renderDocumentAIChat = () => (
+    <DocumentAIChatPanel
+      messages={visibleAIMessages}
+      isCreatingSession={isAgentTerminalReady ? false : aiIsCreatingSession}
+      isStreaming={isAgentTerminalReady ? false : aiIsStreaming}
+      onAskGeneral={handleAskGeneralAI}
+      onStop={isAgentTerminalReady ? undefined : abortAI}
+      permissionRequests={isAgentTerminalReady ? [] : aiPermissionRequests}
+      onRespondToPermission={isAgentTerminalReady ? undefined : respondToAIPermission}
+      aiProviders={visibleAIProviders}
+      aiConfig={visibleAIConfig}
+      onAIConfigChange={isAgentTerminalReady ? undefined : handleAIConfigChange}
+    />
+  );
+
+  const showCompactPlanCompletion =
+    isCompactTouchLayout &&
+    compactPlanSurface.type === 'artifact' &&
+    compactReviewActions.length > 0 &&
+    !isEditingMarkdown &&
+    !isPlanDiffActive &&
+    !goalSetupMode &&
+    !isHtmlSurface &&
+    !(annotateSource === 'folder' && !markdown && !linkedDocHook.isActive);
   // Mobile Safari paints the browser-controls backdrop from the document/app
   // canvas, not from the nested document scroller. Keep that canvas continuous
   // with the active surface so a card-backed plan does not end in a dark band.
@@ -4640,6 +4814,51 @@ const App: React.FC = () => {
         />
 
         {isCompactNavigatorOpen && compactNavigatorAvailable && renderPlanSidebar('overlay')}
+
+        {isCompactAnnotationsOpen && (
+          <CompactPlanStage
+            id="pn-compact-plan-annotations"
+            title="Annotations"
+            subtitle={compactDocumentTitle}
+            count={feedbackAnnotationCount}
+            onClose={closeCompactPlanSurface}
+          >
+            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1">
+              {renderAnnotationPanel('embedded')}
+            </div>
+          </CompactPlanStage>
+        )}
+
+        {isCompactAIOpen && canUseAskAI && (
+          <CompactPlanStage
+            id="pn-compact-plan-ai"
+            title="Ask AI"
+            subtitle={compactDocumentTitle}
+            count={visibleAIMessages.length}
+            onClose={closeCompactPlanSurface}
+          >
+            <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1">
+              {renderDocumentAIChat()}
+            </div>
+          </CompactPlanStage>
+        )}
+
+        {isCompactReviewOpen && compactReviewActions.length > 0 && (
+          <CompactPlanStage
+            id="pn-compact-plan-review"
+            title="Review"
+            subtitle={compactDocumentTitle}
+            onClose={closeCompactPlanSurface}
+          >
+            <CompactPlanReview
+              feedbackSummary={compactFeedbackSummary}
+              actions={compactReviewActions}
+              primaryActionId={compactPrimaryReviewActionId}
+              onOpenAnnotations={() => switchCompactPlanSurface('annotations')}
+              onOpenAI={canUseAskAI ? () => switchCompactPlanSurface('ai') : undefined}
+            />
+          </CompactPlanStage>
+        )}
 
         {/* Linked document error banner */}
         {linkedDocHook.error && (
@@ -5117,6 +5336,13 @@ const App: React.FC = () => {
                   />
                 )}
               </div>
+              {showCompactPlanCompletion && (
+                <CompactPlanCompletion
+                  feedbackSummary={compactFeedbackSummary}
+                  maxWidth={planMaxWidth}
+                  onOpenReview={() => openCompactPlanSurface('review')}
+                />
+              )}
             </div>
           </OverlayScrollArea>
 
@@ -5129,36 +5355,10 @@ const App: React.FC = () => {
           {effectivePanelOpen && wideModeType === null && !goalSetupMode && (rightSidebarTab === 'annotations' || canUseAskAI) && <ResizeHandle {...panelResize.handleProps} className="hidden md:block z-[55]" side="right" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsPanelOpen(false)} />}
 
           {/* Annotation Panel */}
-          <AnnotationPanel
-            isOpen={effectivePanelOpen && rightSidebarTab === 'annotations' && wideModeType === null && !goalSetupMode}
-            blocks={blocks}
-            annotations={allAnnotations}
-            selectedId={selectedAnnotationId ?? selectedCodeAnnotationId}
-            onSelect={handleSelectAnnotation}
-            onDelete={handleDeleteAnnotation}
-            onEdit={handleEditAnnotation}
-            codeAnnotations={codeAnnotations}
-            onSelectCodeAnnotation={handleSelectCodeAnnotation}
-            onDeleteCodeAnnotation={handleDeleteCodeAnnotation}
-            onEditCodeAnnotation={handleEditCodeAnnotation}
-            sharingEnabled={canShareCurrentSession}
-            width={`var(--rpanel-w, ${panelResize.width}px)`}
-            editorAnnotations={editorAnnotations}
-            onDeleteEditorAnnotation={deleteEditorAnnotation}
-            onClose={() => setIsPanelOpen(false)}
-            onQuickCopy={async () => {
-              const output = getCurrentFeedbackPayload();
-              return copyTextToClipboard(wrapCopiedFeedback(output));
-            }}
-            onShare={canShareCurrentSession ? () => { setIsPanelOpen(false); setInitialExportTab('share'); setShowExport(true); } : undefined}
-            otherFileAnnotations={otherFileAnnotations}
-            directEdits={directEditsPanelInfo?.map((item) => ({
-              ...item,
-              onDiscard: item.id === 'plan' ? () => handleDiscardEdits() : undefined,
-            })) ?? null}
-            onOtherFileAnnotationsClick={handleFlashAnnotatedFiles}
-            readOnly={documentReadOnly}
-          />
+          {renderAnnotationPanel(
+            'panel',
+            effectivePanelOpen && rightSidebarTab === 'annotations' && wideModeType === null && !goalSetupMode,
+          )}
           {effectivePanelOpen && rightSidebarTab === 'ai' && wideModeType === null && !goalSetupMode && canUseAskAI && (
             <aside
               data-annotation-panel="true"
@@ -5194,18 +5394,7 @@ const App: React.FC = () => {
                   )}
                 </div>
               </div>
-              <DocumentAIChatPanel
-                messages={visibleAIMessages}
-                isCreatingSession={isAgentTerminalReady ? false : aiIsCreatingSession}
-                isStreaming={isAgentTerminalReady ? false : aiIsStreaming}
-                onAskGeneral={handleAskGeneralAI}
-                onStop={isAgentTerminalReady ? undefined : abortAI}
-                permissionRequests={isAgentTerminalReady ? [] : aiPermissionRequests}
-                onRespondToPermission={isAgentTerminalReady ? undefined : respondToAIPermission}
-                aiProviders={visibleAIProviders}
-                aiConfig={visibleAIConfig}
-                onAIConfigChange={isAgentTerminalReady ? undefined : handleAIConfigChange}
-              />
+              {renderDocumentAIChat()}
             </aside>
           )}
           </div>

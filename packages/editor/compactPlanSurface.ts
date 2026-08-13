@@ -1,9 +1,9 @@
 import type { SidebarTab } from '@plannotator/ui/hooks/useSidebar';
 
 /**
- * The compact Plan shell presents one foreground task at a time. Phase 2B.1
- * implements the document and navigator states; the remaining states reserve
- * the same explicit model for later annotation, AI, and completion surfaces.
+ * The compact Plan shell presents one foreground task at a time. Navigator,
+ * annotations, AI, and review all replace the artifact instead of competing
+ * with it for horizontal space.
  */
 export type CompactPlanSurface =
   | { readonly type: 'artifact' }

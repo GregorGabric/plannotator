@@ -1,7 +1,7 @@
 # Spec: Mobile Plan Shell and Navigation — Phase 2B
 
 Date: 2026-08-13
-Status: In progress; checkpoint 2B.2 implementation ready for physical iPhone/iPad review while the Phase 2A filename micro-gate continues in parallel
+Status: In progress; checkpoint 2B.3 implementation ready for physical iPhone/iPad review while the Phase 2A filename micro-gate continues in parallel
 Depends on: Phase 1 mobile platform foundation and Phase 2A mobile Code Review shell
 Research: [`SPIKE-mobile-web-compatibility-20260812.md`](../research/SPIKE-mobile-web-compatibility-20260812.md)
 Sequence: [`synthesis-mobile-feedback-triage-20260812.md`](../research/synthesis-mobile-feedback-triage-20260812.md)
@@ -320,6 +320,36 @@ Physical gate:
 4. Background/restore the phone and rotate once with unsent feedback.
 5. Reload at desktop width and confirm the saved sidebar/right-panel layout,
    sticky actions, header actions, and edit controls are unchanged.
+
+Implementation checkpoint:
+
+- Annotations and Ask AI now open as mutually exclusive, visible-viewport
+  compact stages. They replace the artifact while active, keep one internal
+  scroll owner, and return focus to the opening control when closed.
+- The shared annotation timeline gained an embedded presentation seam; its
+  incumbent desktop panel geometry, backdrop, header, and persisted open state
+  remain unchanged.
+- A normal-flow completion block follows eligible Plan and document artifacts.
+  It summarizes the current feedback state and opens the same Review surface
+  exposed from Options; edit, diff, goal, HTML, and unselected-folder states do
+  not render it.
+- Review reuses the incumbent decision callbacks and policy rather than adding
+  another submission state machine. Feedback-bearing sessions prioritize Send
+  Feedback, approval-capable clean sessions prioritize Approve, and close-only
+  sessions retain their established exit behavior.
+- Compact stages use the Phase 1 visible-viewport and safe-area contract, 44 px
+  touch targets, immediate interaction feedback, focus containment, and a
+  16 px Ask AI input. No fixed or sticky Safari-edge control was introduced.
+- Full-App coarse-pointer tests cover mutual exclusion, close behavior, the
+  end-of-document entry, decision submission, edit exclusion, and the absence
+  of desktop-only terminal actions in compact Options. Shared component tests
+  cover focus containment, embedded annotation presentation, review ordering,
+  and terminal action semantics.
+- The editor/UI DOM suite passes 111 tests with 412 expectations. Shared
+  typecheck, production UI CSS, Hook, and OpenCode builds pass, together with
+  `git diff --check`. Fine-pointer rendered preflight retained the incumbent
+  desktop sidebar/right-panel composition with no compact completion block or
+  full-stage overlay.
 
 Phase 2B passes only when all three checkpoints pass on physical iPhone and the
 relevant iPad matrix. Browser preflight cannot close the phase.

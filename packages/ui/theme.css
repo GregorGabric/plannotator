@@ -837,6 +837,14 @@ body:has([data-pn-document-scroll="true"]) > #root {
   min-inline-size: var(--pn-touch-target);
 }
 
+/* Compact Plan auxiliary stages reuse dense desktop panel contents, but every
+ * nested action remains a physical touch control. This selector is stage-only,
+ * so the incumbent desktop panel geometry stays pixel-identical. */
+[data-pn-compact-plan-stage="true"] button {
+  min-block-size: var(--pn-touch-target);
+  touch-action: manipulation;
+}
+
 /* Existing expanded composers keep their 85dvh desktop proportion. Compact
  * and touch layouts use the full safe visible stage so the keyboard cannot
  * strand the footer below an ornamental desktop margin. */

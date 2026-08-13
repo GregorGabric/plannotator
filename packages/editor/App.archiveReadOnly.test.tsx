@@ -65,6 +65,7 @@ class SilentEventSource {
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 let requestedRoutes: string[] = [];
+let aiCapabilitiesAvailable = false;
 
 const noteSettings = new Map<string, string>();
 
@@ -134,7 +135,13 @@ function responseFor(planResponse: PlanResponse): typeof fetch {
       return Response.json({ markdown: planResponse.plan, filepath: "saved.md" });
     }
     if (url.pathname === "/api/ai/capabilities") {
-      return Response.json({ available: false, providers: [] });
+      return Response.json(aiCapabilitiesAvailable
+        ? {
+            available: true,
+            defaultProvider: "codex",
+            providers: [{ id: "codex", name: "Codex", models: [] }],
+          }
+        : { available: false, providers: [] });
     }
     if (url.pathname === "/api/open-in/apps") {
       return Response.json({
@@ -196,6 +203,7 @@ afterEach(async () => {
   globalThis.EventSource = originalEventSource;
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   noteSettings.clear();
+  aiCapabilitiesAvailable = false;
   storageModule?.resetStorageBackend();
   fileTreeModule?.resetFileTreeBackend();
   if (hasDom) document.body.replaceChildren();
@@ -293,6 +301,7 @@ describe.if(hasDom)("App document permissions", () => {
     });
 
     expect(document.body.textContent).toContain("Writable document");
+    expect(document.querySelector("[data-pn-compact-plan-completion]")).toBeNull();
     expect(document.querySelector('button[title="Add global comment"]')).not.toBeNull();
     expect(document.querySelector('button[title="Attachments"]')).not.toBeNull();
 
@@ -317,6 +326,7 @@ describe.if(hasDom)("App document permissions", () => {
   test("compact touch presents a reading-first file surface without mutating desktop preferences", async () => {
     configureNotesApps();
     noteSettings.set("plannotator-input-method", "pinpoint");
+    aiCapabilitiesAvailable = true;
     useCompactTouchMedia();
     await mountApp({
       plan: "# Mobile document\n\nA paragraph to annotate and edit.",
@@ -359,15 +369,77 @@ describe.if(hasDom)("App document permissions", () => {
     const optionsButton = document.querySelector<HTMLButtonElement>('button[aria-label="Options"]');
     if (!optionsButton) throw new Error("Options menu trigger did not render");
     await act(async () => optionsButton.click());
-    expect(findButton("Close session")).not.toBeUndefined();
-    expect(findButton("Approve")).not.toBeUndefined();
+    for (let attempt = 0; attempt < 20 && !findButtonContaining("Ask AI"); attempt += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
+    expect(findButtonContaining("Annotations")).not.toBeUndefined();
+    expect(findButtonContaining("Ask AI")).not.toBeUndefined();
+    expect(findButtonContaining("Review and finish")).not.toBeUndefined();
+    expect(findButton("Close session")).toBeUndefined();
+    expect(findButton("Approve")).toBeUndefined();
     expect(findButtonContaining("Edit document")).not.toBeUndefined();
 
+    await act(async () => findButtonContaining("Annotations")?.click());
+    expect(document.querySelector('[data-pn-compact-plan-stage="true"]')?.getAttribute("aria-label")).toBe("Annotations");
+    expect(document.body.textContent).toContain("No annotations yet");
+    const closeAnnotations = document.querySelector<HTMLButtonElement>('button[aria-label="Close Annotations"]');
+    if (!closeAnnotations) throw new Error("Compact Annotations close control did not render");
+    await act(async () => closeAnnotations.click());
+    expect(document.querySelector('[data-pn-compact-plan-stage="true"]')).toBeNull();
+
+    await act(async () => optionsButton.click());
+    await act(async () => findButtonContaining("Ask AI")?.click());
+    expect(document.querySelector('[data-pn-compact-plan-stage="true"]')?.getAttribute("aria-label")).toBe("Ask AI");
+    expect(document.querySelector('textarea[placeholder="Ask about this document..."]')?.getAttribute("data-pn-mobile-editable")).toBe("true");
+    const closeAI = document.querySelector<HTMLButtonElement>('button[aria-label="Close Ask AI"]');
+    if (!closeAI) throw new Error("Compact Ask AI close control did not render");
+    await act(async () => closeAI.click());
+
+    const completion = document.querySelector("[data-pn-compact-plan-completion]");
+    expect(completion?.textContent).toContain("Ready to finish?");
+    const reviewTrigger = document.querySelector<HTMLButtonElement>("#pn-compact-plan-review-trigger");
+    if (!reviewTrigger) throw new Error("End-of-document review trigger did not render");
+    await act(async () => reviewTrigger.click());
+    expect(document.querySelector('[data-pn-compact-plan-stage="true"]')?.getAttribute("aria-label")).toBe("Review");
+    expect(findButton("Close session")).not.toBeUndefined();
+    expect(findButton("Approve")).not.toBeUndefined();
+    const closeReview = document.querySelector<HTMLButtonElement>('button[aria-label="Close Review"]');
+    if (!closeReview) throw new Error("Compact Review close control did not render");
+    await act(async () => closeReview.click());
+
+    await act(async () => optionsButton.click());
     await act(async () => findButtonContaining("Edit document")?.click());
     const editControls = document.querySelector("[data-pn-compact-edit-controls]");
     expect(editControls?.textContent).toContain("Editing mobile.md");
     expect(findButton("Saved")).not.toBeUndefined();
     expect(findButton("Done")).not.toBeUndefined();
+    expect(document.querySelector("[data-pn-compact-plan-completion]")).toBeNull();
+  });
+
+  test("compact review sends the incumbent approval request", async () => {
+    configureNotesApps();
+    useCompactTouchMedia();
+    await mountApp({
+      plan: "# Mobile decision\n\nReview this plan.",
+      origin: "codex",
+      mode: "annotate",
+      filePath: "/repo/docs/decision.md",
+      gate: true,
+      sharingEnabled: false,
+      serverConfig: {},
+    });
+
+    const reviewTrigger = document.querySelector<HTMLButtonElement>("#pn-compact-plan-review-trigger");
+    if (!reviewTrigger) throw new Error("Compact review trigger did not render");
+    await act(async () => reviewTrigger.click());
+    const approve = findButton("Approve");
+    if (!approve) throw new Error("Compact review did not expose Approve");
+    requestedRoutes = [];
+    await act(async () => {
+      approve.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(requestedRoutes).toContain("POST /api/approve");
   });
 
   test("compact folder selection closes the navigator after the async document activation", async () => {

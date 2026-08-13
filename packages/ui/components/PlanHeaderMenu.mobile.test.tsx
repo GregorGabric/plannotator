@@ -34,7 +34,7 @@ const baseProps = {
 };
 
 describe.if(hasDom)('PlanHeaderMenu compact actions', () => {
-  test('moves session and edit decisions into the compact Options menu', async () => {
+  test('moves compact review surfaces and edit entry into Options', async () => {
     const selected: string[] = [];
     const host = document.createElement('div');
     document.body.appendChild(host);
@@ -47,8 +47,9 @@ describe.if(hasDom)('PlanHeaderMenu compact actions', () => {
             {...baseProps}
             compactTouchLayout
             compactSessionActions={[
-              { id: 'feedback', label: 'Send feedback', onSelect: () => selected.push('feedback') },
-              { id: 'approve', label: 'Approve', onSelect: () => selected.push('approve') },
+              { id: 'annotations', label: 'Annotations', onSelect: () => selected.push('annotations') },
+              { id: 'ai', label: 'Ask AI', onSelect: () => selected.push('ai') },
+              { id: 'review', label: 'Review and finish', onSelect: () => selected.push('review') },
             ]}
             compactDocumentActions={[
               { id: 'edit', label: 'Edit document', onSelect: () => selected.push('edit') },
@@ -60,11 +61,13 @@ describe.if(hasDom)('PlanHeaderMenu compact actions', () => {
 
     const trigger = host.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!;
     expect(trigger.getAttribute('data-pn-touch-target')).not.toBeNull();
+    expect(trigger.id).toBe('pn-compact-plan-options-trigger');
     await act!(async () => trigger.click());
 
     expect(host.textContent).toContain('Review');
-    expect(host.textContent).toContain('Send feedback');
-    expect(host.textContent).toContain('Approve');
+    expect(host.textContent).toContain('Annotations');
+    expect(host.textContent).toContain('Ask AI');
+    expect(host.textContent).toContain('Review and finish');
     expect(host.textContent).toContain('Document');
     expect(host.textContent).toContain('Edit document');
 
