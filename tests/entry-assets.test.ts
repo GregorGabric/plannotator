@@ -15,6 +15,17 @@ describe('review entry assets', () => {
     },
   );
 
+  test.each(['apps/hook/index.html', 'apps/review/index.html'])(
+    '%s leaves scrolling to the visible-viewport application shell',
+    (path) => {
+      const html = read(path);
+      expect(html).toContain('viewport-fit=cover');
+      expect(html).toContain('<body class="overflow-hidden overscroll-none antialiased">');
+      expect(html).toContain('<div id="root" class="h-full overflow-hidden"></div>');
+      expect(html).not.toContain('min-h-screen');
+    },
+  );
+
   test('the app bundles its default fonts and syntax highlighting', () => {
     const editorCss = read('packages/editor/index.css');
     expect(editorCss).toContain('@import "@fontsource-variable/inter";');

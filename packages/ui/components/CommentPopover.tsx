@@ -605,7 +605,9 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
               >
                 {isGlobal ? 'Add' : 'Save'}
               </button>
-              <span className="text-[10px] text-muted-foreground">{submitHint}</span>
+              {!coarsePointer && (
+                <span className="text-[10px] text-muted-foreground">{submitHint}</span>
+              )}
               {onAskAI && (
                 <button
                   onClick={handleAskAI}
@@ -748,7 +750,9 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
           >
             {isGlobal ? 'Add' : 'Save'}
           </button>
-          <span className="text-[10px] text-muted-foreground">{submitHint}</span>
+          {!coarsePointer && (
+            <span className="text-[10px] text-muted-foreground">{submitHint}</span>
+          )}
           {onAskAI && (
             <button
               onClick={handleAskAI}

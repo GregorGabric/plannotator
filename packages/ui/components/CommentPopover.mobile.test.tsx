@@ -86,6 +86,8 @@ describe('CommentPopover mobile composition', () => {
     expect(dialog).not.toBeNull();
     expect(textarea).not.toBeNull();
     expect(document.querySelector('button[title="Collapse"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('⌘↵');
+    expect(document.body.textContent).not.toContain('Ctrl+Enter');
     expect(document.activeElement).toBe(dialog);
 
     await act(async () => {

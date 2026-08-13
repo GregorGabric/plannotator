@@ -437,6 +437,17 @@ Automated and rendered-browser preflight evidence:
   the incumbent floating Review toolbar and focus behavior;
 - no new Plan console warnings or errors were observed.
 
+The first physical iPhone composer pass confirmed legible input, intentional
+touch focus, and successful save, then exposed two Safari-only follow-ups that
+responsive Chromium did not reproduce. The entry body still claimed a
+`100vh` minimum while the application used the smaller Visual Viewport,
+allowing Safari to scroll the entire app upward into a blank body region when
+browser chrome was visible. Hook and Review entries now lock outer overflow
+and delegate scrolling exclusively to their application viewports. The Plan
+composer also suppresses its hardware-keyboard submit hint when any coarse
+pointer is present; the explicit Save action remains the mobile instruction.
+Both changes require a fresh physical retest before the checkpoint passes.
+
 This record does not pass Checkpoint 1B. Mobile Safari focus zoom, real
 software-keyboard geometry, rotation, safe-area clearance, and background /
 return still require the joint iPhone and iPad Tailscale gate.
