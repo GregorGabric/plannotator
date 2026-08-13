@@ -810,7 +810,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
   max-height: 100%;
 }
 
-@media (any-pointer: coarse), (max-width: 639px), (max-height: 419px) {
+@media (pointer: coarse), (max-width: 639px), (max-height: 419px) {
   .pn-responsive-composer-dialog {
     height: 100%;
   }
@@ -820,7 +820,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
  * user-authored primary inputs so labels, counters, and diff text stay at the
  * established desktop scale. The mirror selector keeps skill-token glyphs
  * metrically identical to the transparent textarea above it. */
-@media (any-pointer: coarse), (max-width: 639px) {
+@media (pointer: coarse), (max-width: 639px) {
   [data-pn-mobile-editable],
   [data-pn-mobile-editable-mirror] {
     font-size: 1rem !important;
@@ -828,29 +828,29 @@ body:has([data-pn-document-scroll="true"]) > #root {
 }
 
 /* Shared controls keep their incumbent visual density but gain a physical
- * 44px target whenever the device exposes a coarse pointer. Icon-only controls
- * need the same minimum in both axes; labelled controls may size intrinsically
- * in the inline direction. Press feedback starts on touch-down via `:active`.
- * Fine-pointer desktop does not match this media query, so its geometry stays
- * governed by the existing component size variants. */
-@media (any-pointer: coarse) {
-  [data-pn-touch-target] {
-    min-block-size: var(--pn-touch-target);
-    touch-action: manipulation;
-  }
-
-  [data-pn-touch-target][data-pn-touch-target-icon] {
-    min-inline-size: var(--pn-touch-target);
-  }
-
-  [data-pn-touch-target]:not(:disabled):not([aria-disabled='true']):active {
-    filter: brightness(0.92);
-    transition: filter 100ms ease-out;
-  }
+ * 44px target inside the canonical compact touch shell. The root marker comes
+ * from the same JS media query that owns scroll and shell composition, so a
+ * secondary touchscreen cannot reclassify a fine-primary-pointer desktop.
+ * Selecting from `html` also reaches portaled controls outside the app root. */
+html:has([data-pn-compact-touch-layout='true']) [data-pn-touch-target] {
+  min-block-size: var(--pn-touch-target);
+  touch-action: manipulation;
 }
 
-@media (any-pointer: coarse) and (prefers-reduced-motion: reduce) {
+html:has([data-pn-compact-touch-layout='true'])
+  [data-pn-touch-target][data-pn-touch-target-icon] {
+  min-inline-size: var(--pn-touch-target);
+}
+
+html:has([data-pn-compact-touch-layout='true'])
   [data-pn-touch-target]:not(:disabled):not([aria-disabled='true']):active {
+  filter: brightness(0.92);
+  transition: filter 100ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:has([data-pn-compact-touch-layout='true'])
+    [data-pn-touch-target]:not(:disabled):not([aria-disabled='true']):active {
     filter: brightness(0.9);
     transition: none;
   }

@@ -29,15 +29,16 @@ afterEach(async () => {
 });
 
 describe('shared mobile control foundation', () => {
-  test('keeps target expansion and press feedback coarse-pointer-only', () => {
+  test('keeps target expansion and press feedback inside the compact touch shell', () => {
     const theme = readFileSync(resolve(import.meta.dir, '../../theme.css'), 'utf8');
 
     expect(theme).toContain('--pn-touch-target: 2.75rem');
-    expect(theme).toContain('@media (any-pointer: coarse)');
+    expect(theme).toContain("html:has([data-pn-compact-touch-layout='true'])");
     expect(theme).toContain('min-block-size: var(--pn-touch-target)');
     expect(theme).toContain('min-inline-size: var(--pn-touch-target)');
     expect(theme).toContain('touch-action: manipulation');
-    expect(theme).toContain('@media (any-pointer: coarse) and (prefers-reduced-motion: reduce)');
+    expect(theme).not.toContain('@media (any-pointer: coarse)');
+    expect(theme).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
   test('marks canonical buttons without changing their visual size classes', () => {
