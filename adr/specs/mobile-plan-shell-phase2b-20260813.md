@@ -258,6 +258,18 @@ Physical correction:
 - A full-App coarse-pointer test loads a real file tree through the shared
   backend, selects a file, waits for `/api/doc`, and proves that the selected
   document and filename render while the navigator remains closed.
+- A later physical cold-load review exposed a second transition defect: the
+  navigator closed before the first `/api/doc` request completed, briefly
+  revealing the folder landing page and its `Choose a file` action. Warm file
+  switches were fast enough to hide the same ordering bug.
+- Compact file selection now keeps Files visible, marks the selected
+  destination as `Opening…`, and prevents competing selections until document
+  activation succeeds. It then closes the initiating navigator; a failed load
+  leaves Files open for retry. Desktop retains its incumbent asynchronous
+  sidebar behavior.
+- The full-App test now holds `/api/doc` behind a deliberate gate and proves
+  that the navigator remains visible and the selected file is busy/disabled
+  throughout the delay before closing on successful activation.
 
 ### 2B.2 — Compact document chrome and direct edit
 

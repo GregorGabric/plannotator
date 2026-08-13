@@ -63,6 +63,7 @@ describe('SidebarContainer compact presentation', () => {
         showContentsTab={false}
         activeTab="archive"
         showArchiveTab
+        pendingFileLabel="alpha.md"
       />,
     );
 
@@ -70,6 +71,7 @@ describe('SidebarContainer compact presentation', () => {
     expect(html).toContain('data-pn-plan-navigator="true"');
     expect(html).toContain('role="dialog"');
     expect(html).toContain('aria-modal="true"');
+    expect(html).toContain('Opening alpha.md…');
     expect(html).toContain('pn-visible-viewport-stage');
     expect(html).toContain('aria-label="Close navigator"');
     expect(html).toContain('data-pn-touch-target="true"');

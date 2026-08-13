@@ -49,6 +49,8 @@ interface SidebarContainerProps {
   onFilesSelectFile?: (absolutePath: string, dirPath: string) => void;
   onFilesFetchAll?: () => void;
   onFilesRetryVaultDir?: (vaultPath: string) => void;
+  /** Compact-only file activation feedback; desktop does not pass this. */
+  pendingFileLabel?: string | null;
   // Version Browser props
   showVersionsTab?: boolean;
   versionInfo: VersionInfo | null;
@@ -103,6 +105,7 @@ export const SidebarContainer: React.FC<SidebarContainerProps> = ({
   onFilesSelectFile,
   onFilesFetchAll,
   onFilesRetryVaultDir,
+  pendingFileLabel,
   showVersionsTab,
   versionInfo,
   versions,
@@ -177,7 +180,9 @@ export const SidebarContainer: React.FC<SidebarContainerProps> = ({
         <div className="flex h-[52px] flex-shrink-0 items-center justify-between border-b border-border/50 px-3">
           <div className="min-w-0">
             <p className="text-sm font-semibold tracking-tight">Navigate</p>
-            <p className="text-[11px] text-muted-foreground">Choose what to review</p>
+            <p className="truncate text-[11px] text-muted-foreground" aria-live="polite">
+              {pendingFileLabel ? `Opening ${pendingFileLabel}…` : 'Choose what to review'}
+            </p>
           </div>
           <button
             ref={closeButtonRef}
@@ -363,6 +368,7 @@ export const SidebarContainer: React.FC<SidebarContainerProps> = ({
             annotationCounts={fileAnnotationCounts}
             highlightedFiles={highlightedFiles}
             editStatuses={fileEditStatuses}
+            selectionPending={compact && !!pendingFileLabel}
           />
         )}
         {activeTab === "archive" && showArchiveTab && (

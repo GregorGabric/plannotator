@@ -549,6 +549,8 @@ const App: React.FC = () => {
   const [compactPlanSurface, setCompactPlanSurface] = useState<CompactPlanSurface>(COMPACT_PLAN_ARTIFACT);
   const compactPlanSurfaceTriggerRef = useRef<HTMLElement | null>(null);
   const [compactNavigatorTab, setCompactNavigatorTab] = useState<SidebarTab>('toc');
+  const [compactPendingFilePath, setCompactPendingFilePath] = useState<string | null>(null);
+  const compactPendingFileRef = useRef<string | null>(null);
   const isCompactNavigatorOpen = isCompactTouchLayout && compactPlanSurface.type === 'navigator';
   const isCompactFilesSurfaceOpen =
     isCompactNavigatorOpen && compactPlanSurface.type === 'navigator' && compactPlanSurface.tab === 'files';
@@ -566,6 +568,8 @@ const App: React.FC = () => {
     if (isCompactTouchLayout) return;
     setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
     compactPlanSurfaceTriggerRef.current = null;
+    compactPendingFileRef.current = null;
+    setCompactPendingFilePath(null);
     // Keep the session-only compact method ready to inherit the latest
     // explicit desktop choice without letting compact changes write it back.
     setCompactInputMethod(inputMethod);
@@ -928,6 +932,15 @@ const App: React.FC = () => {
     return currentText;
   }, [activeEditableDocument, annotateSource, editableDocuments, isEditingMarkdown]);
 
+  const handleLinkedDocumentActivated = useCallback(() => {
+    if (!compactPendingFileRef.current) return;
+    compactPendingFileRef.current = null;
+    setCompactPendingFilePath(null);
+    setCompactPlanSurface((surface) =>
+      surface.type === 'navigator' ? COMPACT_PLAN_ARTIFACT : surface,
+    );
+  }, []);
+
   // Linked document navigation
   const linkedDocHook = useLinkedDoc({
     markdown, annotations, selectedAnnotationId, globalAttachments,
@@ -936,6 +949,7 @@ const App: React.FC = () => {
     viewerRef, sidebar: linkedDocSidebar, sourceFilePath, sourceConverted,
     onBeforeNavigate: snapshotActiveEditableDocument,
     onDocumentLoaded: handleLinkedDocumentLoaded,
+    onDocumentActivated: handleLinkedDocumentActivated,
     getDocumentMarkdown: getLinkedDocumentMarkdown,
     onAfterBack: restoreLinkedDocumentEditableKey,
   });
@@ -1336,7 +1350,7 @@ const App: React.FC = () => {
     linkedDocHook.restoreSession,
   ]);
 
-  const handleFileBrowserSelect = React.useCallback((absolutePath: string, dirPath: string) => {
+  const handleFileBrowserSelect = React.useCallback(async (absolutePath: string, dirPath: string): Promise<void> => {
     const normalizedAbsolutePath = normalizeBrowserPath(absolutePath);
     const dirState = fileBrowser.dirs.find(d => d.path === dirPath);
     const normalizedDirPath = normalizeBrowserPath(dirPath);
@@ -1384,8 +1398,8 @@ const App: React.FC = () => {
       // rendering — without it, extensions that overlap the code-file set
       // (.yaml, .json, .toml, …) would come back as code-file popout payloads.
       : (path: string) => `/api/doc?path=${encodeURIComponent(path)}&base=${encodeURIComponent(dirPath)}&doc=1${convertHtml ? '&convert=1' : ''}`;
-    linkedDocHook.open(absolutePath, buildUrl, 'files');
     fileBrowser.setActiveFile(absolutePath);
+    await linkedDocHook.open(absolutePath, buildUrl, 'files');
   }, [editableDocuments, linkedDocHook, fileBrowser, convertHtml, isEditingMarkdown]);
 
   // Route linked doc opens through the correct endpoint based on current context
@@ -4550,7 +4564,7 @@ const App: React.FC = () => {
     if (tab === 'archive' && !archive.archiveMode) archive.fetchPlans();
   };
 
-  const handleNavigatorFileSelect = (...args: Parameters<typeof handleFileBrowserSelect>) => {
+  const handleNavigatorFileSelect = async (...args: Parameters<typeof handleFileBrowserSelect>) => {
     // Plan/review linked-doc browsing still swaps the root document under the
     // editor. Folder mode snapshots the active file first.
     if (isEditingMarkdown && annotateSource !== 'folder') {
@@ -4563,8 +4577,26 @@ const App: React.FC = () => {
       toast('Finish editing first', { description: 'Use "Done editing" before opening non-editable files.' });
       return;
     }
-    handleFileBrowserSelect(...args);
-    if (isCompactTouchLayout) closeCompactNavigator();
+    if (!isCompactTouchLayout) {
+      void handleFileBrowserSelect(...args);
+      return;
+    }
+    if (compactPendingFileRef.current) return;
+
+    const destination = args[0];
+    compactPendingFileRef.current = destination;
+    setCompactPendingFilePath(destination);
+    try {
+      await handleFileBrowserSelect(...args);
+    } catch {
+      // The shared fetch path reports expected failures through its error
+      // state. Treat an unexpected exception as the same retryable outcome.
+    }
+    if (compactPendingFileRef.current === destination) {
+      compactPendingFileRef.current = null;
+      setCompactPendingFilePath(null);
+      toast('Couldn’t open file', { description: 'The file navigator is still open so you can try again.' });
+    }
   };
 
   const handleNavigatorArchiveSelect = (...args: Parameters<typeof archive.select>) => {
@@ -4623,6 +4655,9 @@ const App: React.FC = () => {
         onFilesSelectFile={handleNavigatorFileSelect}
         onFilesFetchAll={() => fileBrowser.fetchAll(fileBrowserDirs)}
         onFilesRetryVaultDir={(vaultPath) => fileBrowser.addVaultDir(vaultPath)}
+        pendingFileLabel={compact && compactPendingFilePath
+          ? compactPendingFilePath.replace(/\\/g, '/').split('/').pop() || compactPendingFilePath
+          : null}
         hasFileAnnotations={hasFileAnnotations}
         showVersionsTab={!isHtmlSurface && activeDiffVersionInfo !== null && activeDiffVersionInfo.totalVersions > 1}
         versionInfo={activeDiffVersionInfo}

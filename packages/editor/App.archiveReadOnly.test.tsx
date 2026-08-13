@@ -66,6 +66,7 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let requestedRoutes: string[] = [];
 let aiCapabilitiesAvailable = false;
+let documentLoadGate: Promise<void> | null = null;
 
 const noteSettings = new Map<string, string>();
 
@@ -153,6 +154,7 @@ function responseFor(planResponse: PlanResponse): typeof fetch {
       return Response.json({ error: "Not found" }, { status: 404 });
     }
     if (url.pathname === "/api/doc") {
+      await documentLoadGate;
       const filepath = url.searchParams.get("path");
       return Response.json({
         markdown: "# Selected file\n\nLoaded from the compact navigator.",
@@ -204,6 +206,7 @@ afterEach(async () => {
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   noteSettings.clear();
   aiCapabilitiesAvailable = false;
+  documentLoadGate = null;
   storageModule?.resetStorageBackend();
   fileTreeModule?.resetFileTreeBackend();
   if (hasDom) document.body.replaceChildren();
@@ -470,8 +473,23 @@ describe.if(hasDom)("App document permissions", () => {
     if (!alphaFile) throw new Error("Folder tree did not load alpha.md");
     expect(document.querySelector("[data-pn-plan-navigator]")).not.toBeNull();
 
+    let releaseDocumentLoad: (() => void) | undefined;
+    documentLoadGate = new Promise<void>((resolve) => {
+      releaseDocumentLoad = resolve;
+    });
     await act(async () => {
       alphaFile.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    const pendingNavigator = document.querySelector<HTMLElement>("[data-pn-plan-navigator]");
+    expect(pendingNavigator).not.toBeNull();
+    expect(pendingNavigator?.textContent).toContain("Opening alpha.md…");
+    expect(alphaFile.disabled).toBe(true);
+    expect(alphaFile.getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      releaseDocumentLoad?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
