@@ -78,6 +78,7 @@ export const ActionMenuItem: React.FC<ActionMenuItemProps> = ({
   badge,
 }) => (
   <button
+    data-pn-touch-target
     onClick={onClick}
     className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted"
   >

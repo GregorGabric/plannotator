@@ -8,16 +8,21 @@ import { REVIEW_ALL_FILES_PANEL_ID } from './reviewPanelTypes';
 /**
  * Split/Unified diff toggle + options, pinned to the right of the dock tab strip
  * (dockview's `rightHeaderActionsComponent`). Stays visible while the tabs
- * scroll. Reads/writes the global `configStore` plus the review state context
- * (for the all-files collapse toggle).
+ * scroll. Desktop reads/writes the global `configStore`; compact-touch review
+ * shells provide a session-only style through review state so opening a review
+ * on a phone never changes the user's desktop preference.
  *
  * Rendered per group; for now it shows in every group's tab strip (the diff
  * setting is global). Scoping it to the diff-bearing group is a later refinement
  * if splitting proves it noisy.
  */
 export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (props) => {
-  const diffStyle = useConfigValue('diffStyle');
+  const storedDiffStyle = useConfigValue('diffStyle');
   const state = useReviewStateOptional();
+  const diffStyle = state?.diffStyle ?? storedDiffStyle;
+  const setDiffStyle = state?.onDiffStyleChange ?? ((style: 'split' | 'unified') => {
+    configStore.set('diffStyle', style);
+  });
   // Collapse/expand-all files — only meaningful (and only shown) when this
   // group's active panel is the All files view.
   const showCollapseAll = !!state && props.activePanel?.id === REVIEW_ALL_FILES_PANEL_ID;
@@ -26,6 +31,8 @@ export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (pr
     <div className="flex items-center gap-1 h-full pr-2 pl-1">
       {showCollapseAll && state && (
         <button
+          data-pn-touch-target={state.isCompactTouchLayout || undefined}
+          data-pn-touch-target-icon={state.isCompactTouchLayout || undefined}
           type="button"
           onClick={state.onToggleAllFilesCollapsed}
           className="p-1.5 rounded-md transition-colors text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -56,28 +63,36 @@ export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (pr
         </button>
       )}
       <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
-        <button
-          onClick={() => configStore.set('diffStyle', 'split')}
-          className={`px-2 py-1 text-xs rounded-md transition-colors ${
-            diffStyle === 'split'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Split
-        </button>
-        <button
-          onClick={() => configStore.set('diffStyle', 'unified')}
-          className={`px-2 py-1 text-xs rounded-md transition-colors ${
-            diffStyle === 'unified'
-              ? 'bg-background text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          Unified
-        </button>
-        <div className="w-px h-4 bg-border/60 mx-0.5" />
-        <DiffOptionsPopover />
+        {!state?.isCompactTouchLayout && (
+          <>
+            <button
+              onClick={() => setDiffStyle('split')}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                diffStyle === 'split'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Split
+            </button>
+            <button
+              onClick={() => setDiffStyle('unified')}
+              className={`px-2 py-1 text-xs rounded-md transition-colors ${
+                diffStyle === 'unified'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Unified
+            </button>
+            <div className="w-px h-4 bg-border/60 mx-0.5" />
+          </>
+        )}
+        <DiffOptionsPopover
+          diffStyle={diffStyle}
+          onDiffStyleChange={setDiffStyle}
+          compactTouchLayout={state?.isCompactTouchLayout}
+        />
       </div>
     </div>
   );

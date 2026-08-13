@@ -10,6 +10,7 @@ import { THEME_MODES } from '@plannotator/ui/components/themeModes';
 import { MenuVersionSection } from '@plannotator/ui/components/MenuVersionSection';
 import { ReviewAgentsIcon } from '@plannotator/ui/components/ReviewAgentsIcon';
 import { TextShimmer } from '@plannotator/ui/components/TextShimmer';
+import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
 import { modKey } from '@plannotator/ui/utils/platform';
 import type { UpdateInfo } from '@plannotator/ui/hooks/useUpdateCheck';
 import type { Origin } from '@plannotator/shared/agents';
@@ -21,8 +22,13 @@ interface ReviewHeaderMenuProps {
   onCopyAgentInstructions: () => void;
   onToggleFileTree: () => void;
   onToggleSidebar: () => void;
+  onOpenGuide?: () => void;
+  onOpenAnnotations?: () => void;
+  onOpenAI?: () => void;
+  onOpenAgents?: () => void;
   isFileTreeOpen: boolean;
   isSidebarOpen: boolean;
+  compactTouchLayout?: boolean;
   agentInstructionsEnabled: boolean;
   appVersion: string;
   updateInfo?: UpdateInfo | null;
@@ -37,8 +43,13 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
   onCopyAgentInstructions,
   onToggleFileTree,
   onToggleSidebar,
+  onOpenGuide,
+  onOpenAnnotations,
+  onOpenAI,
+  onOpenAgents,
   isFileTreeOpen,
   isSidebarOpen,
+  compactTouchLayout = false,
   agentInstructionsEnabled,
   appVersion,
   updateInfo,
@@ -52,8 +63,14 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
   return (
     <ActionMenu
       panelWidth="wide"
+      panelClassName={compactTouchLayout
+        ? 'absolute top-full right-0 mt-1 w-[min(18rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100dvh)-4.5rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl z-[70]'
+        : undefined
+      }
       renderTrigger={({ isOpen, toggleMenu }) => (
         <button
+          data-pn-touch-target
+          data-pn-touch-target-icon
           onClick={() => {
             if (!isOpen && showUpdateDot) updateInfo?.dismiss();
             toggleMenu();
@@ -88,6 +105,7 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
             <div className="flex items-center gap-1 rounded-lg bg-muted/50 p-0.5">
               {THEME_MODES.map(({ id, label, Icon }) => (
                 <button
+                  data-pn-touch-target={compactTouchLayout || undefined}
                   key={id}
                   onClick={() => {
                     closeMenu();
@@ -150,6 +168,52 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
             />
           )}
 
+          {(onOpenGuide || onOpenAnnotations || onOpenAI || onOpenAgents) && (
+            <>
+              <ActionMenuDivider />
+              {onOpenGuide && (
+                <ActionMenuItem
+                  onClick={() => {
+                    closeMenu();
+                    onOpenGuide();
+                  }}
+                  icon={<GuideIcon />}
+                  label="Guided Review"
+                />
+              )}
+              {onOpenAnnotations && (
+                <ActionMenuItem
+                  onClick={() => {
+                    closeMenu();
+                    onOpenAnnotations();
+                  }}
+                  icon={<SidebarIcon />}
+                  label="Annotations"
+                />
+              )}
+              {onOpenAI && (
+                <ActionMenuItem
+                  onClick={() => {
+                    closeMenu();
+                    onOpenAI();
+                  }}
+                  icon={<SparklesIcon className="w-3.5 h-3.5" />}
+                  label="AI Chat"
+                />
+              )}
+              {onOpenAgents && (
+                <ActionMenuItem
+                  onClick={() => {
+                    closeMenu();
+                    onOpenAgents();
+                  }}
+                  icon={<ReviewAgentsIcon className="w-3.5 h-3.5" />}
+                  label="Review Agents"
+                />
+              )}
+            </>
+          )}
+
           <ActionMenuDivider />
 
           <ActionMenuItem
@@ -158,18 +222,23 @@ export const ReviewHeaderMenu: React.FC<ReviewHeaderMenuProps> = ({
               onToggleFileTree();
             }}
             icon={<FileTreeMenuIcon />}
-            label={isFileTreeOpen ? 'Hide File Tree' : 'Show File Tree'}
-            badge={<KbdHint keys={[modKey, 'B']} />}
+            label={compactTouchLayout
+              ? (isFileTreeOpen ? 'Close review navigation' : 'Open review navigation')
+              : (isFileTreeOpen ? 'Hide File Tree' : 'Show File Tree')
+            }
+            badge={compactTouchLayout ? undefined : <KbdHint keys={[modKey, 'B']} />}
           />
-          <ActionMenuItem
-            onClick={() => {
-              closeMenu();
-              onToggleSidebar();
-            }}
-            icon={<SidebarIcon />}
-            label={isSidebarOpen ? 'Hide Sidebar' : 'Show Sidebar'}
-            badge={<KbdHint keys={[modKey, '.']} />}
-          />
+          {!compactTouchLayout && (
+            <ActionMenuItem
+              onClick={() => {
+                closeMenu();
+                onToggleSidebar();
+              }}
+              icon={<SidebarIcon />}
+              label={isSidebarOpen ? 'Hide Sidebar' : 'Show Sidebar'}
+              badge={<KbdHint keys={[modKey, '.']} />}
+            />
+          )}
 
           <ActionMenuDivider />
 
@@ -231,5 +300,11 @@ const KbdHint: React.FC<{ keys: string[] }> = ({ keys }) => (
 const SidebarIcon = () => (
   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M9 4h10a2 2 0 012 2v12a2 2 0 01-2 2H9M9 4H5a2 2 0 00-2 2v12a2 2 0 002 2h4M9 4v16" />
+  </svg>
+);
+
+const GuideIcon = () => (
+  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M8 6h8M8 10h8M8 14h5M5 3h14a2 2 0 012 2v14a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2z" />
   </svg>
 );

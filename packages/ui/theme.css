@@ -843,6 +843,13 @@ html:has([data-pn-compact-touch-layout='true'])
 }
 
 html:has([data-pn-compact-touch-layout='true'])
+  [data-pn-compact-diff-options]
+  button {
+  min-block-size: var(--pn-touch-target);
+  touch-action: manipulation;
+}
+
+html:has([data-pn-compact-touch-layout='true'])
   [data-pn-touch-target]:not(:disabled):not([aria-disabled='true']):active {
   filter: brightness(0.92);
   transition: filter 100ms ease-out;

@@ -78,6 +78,14 @@ afterEach(async () => {
 });
 
 describe('ReviewSubmissionDialog submission outcomes', () => {
+  test.skipIf(!hasDom)('keeps the dialog inside the observed viewport and marks its primary input for mobile Safari', async () => {
+    await renderSubmission({ targets: [baseTarget], orphans: [] });
+
+    expect(document.querySelector('.pn-visible-viewport-overlay')).not.toBeNull();
+    expect(document.querySelector('textarea')?.hasAttribute('data-pn-mobile-editable')).toBe(true);
+    expect(actionButton()?.hasAttribute('data-pn-touch-target')).toBe(true);
+  });
+
   test.skipIf(!hasDom)('renders all-success as complete and disables another submission', async () => {
     await renderSubmission({
       targets: [{ ...baseTarget, status: 'success' }],

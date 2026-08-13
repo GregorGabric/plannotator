@@ -1,7 +1,7 @@
 # Synthesis: Mobile Feedback Triage and Phase Sequence
 
 Date: 2026-08-12
-Status: Phase 1B accepted; Phase 1C implemented with physical-device gate pending
+Status: Phase 2A implemented; physical-device gate pending
 Source dossier: [`SPIKE-mobile-web-compatibility-20260812.md`](./SPIKE-mobile-web-compatibility-20260812.md)
 Foundation spec: [`mobile-platform-foundation-phase1-20260812.md`](../specs/mobile-platform-foundation-phase1-20260812.md)
 
@@ -181,6 +181,85 @@ reachable without narrowing the artifact, keep the destination decision fully
 visible, and support a complete single-line comment and approve/send journey.
 Multi-line touch selection is explicitly evaluated in Phase 3, not used as a
 gate for the shell.
+
+### Phase 2A implementation checkpoint
+
+Implementation is complete on `codex-mobile-phase-2a-review-shell` and is
+ready for the physical-device gate. It implements the artifact-first option
+while keeping the existing Guided Review takeover directly reachable from the
+compact Options menu, so both candidate reading compositions can be compared
+against the same review.
+
+The compact shell activates only when the viewport is at most 1024 px wide and
+the device exposes a coarse pointer. A narrow fine-pointer desktop window keeps
+the desktop workspace. Within the compact shell:
+
+- PR and local reviews arrive in full-width All Files instead of opening the
+  tree or PR overview beside the diff;
+- Unified is the initial session presentation, but changing it on the phone is
+  session-only and never writes the saved desktop Split/Unified preference;
+- Git status, Tree, Commits, PR context, and file navigation occupy one
+  full-stage transient navigator and close after a destination is chosen;
+- annotations, AI, and Review Agents occupy a separate full-stage transient
+  surface instead of becoming a fixed flex sibling;
+- the header is one 52 px row containing review location, destination, terminal
+  actions, and progressive disclosure; Guide and secondary tools move into the
+  compact Options menu;
+- the dock strip exposes collapse and display options without repeating the
+  Split/Unified segmented control in the primary reading path;
+- the first destination explanation becomes a concise visible-viewport bottom
+  surface without desktop keyboard tips;
+- the platform submission dialog uses the shared visible-viewport Dialog,
+  does not raise the software keyboard on arrival, keeps authoring text at
+  16 px, scrolls long recovery detail, and pins its terminal actions; and
+- PR overview uses Summary/Comments as mutually exclusive compact regions.
+  Empty discussion renders no Comments region at all. This last removal also
+  intentionally improves desktop by eliminating an empty structural panel.
+
+No `DiffViewer`, Pierre renderer, line mapping, touch range selection,
+suggestion editor, server, Tailscale, or persisted desktop panel-default code
+changed. Tree remains the desktop first-use default.
+
+Automated proof includes the compact-touch detector and listener cleanup,
+session-only diff-style routing, visible-viewport destination/submission
+surfaces, exact PR discussion inclusion rules, empty desktop discussion, and
+single-region compact PR context. The production Review build, shared
+typecheck, focused DOM tests, and diff whitespace checks pass.
+
+Rendered preflight covered 320×568 and 390×844 phone stages, an 820×1180 tablet
+stage, and a 1280×720 fine-pointer desktop control. The compact header remained
+52 px, both transient surfaces exactly occupied the remaining app stage, file
+selection closed navigation, and no page-width overflow was measured. The
+desktop control retained its 37 px header and 256 px file tree. Browser
+preflight cannot close the real touch, Safari chrome, tailnet PR, or hybrid
+iPad gate; those remain the reviewer's acceptance pass.
+
+#### Physical review script
+
+Open the same GitHub PR through Tailscale on iPhone, then iPad if available:
+
+1. Confirm arrival is All Files, full width, and Unified; the tree and PR panels
+   must not already be open.
+2. Open Review navigation, move between a file, All Files, and PR overview, and
+   confirm each choice returns to a full-width primary surface.
+3. In PR overview, confirm an empty discussion has no Comments control; when
+   discussion exists, switch between Summary and Comments without splitting
+   the screen.
+4. Open Options → Guided Review, read one chapter, then return to the raw diff.
+5. Open Annotations (and AI/Agents if available) from Options, confirm the
+   surface replaces rather than squeezes the diff, then close it.
+6. If the destination coachmark is still unseen in that browser, confirm its
+   complete copy and Got it action fit above Safari chrome. Switch between
+   GitHub and Agent once.
+7. Select one code line, write and save one comment, then open Post Comments or
+   Approve. Confirm the long submission surface scrolls, the keyboard does not
+   open until the textarea is tapped, and both terminal actions remain
+   reachable.
+8. Rotate once and confirm no rail or prior transient surface reappears. On a
+   desktop reload, confirm Tree and the saved diff style are unchanged.
+
+Range accumulation and multi-line touch selection are observations only in
+this gate; they remain Phase 3 work.
 
 ## Why selection is not bundled into layout
 

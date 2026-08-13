@@ -25,6 +25,8 @@ mock.module('../workerPool', () => ({
 }));
 
 mock.module('../hooks/usePierreTheme', () => ({
+  buildLineBgOverrides: () => '',
+  resolveSyntaxTheme: () => ({ dark: 'github-dark', light: 'github-light' }),
   usePierreTheme: () => ({ type: 'light', css: '' }),
 }));
 
