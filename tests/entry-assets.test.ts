@@ -26,6 +26,16 @@ describe('review entry assets', () => {
     },
   );
 
+  test('the plan surface extends its active canvas behind mobile browser controls', () => {
+    const editor = read('packages/editor/App.tsx');
+    const theme = read('packages/ui/theme.css');
+
+    expect(editor).toContain("const browserCanvas = isHtmlSurface || gridEnabled ? 'background' : 'card';");
+    expect(editor).toContain('data-pn-browser-canvas={browserCanvas}');
+    expect(theme).toContain('html:has([data-pn-browser-canvas="card"])');
+    expect(theme).toContain('background-color: var(--card);');
+  });
+
   test('the app bundles its default fonts and syntax highlighting', () => {
     const editorCss = read('packages/editor/index.css');
     expect(editorCss).toContain('@import "@fontsource-variable/inter";');

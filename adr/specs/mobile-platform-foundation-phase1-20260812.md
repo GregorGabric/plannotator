@@ -438,15 +438,21 @@ Automated and rendered-browser preflight evidence:
 - no new Plan console warnings or errors were observed.
 
 The first physical iPhone composer pass confirmed legible input, intentional
-touch focus, and successful save, then exposed two Safari-only follow-ups that
+touch focus, and successful save, then exposed Safari-only follow-ups that
 responsive Chromium did not reproduce. The entry body still claimed a
 `100vh` minimum while the application used the smaller Visual Viewport,
 allowing Safari to scroll the entire app upward into a blank body region when
 browser chrome was visible. Hook and Review entries now lock outer overflow
-and delegate scrolling exclusively to their application viewports. The Plan
-composer also suppresses its hardware-keyboard submit hint when any coarse
-pointer is present; the explicit Save action remains the mobile instruction.
-Both changes require a fresh physical retest before the checkpoint passes.
+and delegate scrolling exclusively to their application viewports. The next
+physical pass showed that this was not the remaining dark region around
+Safari's floating bottom controls: the nested Plan surface painted `--card`,
+while the outer application and page canvas behind the browser controls still
+painted the nearly black `--background`. A non-grid Plan now extends its card
+canvas through those outer layers; grid, HTML, Review, and loading surfaces
+retain their existing background. The Plan composer also suppresses its
+hardware-keyboard submit hint when any coarse pointer is present; the explicit
+Save action remains the mobile instruction. These changes require a fresh
+physical retest before the checkpoint passes.
 
 This record does not pass Checkpoint 1B. Mobile Safari focus zoom, real
 software-keyboard geometry, rotation, safe-area clearance, and background /

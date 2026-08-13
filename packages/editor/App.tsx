@@ -4217,6 +4217,10 @@ const App: React.FC = () => {
     !isSharedSession &&
     !goalSetupMode &&
     !showPermissionModeSetup;
+  // Mobile Safari paints the browser-controls backdrop from the document/app
+  // canvas, not from the nested document scroller. Keep that canvas continuous
+  // with the active surface so a card-backed plan does not end in a dark band.
+  const browserCanvas = isHtmlSurface || gridEnabled ? 'background' : 'card';
   if (isLoading && !isSharedSession) {
     return (
       <ThemeProvider defaultTheme="dark">
@@ -4228,7 +4232,11 @@ const App: React.FC = () => {
   return (
     <ThemeProvider defaultTheme="dark">
       <TooltipProvider delayDuration={900} skipDelayDuration={200} disableHoverableContent>
-      <div data-print-region="root" className="pn-app-viewport flex flex-col bg-background overflow-hidden">
+      <div
+        data-print-region="root"
+        data-pn-browser-canvas={browserCanvas}
+        className={`pn-app-viewport flex flex-col overflow-hidden ${browserCanvas === 'card' ? 'bg-card' : 'bg-background'}`}
+      >
         <AppHeader
           htmlSurface={isHtmlSurface}
           htmlToolsHidden={htmlToolsHidden}

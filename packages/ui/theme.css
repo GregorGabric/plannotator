@@ -711,6 +711,21 @@ body {
   font-feature-settings: "ss01", "ss02", "cv01";
 }
 
+/* Safari extends the page canvas beneath its floating browser controls. The
+ * plan document is a card-colored nested scroller, so leaving the outer canvas
+ * on `--background` produces an opaque dark band around those controls. Match
+ * the browser canvas to the active surface while preserving the incumbent
+ * background for grid, HTML, Review, loading, and non-editor consumers. */
+html:has([data-pn-browser-canvas="card"]),
+body:has([data-pn-browser-canvas="card"]) {
+  background-color: var(--card);
+}
+
+html:has([data-pn-browser-canvas="background"]),
+body:has([data-pn-browser-canvas="background"]) {
+  background-color: var(--background);
+}
+
 /* The application stage owns the top and lateral safe areas. Bottom-edge
  * surfaces opt into `.pn-safe-bottom` themselves so the home-indicator inset
  * is never counted twice. The ordered height declarations preserve desktop
