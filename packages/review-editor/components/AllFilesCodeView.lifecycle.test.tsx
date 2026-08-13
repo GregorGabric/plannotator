@@ -23,6 +23,7 @@ let scrollTargets: Array<Record<string, unknown>> = [];
 // any stub exists.
 const realPierreDiffs = { ...(await import('@pierre/diffs')) };
 const realPierreDiffsReact = { ...(await import('@pierre/diffs/react')) };
+const realResolveSyntaxTheme = (await import('@plannotator/ui/utils/syntaxTheme')).resolveSyntaxTheme;
 
 mock.module('../workerPool', () => ({
   useIsWorkerPoolReadyOrDisabled: () => true,
@@ -31,7 +32,7 @@ mock.module('../workerPool', () => ({
 
 mock.module('../hooks/usePierreTheme', () => ({
   buildLineBgOverrides: () => '',
-  resolveSyntaxTheme: () => ({ dark: 'github-dark', light: 'github-light' }),
+  resolveSyntaxTheme: realResolveSyntaxTheme,
   usePierreTheme: () => ({ type: 'light', css: '' }),
 }));
 

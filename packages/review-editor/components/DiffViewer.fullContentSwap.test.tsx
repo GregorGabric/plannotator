@@ -32,6 +32,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { getSingularPatch, processFile } from '@pierre/diffs';
 
+const realResolveSyntaxTheme = (await import('@plannotator/ui/utils/syntaxTheme')).resolveSyntaxTheme;
+
 mock.module('../workerPool', () => ({
   useIsWorkerPoolReadyOrDisabled: () => true,
   useWorkerPoolThemeSync: () => {},
@@ -39,7 +41,7 @@ mock.module('../workerPool', () => ({
 
 mock.module('../hooks/usePierreTheme', () => ({
   buildLineBgOverrides: () => '',
-  resolveSyntaxTheme: () => ({ dark: 'github-dark', light: 'github-light' }),
+  resolveSyntaxTheme: realResolveSyntaxTheme,
   usePierreTheme: () => ({ type: 'light', css: '' }),
 }));
 
