@@ -209,9 +209,6 @@ export interface ReviewState {
   openDiffFile: (filePath: string) => void;
   onAllFilesVisibleFileChange: (filePath: string | null) => void;
   isAllFilesActive: boolean;
-  /** Mobile Safari page-scroll bridge: the active diff renderer reports its
-   * scroll range so the app can give the document matching travel. */
-  onDocumentScrollRangeChange: (range: number) => void;
   // Which left panel drives the all-files item order ('list' = sections order).
   allFilesOrder: 'tree' | 'list';
   // All-files collapse-all toggle — the AllFilesCodeView registers its handler

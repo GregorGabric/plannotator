@@ -23,7 +23,6 @@ import type { AnnotationScrollTarget } from '../types';
 import { getLineNumberFromNode, getSideFromNode, getDiffSelection } from '../utils/diffSelection';
 import { isContentConsistentWithPatch } from '../utils/patchConsistency';
 import { hashString } from '../utils/hashString';
-import { useDocumentScrollBridge } from '../hooks/useDocumentScrollBridge';
 import { InlineAnnotation } from './InlineAnnotation';
 import { InlineAIMarker } from './InlineAIMarker';
 import type { AIChatEntry } from '../hooks/useAIChat';
@@ -152,8 +151,6 @@ interface DiffViewerProps {
   prUrl?: string;
   prDiffScope?: string;
   isFocused?: boolean;
-  documentScrollBridgeActive?: boolean;
-  onDocumentScrollRangeChange?: (range: number) => void;
   diffStyle: 'split' | 'unified';
   diffOverflow?: 'scroll' | 'wrap';
   diffIndicators?: 'bars' | 'classic' | 'none';
@@ -214,8 +211,6 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   prUrl,
   prDiffScope,
   isFocused = false,
-  documentScrollBridgeActive = false,
-  onDocumentScrollRangeChange,
   diffStyle,
   diffOverflow,
   diffIndicators = 'bars',
@@ -269,16 +264,6 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   // is state so effects re-run once the library has mounted the viewport.
   const { ref: containerRef, viewport, onViewportReady } =
     useOverlayViewport<HTMLDivElement>();
-  const getDocumentScrollRange = useCallback(
-    () => Math.max(0, (viewport?.scrollHeight ?? 0) - (viewport?.clientHeight ?? 0)),
-    [viewport],
-  );
-  useDocumentScrollBridge({
-    active: documentScrollBridgeActive,
-    scroller: viewport,
-    getScrollRange: getDocumentScrollRange,
-    onScrollRangeChange: onDocumentScrollRangeChange,
-  });
   const splitSurfaceRef = useRef<HTMLDivElement>(null);
   const diffContentRef = useRef<HTMLDivElement>(null);
   const [fileCommentAnchor, setFileCommentAnchor] = useState<HTMLElement | null>(null);
@@ -445,7 +430,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   // switches files (the file-switch useLayoutEffect legitimately scrolls
   // to 0 — without resetting here the guardian would fight it).
   useEffect(() => {
-    if (!viewport || documentScrollBridgeActive) return;
+    if (!viewport) return;
     const ua = navigator.userAgent;
     const isWebKit = ua.includes('Safari') && !ua.includes('Chrome');
     if (!isWebKit) return;
@@ -471,7 +456,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
 
     viewport.addEventListener('scroll', onScroll, { passive: true });
     return () => viewport.removeEventListener('scroll', onScroll);
-  }, [viewport, filePath, documentScrollBridgeActive]);
+  }, [viewport, filePath]);
 
   // Scroll to a comment ONLY on sidebar navigation (scrollTargetAnnotation),
   // never on a bare in-diff selection — clicking a comment must not move the
@@ -763,7 +748,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       {!collapsed && <OverlayScrollArea
         className={`flex-1 min-h-0 relative ${isDraggingSplit ? 'select-none' : ''}`}
         overflowX="scroll"
-        overflowY={documentScrollBridgeActive ? 'hidden' : 'auto'}
+        overflowY="auto"
         onViewportReady={onViewportReady}
       >
         {/* Specific first, general second, and never both: whichever applies,

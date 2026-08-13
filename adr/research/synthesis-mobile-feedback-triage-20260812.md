@@ -221,20 +221,23 @@ the desktop workspace. Within the compact shell:
 - the expanded review composer is capped at 28 rem while idle and expands only
   as the visible keyboard viewport requires, instead of covering the full phone
   before authoring begins;
-- active compact raw diffs give the document the same scroll range as their
-  renderer and mirror `window.scrollY` into that renderer. All Files preserves
-  Pierre's one-CodeView virtualization model; single-file tabs retain their
-  existing bounded FileDiff viewport. Both give Mobile Safari the body scroll
-  it requires to collapse browser chrome; and
+- raw diffs retain Pierre's bounded, nested scroll viewport. A compact-only
+  page-scroll proxy was implemented and then rejected during the physical
+  iPhone pass: the document advanced while Pierre's virtual window stopped,
+  leaving a frozen diff followed by a large blank region, and the sticky review
+  stage preserved the opaque Safari top extension. The proxy was removed
+  immediately to restore reliable file scrolling. Safari chrome contraction
+  for a virtualized review remains open design work rather than a shipped claim;
+  and
 - PR overview uses Summary/Comments as mutually exclusive compact regions.
   Empty discussion renders no Comments region at all. This last removal also
   intentionally improves desktop by eliminating an empty structural panel.
 
-No `DiffViewer`, Pierre library source, line mapping, touch range selection,
-suggestion editor, server, Tailscale, or persisted desktop panel-default code
-changed. The All Files integration now supplies a compact-only 44 px header
-metric, and both existing raw-diff scrollers opt into the same compact-only
-document-scroll bridge. Tree remains the desktop first-use default.
+No Pierre library source, line mapping, touch range selection, suggestion
+editor, server, Tailscale, or persisted desktop panel-default code changed. The
+All Files integration supplies a compact-only 44 px header metric while its
+existing nested CodeView scroller remains the source of truth. Tree remains the
+desktop first-use default.
 
 Automated proof includes the compact-touch detector and listener cleanup,
 session-only diff-style routing, visible-viewport destination/submission
@@ -255,9 +258,11 @@ iPad gate; those remain the reviewer's acceptance pass.
 Open the same GitHub PR through Tailscale on iPhone, then iPad if available:
 
 1. Confirm arrival is All Files, full width, and Unified; the tree and PR panels
-   must not already be open. Scroll the diff far enough that both Safari control
-   regions contract. The page must remain visible behind the translucent
-   controls, with no fixed dark cutoff.
+   must not already be open. Scroll continuously through several files. There
+   must be no frozen virtual window, large blank tail, snap to the beginning, or
+   loss of touch scrolling. Safari's top chrome and opaque extension are a
+   recorded open blocker for the next design iteration, not a pass condition
+   for this rollback check.
 2. Confirm the phone header contains only Review navigation, a centered review
    location, and Options. Open Options and verify destination, Exit,
    Send/Post (when feedback exists), and Approve are reachable there.

@@ -308,7 +308,6 @@ const ReviewApp: React.FC = () => {
   // moves the viewport.
   const [scrollTargetAnnotation, setScrollTargetAnnotation] = useState<AnnotationScrollTarget | null>(null);
   const [isAllFilesActive, setIsAllFilesActive] = useState(false);
-  const [reviewDocumentScrollRange, setReviewDocumentScrollRange] = useState(0);
   // All-files collapse-all: the view registers its toggle here; the dock tab
   // strip's button (ReviewDockRightActions) invokes it and reflects the flag.
   const allFilesCollapseToggleRef = useRef<(() => void) | null>(null);
@@ -2985,7 +2984,6 @@ const ReviewApp: React.FC = () => {
     openDiffFile,
     onAllFilesVisibleFileChange: setAllFilesVisibleFile,
     isAllFilesActive,
-    onDocumentScrollRangeChange: setReviewDocumentScrollRange,
     allFilesOrder,
     allFilesAllCollapsed,
     onToggleAllFilesCollapsed,
@@ -3519,13 +3517,6 @@ const ReviewApp: React.FC = () => {
           },
         ];
 
-  const usesReviewDocumentScroll =
-    isCompactTouchLayout && (isAllFilesActive || isDiffPanelActive) && !guideVisible && files.length > 0;
-  useEffect(() => {
-    if (usesReviewDocumentScroll || window.scrollY === 0) return;
-    window.scrollTo(0, 0);
-  }, [usesReviewDocumentScroll]);
-
   if (isLoading) {
     return (
       <ThemeProvider defaultTheme="dark">
@@ -3546,12 +3537,6 @@ const ReviewApp: React.FC = () => {
         className="pn-app-viewport flex flex-col bg-background overflow-hidden"
         data-pn-compact-review-shell={isCompactTouchLayout || undefined}
         data-pn-browser-canvas="background"
-        data-pn-document-scroll={usesReviewDocumentScroll ? 'true' : undefined}
-        data-pn-review-document-scroll={usesReviewDocumentScroll || undefined}
-        style={usesReviewDocumentScroll
-          ? ({ '--pn-review-scroll-range': `${reviewDocumentScrollRange}px` } as React.CSSProperties)
-          : undefined
-        }
       >
         {/* Header */}
         <header className={isCompactTouchLayout
@@ -4093,10 +4078,7 @@ const ReviewApp: React.FC = () => {
         )}
 
         {/* Main content */}
-        <div
-          data-pn-review-scroll-stage={usesReviewDocumentScroll || undefined}
-          className={`relative flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}
-        >
+        <div className={`relative flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
           {!guideOpen && shouldShowFileTree && isNavigatorOpen && sectionsAvailable && panelView === 'sections' && (
             <ReviewNavigatorContainer
               isCompactTouchLayout={isCompactTouchLayout}

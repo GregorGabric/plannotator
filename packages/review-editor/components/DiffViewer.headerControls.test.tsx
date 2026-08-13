@@ -131,15 +131,4 @@ describe.if(hasDom)('header control visibility (DOM)', () => {
     expect(el.querySelector(VIEWED_BUTTON)).not.toBeNull();
   });
 
-  test('compact document scrolling keeps the single-file renderer bounded without a nested touch scroller', async () => {
-    const ranges: number[] = [];
-    const el = await render(view({
-      documentScrollBridgeActive: true,
-      onDocumentScrollRangeChange: (range) => ranges.push(range),
-    }, () => {}));
-    const scroller = Array.from(el.querySelectorAll<HTMLElement>('div'))
-      .find((node) => node.style.overflowY === 'hidden' && node.style.overflowX === 'scroll');
-    expect(scroller).not.toBeUndefined();
-    expect(ranges.length).toBeGreaterThan(0);
-  });
 });

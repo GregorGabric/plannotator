@@ -76,8 +76,6 @@ export const ReviewDiffPanel: React.FC<IDockviewPanelProps> = (props) => {
         prUrl={state.prMetadata?.url}
         prDiffScope={state.prDiffScope}
         isFocused={isFocusedFile}
-        documentScrollBridgeActive={state.isCompactTouchLayout && isFocusedFile}
-        onDocumentScrollRangeChange={state.onDocumentScrollRangeChange}
         diffStyle={state.diffStyle}
         diffOverflow={state.diffOverflow}
         diffIndicators={state.diffIndicators}

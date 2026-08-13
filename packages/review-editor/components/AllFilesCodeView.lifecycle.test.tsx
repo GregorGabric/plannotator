@@ -6,8 +6,6 @@ import type { DiffFile } from '../types';
 let codeViewMounts = 0;
 let codeViewUnmounts = 0;
 let scrollTargets: Array<Record<string, unknown>> = [];
-let mockScrollHeight = 0;
-let mockViewportHeight = 0;
 
 // Captured BEFORE the mocks below replace the specifiers, so this file can put
 // the real modules back when it is done. `mock.module` is process global and
@@ -82,8 +80,8 @@ mock.module('@pierre/diffs/react', () => ({
       getInstance: () => ({
         getRenderedItems: () => [],
         getScrollTop: () => 0,
-        getScrollHeight: () => mockScrollHeight,
-        getHeight: () => mockViewportHeight,
+        getScrollHeight: () => 0,
+        getHeight: () => 0,
         getTopForItem: () => 0,
         scrollTo: (target: Record<string, unknown>) => scrollTargets.push(target),
       }),
@@ -157,8 +155,6 @@ afterEach(async () => {
   codeViewMounts = 0;
   codeViewUnmounts = 0;
   scrollTargets = [];
-  mockScrollHeight = 0;
-  mockViewportHeight = 0;
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -224,23 +220,4 @@ describe('AllFilesCodeView guide mount state', () => {
     ]);
   });
 
-  test.skipIf(!hasDom)('keeps Pierre virtualized while reporting document scroll travel on compact touch', async () => {
-    mockScrollHeight = 1000;
-    mockViewportHeight = 400;
-    const ranges: number[] = [];
-    host = document.createElement('div');
-    host.style.height = '400px';
-    document.body.appendChild(host);
-    root = createRoot(host);
-
-    await render({
-      documentScrollBridgeActive: true,
-      onDocumentScrollRangeChange: (range) => ranges.push(range),
-    });
-
-    const codeView = host.querySelector<HTMLElement>('.overflow-y-hidden');
-    expect(codeView).not.toBeNull();
-    expect(codeView?.classList.contains('h-full')).toBe(true);
-    expect(ranges).toContain(616);
-  });
 });

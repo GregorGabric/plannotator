@@ -52,7 +52,6 @@ import {
   clearItemSearchHighlights,
   swapActiveSearchHighlight,
 } from '../utils/reviewSearchHighlight';
-import { useDocumentScrollBridge } from '../hooks/useDocumentScrollBridge';
 
 /**
  * AllFilesCodeView (migration phases P1 + P2 + P3 + P4)
@@ -145,11 +144,10 @@ import { useDocumentScrollBridge } from '../hooks/useDocumentScrollBridge';
  *    targeted the OverlayScrollbars viewport wrapping many separate FileDiff
  *    shadow nodes and restored scrollTop on a ">200 -> 0" jump heuristic.
  *    CodeView owns its own scroll model and deliberately rebases its DOM
- *    scrollTop, so that heuristic would fight Pierre. Compact All Files instead
- *    uses an opt-in document-scroll bridge: the page receives matching travel
- *    (so Safari may collapse browser chrome) and mirrors window.scrollY into
- *    this same CodeView. Pierre remains the rendering and logical-scroll
- *    authority; desktop and non-active panels keep the native nested scroller.
+ *    scrollTop, so that heuristic would fight Pierre. CodeView therefore keeps
+ *    its native bounded scroll viewport on every form factor. A page-scroll
+ *    proxy was physically rejected on iPhone because the document could outrun
+ *    Pierre's virtual window and expose a large blank tail.
  *
  * The worker pool remains a later phase.
  *
@@ -184,11 +182,6 @@ interface AllFilesCodeViewProps {
   /** Compact coarse-pointer shell. Adjusts custom-header chrome and Pierre's
    * matching virtualization metric without changing desktop geometry. */
   compactTouchLayout?: boolean;
-  /** When active, vertical gestures scroll the document while CodeView mirrors
-   * that position internally. This lets iOS Safari collapse browser chrome
-   * without giving up Pierre's single virtualized renderer. */
-  documentScrollBridgeActive?: boolean;
-  onDocumentScrollRangeChange?: (range: number) => void;
   // Annotation / toolbar wiring (P2). Mirrors AllFilesDiffView's surface so the
   // toolbar opens against the file CodeView reports for a selection.
   onLineSelection: (range: SelectedLineRange | null) => void;
@@ -311,7 +304,7 @@ interface AllFilesCodeViewProps {
 // common case. Pathological patches (e.g. a delete + re-add of the same path,
 // or repeated paths) would otherwise collapse two files onto one CodeView item,
 // breaking selection/scroll identity — so a per-base suffix disambiguates them
-// while still keeping a filePath <-> itemId map for the bridge.
+// while still keeping filePath <-> itemId maps for constant-time lookups.
 interface ItemIdentity {
   items: CodeViewItem<DiffAnnotationMetadata>[];
   /** Maps a file path to the CodeView item id that owns it. */
@@ -502,8 +495,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   reviewBase,
   reviewSnapshotId,
   compactTouchLayout,
-  documentScrollBridgeActive = false,
-  onDocumentScrollRangeChange,
   onLineSelection,
   onAddAnnotationForFile,
   onEditAnnotation,
@@ -706,20 +697,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     () => `${fileOrder ?? 'tree'}:${seedCollapsed ? 'c' : 'e'}:${prUrl ?? ''}:${prDiffScope ?? ''}:${reviewSnapshotId ?? ''}:${files.length}:${files.map((f, i) => `${f.path}#${patchHashes[i]}`).join('|')}`,
     [files, patchHashes, prUrl, prDiffScope, reviewSnapshotId, fileOrder, seedCollapsed],
   );
-
-  const getDocumentScrollRange = useCallback(() => {
-    const viewer = viewerRef.current?.getInstance();
-    if (!viewer) return Math.max(0, (scrollEl?.scrollHeight ?? 0) - (scrollEl?.clientHeight ?? 0));
-    // Match CodeView's getMaxScrollTopForHeight(): our only non-item space is
-    // the 8px top edge + measured leading content + 8px bottom edge.
-    return Math.max(0, viewer.getScrollHeight() + 16 + leadingHeight - viewer.getHeight());
-  }, [leadingHeight, scrollEl]);
-  useDocumentScrollBridge({
-    active: documentScrollBridgeActive,
-    scroller: scrollEl,
-    getScrollRange: getDocumentScrollRange,
-    onScrollRangeChange: onDocumentScrollRangeChange,
-  });
 
   // Visual-order list of file paths (for [/] stepping). Derived from items so it
   // matches CodeView's rendered order exactly.
@@ -2411,7 +2388,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // overflow-anchor:none disables the BROWSER's scroll anchoring, which
       // otherwise fights CodeView's own anchor resolution whenever item
       // heights change (our augmentation applies).
-      className={`relative h-full ${documentScrollBridgeActive ? 'overflow-y-hidden' : 'overflow-y-auto'} overflow-x-clip ${allowScrollChaining ? 'overscroll-auto' : 'overscroll-contain'} [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style]`}
+      className={`relative h-full overflow-y-auto overflow-x-clip ${allowScrollChaining ? 'overscroll-auto' : 'overscroll-contain'} [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style]`}
       initialItems={identity.items}
       options={options}
       selectedLines={selectedLines}
