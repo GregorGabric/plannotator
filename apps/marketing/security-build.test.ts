@@ -26,6 +26,10 @@ async function listFiles(directory: string, relative = ''): Promise<string[]> {
   return files;
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
+}
+
 beforeAll(async () => {
   temporaryRoot = await mkdtemp(join(marketingRoot, '.astro-security-'));
   outputRoot = join(temporaryRoot, 'dist');
@@ -85,9 +89,10 @@ describe('marketing security build', () => {
 
   test('emits only the expected static-site artifact shape', async () => {
     const files = await listFiles(outputRoot);
+    const plainBuildOutput = stripAnsi(buildOutput);
 
-    expect(buildOutput).toContain('output: "static"');
-    expect(buildOutput).toContain('mode: "static"');
+    expect(plainBuildOutput).toContain('output: "static"');
+    expect(plainBuildOutput).toContain('mode: "static"');
     expect(files, buildOutput).toContain('index.html');
     expect(files).toContain('code-review/index.html');
     expect(files).toContain('workspaces/index.html');
