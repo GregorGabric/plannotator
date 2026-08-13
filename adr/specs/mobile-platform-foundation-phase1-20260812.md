@@ -1,9 +1,9 @@
 # Spec: Mobile Platform Foundation — Phase 1
 
 Date: 2026-08-12
-Status: Checkpoints 1A and 1B implemented; physical input review pending
-Baseline: `origin/main` at `ef49c701c23b867cec2a5d78343813ba89d2a025`
-Implementation branch: `codex/mobile-phase-1-foundation`
+Status: Checkpoints 1A and 1B implemented; 1B accepted on physical iPhone; 1C next
+Baseline: started from `origin/main` at `ef49c701c23b867cec2a5d78343813ba89d2a025`; refreshed through `356b628b6fd0e956e058ec684b103e1e68311999` before the 1B closeout
+Implementation branches: `codex-mobile-phase-1-foundation`, then stacked `codex-mobile-phase-1b-input`
 
 Related research: [`adr/research/SPIKE-mobile-web-compatibility-20260812.md`](../research/SPIKE-mobile-web-compatibility-20260812.md)
 
@@ -466,12 +466,28 @@ compact touch Plan path, the app header now scrolls in normal document flow and
 both duplicate sticky action treatments are disabled; desktop retains them.
 The Plan composer also suppresses its hardware-keyboard submit hint when any
 coarse pointer is present; the explicit Save action remains the mobile
-instruction. These changes require a fresh physical retest before the
-checkpoint passes.
+instruction.
 
-This record does not pass Checkpoint 1B. Mobile Safari focus zoom, real
-software-keyboard geometry, rotation, safe-area clearance, and background /
-return still require the joint iPhone and iPad Tailscale gate.
+### Checkpoint 1B physical-device acceptance
+
+The final Tailscale-published iPhone pass closed the Safari-specific blocker:
+
+- ordinary document scrolling now collapses both Safari chrome regions and
+  lets the Plan continue beneath the translucent browser controls instead of
+  ending at an opaque application boundary;
+- the compact touch header scrolls away with the page, so Safari no longer
+  preserves the solid top-edge extension associated with sticky edge chrome;
+- the Plan composer is legible, opens without forcing the software keyboard,
+  does not trigger focus zoom after an explicit textarea tap, and submits
+  successfully;
+- the user confirmed that the other previously requested input checks were
+  behaving acceptably and explicitly declined a redundant checklist rerun.
+
+Checkpoint 1B is therefore accepted for the tested physical iPhone path. This
+acceptance does not erase the separately inventoried Plan-selection, Review
+composition, or hierarchy defects; they belong to later product phases. A
+separate physical iPad pass was not performed and remains part of the final
+Phase 1 / 1C device matrix rather than reopening 1B.
 
 ## Phase 1 gate
 
