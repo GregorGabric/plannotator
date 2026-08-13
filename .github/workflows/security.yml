@@ -629,36 +629,65 @@ jobs:
           fi
           grep -F '[license] License scanning is enabled' security-results/trivy-license.log >/dev/null
 
-          jq -e '
-            .SchemaVersion == 2 and .ArtifactType == "filesystem" and
-            any(.Results[];
-              .Target == "bun.lock" and .Class == "lang-pkgs" and
-              .Type == "bun" and (.Packages | length) >= 1000 and
-              (.Vulnerabilities | type) == "array") and
-            ([.Results[] | select(.Class == "lang-pkgs" and .Type == "npm")] | length) == 20 and
-            ([.Results[].Packages[]?] | length) >= 1400 and
-            any(.Results[].Packages[]?;
-              .Name == "dompurify" and .Version == "3.4.8" and
-              .Relationship == "direct") and
-            any(.Results[].Packages[]?;
-              .Name == "hono" and .Version == "4.12.25" and
-              .Relationship == "indirect") and
-            any(.Results[].Packages[]?;
-              .Name == "bun-types" and .Version == "1.3.14" and
-              .Relationship == "direct" and .Dev == true) and
-            any(.Results[];
-              .Target == "tests/manual/ssh/Dockerfile" and
-              .Class == "config" and .Type == "dockerfile" and
-              .MisconfSummary.Successes > 0 and
-              (.Misconfigurations | any(.Status == "FAIL")))
-          ' security-results/trivy.json >/dev/null
-          jq -e '
-            .SchemaVersion == 2 and .ArtifactType == "filesystem" and
-            ([.Results[].Licenses[]?] | length) >= 1000 and
-            any(.Results[];
-              .Target == "bun.lock" and .Class == "license" and
-              (.Licenses | length) >= 900)
-          ' security-results/trivy-license.json >/dev/null
+          jq -e '.SchemaVersion == 2 and .ArtifactType == "filesystem"' \
+            security-results/trivy.json >/dev/null || {
+              echo 'Trivy vulnerability/misconfiguration report metadata is invalid.' >&2
+              exit 1
+            }
+          jq -e '.SchemaVersion == 2 and .ArtifactType == "filesystem"' \
+            security-results/trivy-license.json >/dev/null || {
+              echo 'Trivy license report metadata is invalid.' >&2
+              exit 1
+            }
+
+          bun_package_count=$(jq '[.Results[] | select(
+            .Target == "bun.lock" and .Class == "lang-pkgs" and .Type == "bun"
+          ) | .Packages[]?] | length' security-results/trivy.json)
+          npm_target_count=$(jq '[.Results[] | select(
+            .Class == "lang-pkgs" and .Type == "npm"
+          )] | length' security-results/trivy.json)
+          total_package_count=$(jq '[.Results[].Packages[]?] | length' security-results/trivy.json)
+          bun_license_count=$(jq '[.Results[] | select(
+            .Target == "bun.lock" and .Class == "license"
+          ) | .Licenses[]?] | length' security-results/trivy-license.json)
+          license_count=$(jq '[.Results[].Licenses[]?] | length' security-results/trivy-license.json)
+          if (( bun_package_count < 1000 || npm_target_count != 20 || total_package_count < 1400 )); then
+            echo "Trivy dependency coverage is incomplete: bun=$bun_package_count npm-targets=$npm_target_count total=$total_package_count." >&2
+            exit 1
+          fi
+          if (( bun_license_count < 900 || license_count < 1000 )); then
+            echo "Trivy license coverage is incomplete: bun=$bun_license_count total=$license_count." >&2
+            exit 1
+          fi
+
+          jq -e 'any(.Results[].Packages[]?;
+            .Name == "dompurify" and .Version == "3.4.8" and
+            .Relationship == "direct")' security-results/trivy.json >/dev/null || {
+              echo 'Trivy did not catalog the direct dompurify@3.4.8 sentinel.' >&2
+              exit 1
+            }
+          jq -e 'any(.Results[].Packages[]?;
+            .Name == "hono" and .Version == "4.12.25" and
+            .Relationship == "indirect")' security-results/trivy.json >/dev/null || {
+              echo 'Trivy did not catalog the indirect hono@4.12.25 sentinel.' >&2
+              exit 1
+            }
+          jq -e 'any(.Results[].Packages[]?;
+            .Name == "bun-types" and .Version == "1.3.14" and
+            .Relationship == "direct" and .Dev == true)' \
+            security-results/trivy.json >/dev/null || {
+              echo 'Trivy did not catalog the direct development bun-types@1.3.14 sentinel.' >&2
+              exit 1
+            }
+          jq -e 'any(.Results[];
+            .Target == "tests/manual/ssh/Dockerfile" and
+            .Class == "config" and .Type == "dockerfile" and
+            .MisconfSummary.Successes > 0 and
+            (.Misconfigurations | any(.Status == "FAIL")))' \
+            security-results/trivy.json >/dev/null || {
+              echo 'Trivy did not execute both passing and failing Dockerfile checks against the manual SSH fixture.' >&2
+              exit 1
+            }
 
           trivy convert \
             --format sarif \
@@ -671,15 +700,15 @@ jobs:
             .runs[0].tool.driver.version == $version and
             (.runs[0].tool.driver.rules | length) > 0 and
             (.runs[0].results | type) == "array"
-          ' security-results/trivy.sarif >/dev/null
+          ' security-results/trivy.sarif >/dev/null || {
+            echo 'Trivy SARIF metadata is invalid.' >&2
+            exit 1
+          }
 
-          bun_package_count=$(jq '[.Results[] | select(.Target == "bun.lock") | .Packages[]?] | length' security-results/trivy.json)
-          total_package_count=$(jq '[.Results[].Packages[]?] | length' security-results/trivy.json)
           vulnerability_count=$(jq '[.Results[].Vulnerabilities[]?] | length' security-results/trivy.json)
           critical_count=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length' security-results/trivy.json)
           high_count=$(jq '[.Results[].Vulnerabilities[]? | select(.Severity == "HIGH")] | length' security-results/trivy.json)
           misconfiguration_count=$(jq '[.Results[].Misconfigurations[]? | select(.Status == "FAIL")] | length' security-results/trivy.json)
-          license_count=$(jq '[.Results[].Licenses[]?] | length' security-results/trivy-license.json)
           checks_digest=$(jq -er '.Digest' "$TRIVY_CACHE_DIR/policy/metadata.json")
 
           {
