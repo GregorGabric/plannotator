@@ -809,7 +809,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
   left: var(--pn-viewport-offset-left, 0px);
   box-sizing: border-box;
   width: var(--pn-viewport-width, 100vw);
-  height: var(--pn-viewport-height, 100dvh);
+  height: var(--pn-viewport-height, 100vh);
   padding-top: var(--pn-safe-top);
   padding-right: var(--pn-safe-right);
   padding-bottom: var(--pn-safe-bottom);

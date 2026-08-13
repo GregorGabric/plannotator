@@ -82,7 +82,7 @@ describe('SidebarContainer compact presentation', () => {
     const theme = readFileSync(resolve(import.meta.dir, '../../theme.css'), 'utf8');
     expect(theme).toContain('.pn-visible-viewport-stage');
     expect(theme).toContain('top: var(--pn-viewport-offset-top, 0px)');
-    expect(theme).toContain('height: var(--pn-viewport-height, 100dvh)');
+    expect(theme).toContain('height: var(--pn-viewport-height, 100vh)');
     expect(theme).toContain('[data-pn-plan-navigator="true"] button');
     expect(theme).toContain('min-block-size: var(--pn-touch-target)');
   });

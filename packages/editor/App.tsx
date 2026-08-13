@@ -126,7 +126,10 @@ const DEMO_PLAN_CONTENT = USE_DIFF_DEMO
   ? DIFF_DEMO_PLAN_CONTENT
   : DEFAULT_DEMO_PLAN_CONTENT;
 import { useCheckboxOverrides } from './hooks/useCheckboxOverrides';
-import { usePlanDiffViewAutoExit } from './hooks/usePlanDiffViewAutoExit';
+import {
+  usePlanDiffNavigationAutoExit,
+  usePlanDiffViewAutoExit,
+} from './hooks/usePlanDiffViewAutoExit';
 import { AppHeader } from './components/AppHeader';
 import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
 import { FolderAnnotationEmptyState } from './components/FolderAnnotationEmptyState';
@@ -845,13 +848,6 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, hasTocEntries]);
 
-  // Clear diff view when switching away from versions tab
-  useEffect(() => {
-    if ((sidebar.activeTab === 'toc' || isCompactContentsSurfaceOpen) && isPlanDiffActive) {
-      setIsPlanDiffActive(false);
-    }
-  }, [isCompactContentsSurfaceOpen, isPlanDiffActive, sidebar.activeTab]);
-
   // Clear diff view on Escape key
   useEffect(() => {
     if (!isPlanDiffActive) return;
@@ -1008,6 +1004,10 @@ const App: React.FC = () => {
   usePlanDiffViewAutoExit(
     isPlanDiffActive && !isHtmlSurface,
     planDiff.hasPreviousVersion,
+    exitPlanDiffView,
+  );
+  usePlanDiffNavigationAutoExit(
+    sidebar.activeTab === 'toc' || isCompactContentsSurfaceOpen,
     exitPlanDiffView,
   );
   const warnFinishEditingFirst = useCallback((target: 'versions' | 'diff') => {

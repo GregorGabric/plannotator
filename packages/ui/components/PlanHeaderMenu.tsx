@@ -83,7 +83,7 @@ export const PlanHeaderMenu: React.FC<PlanHeaderMenuProps> = ({
     <ActionMenu
       panelWidth="wide"
       panelClassName={compactTouchLayout
-        ? 'absolute top-full right-0 mt-1 w-[min(18rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100dvh)-4.5rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl z-[70]'
+        ? 'absolute top-full right-0 mt-1 w-[min(18rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100vh)-4.5rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl z-[70]'
         : undefined
       }
       renderTrigger={({ isOpen, toggleMenu }) => (
