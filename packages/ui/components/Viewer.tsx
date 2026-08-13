@@ -778,6 +778,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     setViewerCommentPopover(null);
   }, []);
 
+  const commentDraftScope = linkedDocInfo?.filepath ?? sourceInfo ?? markdown.slice(0, 120);
+
   const codePathValidation = useValidatedCodePaths(markdown, codePathBaseDir, disableCodePathValidation);
 
   return (
@@ -1154,6 +1156,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
               contextText={hookCommentPopover.contextText}
               isGlobal={false}
               initialText={hookCommentPopover.initialText}
+              draftKey={`plan:${commentDraftScope}:${hookCommentPopover.draftKey}`}
               onSubmit={hookCommentSubmit}
               onClose={hookCommentClose}
               allowImages={allowImages}
@@ -1173,6 +1176,11 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
             contextText={viewerCommentPopover.contextText}
             isGlobal={viewerCommentPopover.isGlobal}
             initialText={viewerCommentPopover.initialText}
+            draftKey={`plan:${commentDraftScope}:${
+              viewerCommentPopover.isGlobal
+                ? 'global'
+                : `code-block:${viewerCommentPopover.codeBlock?.block.id ?? viewerCommentPopover.contextText}`
+            }`}
             onSubmit={handleViewerCommentSubmit}
             onClose={handleViewerCommentClose}
             allowImages={allowImages}

@@ -1,7 +1,7 @@
 # Spec: Mobile Platform Foundation — Phase 1
 
 Date: 2026-08-12
-Status: Checkpoint 1A implemented; iPhone stage review complete, iPad or explicit deferral pending
+Status: Checkpoints 1A and 1B implemented; physical input review pending
 Baseline: `origin/main` at `ef49c701c23b867cec2a5d78343813ba89d2a025`
 Implementation branch: `codex/mobile-phase-1-foundation`
 
@@ -394,6 +394,52 @@ The first tailnet-published iPhone pass completed on 2026-08-12:
 Product hierarchy, selection, and onboarding findings from this pass are
 tracked in the related research inventory and assigned to their owning surface
 phase instead of being pulled into the viewport foundation.
+
+## Checkpoint 1B implementation record
+
+Checkpoint 1B establishes one input and overlay contract for the primary Plan
+and Code Review writing journeys without changing either desktop information
+architecture:
+
+- the existing viewport observer now exposes reactive, pure visible-viewport
+  bounds to overlays without installing a second set of Visual Viewport
+  listeners;
+- `data-pn-mobile-editable` guarantees 16 px user-authored text on compact or
+  coarse-pointer surfaces, including the Plan skill-token mirror, while fine
+  desktop inputs retain their incumbent scale;
+- compact/coarse Plan composition uses the existing expanded comment surface,
+  while Code Review line selection uses its existing expanded comment dialog;
+  both remain bounded when the visible height changes;
+- touch-opened composition does not force textarea focus, hardware Escape
+  remains available, and fine-pointer desktop preserves its existing autofocus;
+- Plan selection, code-block, global, Plan-diff, and HTML comment targets now
+  receive stable draft keys; Code Review retains its existing per-range draft
+  store. Backdrop/Escape dismissal preserves those drafts and explicit submit
+  clears them;
+- the mobile Code Review overlay keeps the existing Suggest Code route by
+  handing off to the already-shipped suggestion modal rather than duplicating
+  source editing inside the comment dialog.
+
+Automated and rendered-browser preflight evidence:
+
+- focused viewport/composer suite: 52 passed, including coarse-pointer focus,
+  draft recovery, skill-mirror parity, and visible-bound geometry;
+- repository typecheck and strict `@plannotator/ui` consumer: passed;
+- Plan and Code Review production builds: passed;
+- Plan checks at 320×568, 390×844, 568×320, 820×1180, 1180×820, and a
+  390×500 keyboard-sized viewport kept the surface and submission control in
+  bounds with zero page-level horizontal overflow;
+- Code Review at 390×844 opened the expanded composer directly from a Pierre
+  line tap without focusing the textarea. At 390×500 the 468 px dialog and its
+  submit control remained fully visible; Escape closed it and reopening the
+  same line restored the multi-line draft;
+- desktop controls at 1440×900 retained the 384 px / 14 px Plan popover and
+  the incumbent floating Review toolbar and focus behavior;
+- no new Plan console warnings or errors were observed.
+
+This record does not pass Checkpoint 1B. Mobile Safari focus zoom, real
+software-keyboard geometry, rotation, safe-area clearance, and background /
+return still require the joint iPhone and iPad Tailscale gate.
 
 ## Phase 1 gate
 
