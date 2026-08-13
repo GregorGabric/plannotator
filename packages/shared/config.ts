@@ -148,6 +148,16 @@ export interface PlannotatorConfig {
    */
   annotateHistory?: boolean;
   /**
+   * Extra file extensions annotate treats as markdown (#1307), e.g.
+   * [".livemd"] for Livebook notebooks. Listed extensions are accepted
+   * everywhere .md is accepted on the annotate path and render as markdown.
+   * Entries must start with a dot and carry no path separators or globs;
+   * invalid entries are dropped and `.env` can never be registered (annotate
+   * copies file contents into the data dir). Resolved by
+   * `resolveMarkdownExtensions` in ./markdown-extensions. Default: none.
+   */
+  markdownExtensions?: string[];
+  /**
    * Persist successful Guided Reviews (guide content + per-section reviewed
    * state) under ~/.plannotator/guides/ (or PLANNOTATOR_DATA_DIR) so they
    * survive closing Plannotator. Set to false to disable writes; already-saved

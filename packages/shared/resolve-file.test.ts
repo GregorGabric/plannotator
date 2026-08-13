@@ -391,6 +391,35 @@ describe("annotatable plain-text files (#1029)", () => {
 		}
 	});
 
+	// #1307: `markdownExtensions` in config.json must make an extension
+	// resolvable everywhere .md is. The list is threaded in explicitly here so
+	// the test never touches the user's real config.json.
+	test("configured extra extensions resolve like markdown, and only when configured", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "plannotator-livemd-"));
+		try {
+			mkdirSync(join(cwd, "notebooks"), { recursive: true });
+			writeFileSync(join(cwd, "notebooks/tour.livemd"), "# Tour\n");
+			const configured = { extraMarkdownExtensions: [".livemd"] };
+
+			// Exact relative path, and the fuzzy bare-filename walk.
+			expect(resolveMarkdownFile("notebooks/tour.livemd", cwd, configured)).toEqual({
+				kind: "found",
+				path: join(cwd, "notebooks/tour.livemd"),
+			});
+			expect(resolveMarkdownFile("tour.livemd", cwd, configured)).toEqual({
+				kind: "found",
+				path: join(cwd, "notebooks/tour.livemd"),
+			});
+
+			// Default (no configuration): unchanged "unsupported type" behavior.
+			expect(
+				resolveMarkdownFile("notebooks/tour.livemd", cwd, { extraMarkdownExtensions: [] }),
+			).toEqual({ kind: "not_found", input: "notebooks/tour.livemd" });
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
 	test("predicates classify text vs doc vs unsupported paths", () => {
 		expect(isAnnotatableTextPath("notes.yaml")).toBe(true);
 		expect(isAnnotatableTextPath("notes.txt")).toBe(true);
