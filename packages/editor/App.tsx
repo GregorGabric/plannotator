@@ -4259,6 +4259,7 @@ const App: React.FC = () => {
         className={`pn-app-viewport flex flex-col ${usesDocumentScroll ? 'overflow-visible' : 'overflow-hidden'} ${browserCanvas === 'card' ? 'bg-card' : 'bg-background'}`}
       >
         <AppHeader
+          sticky={!usesDocumentScroll}
           htmlSurface={isHtmlSurface}
           htmlToolsHidden={htmlToolsHidden}
           onToggleHtmlTools={() => setHtmlToolsHidden((v) => !v)}
@@ -4550,7 +4551,7 @@ const App: React.FC = () => {
                   sticky actions are disabled. remountToken re-anchors the
                   ResizeObserver when Viewer swaps content (linked docs or
                   message switches). */}
-              {!goalSetupMode && !isPlanDiffActive && !isHtmlSurface && !archive.archiveMode && !isEditingMarkdown && uiPrefs.stickyActionsEnabled && (
+              {!usesDocumentScroll && !goalSetupMode && !isPlanDiffActive && !isHtmlSurface && !archive.archiveMode && !isEditingMarkdown && uiPrefs.stickyActionsEnabled && (
                 <StickyHeaderLane
                   inputMethod={inputMethod}
                   onInputMethodChange={handleInputMethodChange}
@@ -4810,7 +4811,7 @@ const App: React.FC = () => {
                     onAddGlobalAttachment={handleAddGlobalAttachment}
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     repoInfo={repoInfo}
-                    stickyActions={uiPrefs.stickyActionsEnabled}
+                    stickyActions={uiPrefs.stickyActionsEnabled && !usesDocumentScroll}
                     planDiffStats={planDiff.diffStats}
                     isPlanDiffActive={isPlanDiffActive}
                     onPlanDiffToggle={() => setIsPlanDiffActive(!isPlanDiffActive)}

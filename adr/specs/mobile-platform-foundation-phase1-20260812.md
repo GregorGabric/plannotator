@@ -456,8 +456,16 @@ viewport consumers distinguish that page viewport for scroll events,
 IntersectionObserver roots, geometry, TOC/hash navigation, Pinpoint, and Vim
 motion. The fixed nested application shell remains the desktop path, and Code
 Review keeps its existing workspace shell pending its own mobile-composition
-phase. The Plan composer also suppresses its hardware-keyboard submit hint when
-any coarse pointer is present; the explicit Save action remains the mobile
+phase. The next iPhone pass confirmed that the Plan reaches the bottom and
+Safari dismisses its bottom controls, then isolated a top-edge counterpart:
+the app's 48 px sticky header was partly obscured and caused Safari to preserve
+an opaque background extension. WebKit documents this extension as intentional
+for fixed/sticky elements adjoining an obscured browser edge
+([WebKit #301756](https://bugs.webkit.org/show_bug.cgi?id=301756#c2)). On the
+compact touch Plan path, the app header now scrolls in normal document flow and
+both duplicate sticky action treatments are disabled; desktop retains them.
+The Plan composer also suppresses its hardware-keyboard submit hint when any
+coarse pointer is present; the explicit Save action remains the mobile
 instruction. These changes require a fresh physical retest before the
 checkpoint passes.
 
