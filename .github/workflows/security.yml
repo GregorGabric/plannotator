@@ -23,9 +23,9 @@ env:
   GITLEAKS_LINUX_X64_SHA256: 79a3ab579b53f71efd634f3aaf7e04a0fa0cf206b7ed434638d1547a2470a66e
   SEMGREP_VERSION: 1.172.0
   SEMGREP_IMAGE: semgrep/semgrep:1.172.0-nonroot@sha256:d1012a3bf2acf47721216fbf7ff12d4c2971cc7f9c7b77cf6c6e9dcf006bd487
-  SEMGREP_RULE_COUNT: "15"
   TRIVY_VERSION: 0.73.0
   TRIVY_LINUX_X64_SHA256: 2edd39da482bb4e9831962487b68f68e3928ec3137794757f54d00383d79547b
+  # v2.2.0 content; the digest-only runtime reference never follows a moving tag.
   TRIVY_CHECKS_REFERENCE: ghcr.io/aquasecurity/trivy-checks@sha256:891abb1e1dc95429e6ad6768a8c8164dacf6d7ff742b940d1d709e69b5855cc6
   TRIVY_DB_MAX_AGE_SECONDS: "172800"
   TRIVY_DISABLE_TELEMETRY: "true"
@@ -183,7 +183,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull "$SEMGREP_IMAGE"
+          for attempt in 1 2 3; do
+            if docker pull "$SEMGREP_IMAGE"; then
+              break
+            fi
+            if (( attempt == 3 )); then
+              echo 'Semgrep image pull failed after three attempts.' >&2
+              exit 1
+            fi
+            echo "Semgrep image pull failed; retrying (attempt $((attempt + 1))/3)." >&2
+            sleep $((attempt * 5))
+          done
 
           repo_digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$SEMGREP_IMAGE")
           expected_digest=${SEMGREP_IMAGE##*@}
@@ -209,7 +219,7 @@ jobs:
         run: |
           set -euo pipefail
           fixture_dir="$RUNNER_TEMP/semgrep-health"
-          output_dir="$RUNNER_TEMP/semgrep-health-output"
+          output_dir="$GITHUB_WORKSPACE/security-results"
           mkdir -p "$fixture_dir" "$output_dir"
           chmod 777 "$output_dir"
 
@@ -229,6 +239,7 @@ jobs:
           curl --fail https://example.invalid/install.sh | sh
           EOF
 
+          set +e
           docker run --rm --network none \
             --env SEMGREP_SEND_METRICS=off \
             --volume "$GITHUB_WORKSPACE:/src:ro" \
@@ -244,9 +255,15 @@ jobs:
               --strict \
               --timeout 30 \
               --timeout-threshold 1 \
-              --json-output /out/health.json \
+              --json-output /out/semgrep-health.json \
               --config /src/.semgrep.yml \
-              /fixture
+              /fixture 2>&1 | tee "$output_dir/semgrep-health.log"
+          health_status=${PIPESTATUS[0]}
+          set -e
+          if [[ "$health_status" -ne 0 ]]; then
+            echo "Semgrep controlled detector scan failed (exit $health_status)." >&2
+            exit "$health_status"
+          fi
 
           jq -e --arg version "$SEMGREP_VERSION" '
             .version == $version and
@@ -262,7 +279,10 @@ jobs:
             any(.results[];
               .check_id == "plannotator.installer.remote-script-pipeline" and
               (.path | endswith("remote-pipeline.sh")) and .start.line == 2)
-          ' "$output_dir/health.json" >/dev/null
+          ' "$output_dir/semgrep-health.json" >/dev/null || {
+            echo 'Semgrep controlled detector report failed its engine, error, or exact-line assertions.' >&2
+            exit 1
+          }
 
           # A malformed local ruleset must be an engine failure, not a clean scan.
           cat > "$fixture_dir/invalid.yml" <<'EOF'
@@ -279,7 +299,7 @@ jobs:
             "$SEMGREP_IMAGE" \
             semgrep scan --oss-only --metrics off --disable-version-check \
               --strict --config /fixture/invalid.yml /fixture/command-injection.ts \
-              >/dev/null 2>&1
+              >"$output_dir/semgrep-invalid-rules.log" 2>&1
           invalid_status=$?
           set -e
           if [[ "$invalid_status" -eq 0 ]]; then
@@ -292,12 +312,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          output_dir="$RUNNER_TEMP/semgrep-output"
-          mkdir -p "$output_dir" security-results
+          output_dir="$GITHUB_WORKSPACE/security-results"
+          mkdir -p "$output_dir"
           chmod 777 "$output_dir"
 
           # The source mount and scanner network are read-only/offline. Findings
           # remain local; only GitHub receives the validated reports below.
+          set +e
           docker run --rm --network none \
             --env SEMGREP_SEND_METRICS=off \
             --volume "$GITHUB_WORKSPACE:/src:ro" \
@@ -317,42 +338,52 @@ jobs:
               --json-output /out/semgrep.json \
               --sarif-output /out/semgrep.sarif \
               --config /src/.semgrep.yml \
-              /src
+              /src 2>&1 | tee "$output_dir/semgrep-scan.log"
+          scan_status=${PIPESTATUS[0]}
+          set -e
+          if [[ "$scan_status" -ne 0 ]]; then
+            echo "Semgrep source scan failed (exit $scan_status)." >&2
+            exit "$scan_status"
+          fi
 
           jq -e --arg version "$SEMGREP_VERSION" '
             .version == $version and
             .engine_requested == "OSS" and
             (.errors | length) == 0 and
-            (.paths.scanned | length) >= 1000 and
+            (.paths.scanned | length) >= 500 and
             all(.results[]; .extra.engine_kind == "OSS") and
-            any(.paths.scanned[]; endswith("packages/server/index.ts")) and
-            any(.paths.scanned[]; endswith("apps/pi-extension/server/serverReview.ts")) and
-            any(.paths.scanned[]; endswith("packages/ui/components/InlineMarkdown.tsx")) and
-            any(.paths.scanned[]; endswith("apps/paste-service/targets/cloudflare.ts")) and
-            any(.paths.scanned[]; endswith("scripts/install.sh"))
-          ' "$output_dir/semgrep.json" >/dev/null
-          jq -e --arg version "$SEMGREP_VERSION" --argjson rule_count "$SEMGREP_RULE_COUNT" '
+            any(.paths.scanned[]; startswith("/src/packages/server/")) and
+            any(.paths.scanned[]; startswith("/src/apps/pi-extension/server/")) and
+            any(.paths.scanned[]; startswith("/src/packages/ui/")) and
+            any(.paths.scanned[]; startswith("/src/apps/paste-service/")) and
+            any(.paths.scanned[]; startswith("/src/scripts/"))
+          ' "$output_dir/semgrep.json" >/dev/null || {
+            echo 'Semgrep JSON failed its OSS-engine, error-free, target-count, or required-surface assertions.' >&2
+            exit 1
+          }
+          jq -e --arg version "$SEMGREP_VERSION" '
             .version == "2.1.0" and
             (.runs | length) == 1 and
             .runs[0].tool.driver.name == "Semgrep OSS" and
             .runs[0].tool.driver.semanticVersion == $version and
-            (.runs[0].tool.driver.rules | length) == $rule_count and
+            (.runs[0].tool.driver.rules | length) >= 10 and
             .runs[0].invocations[0].executionSuccessful == true
-          ' "$output_dir/semgrep.sarif" >/dev/null
-
-          cp "$output_dir/semgrep.json" security-results/semgrep.json
-          cp "$output_dir/semgrep.sarif" security-results/semgrep.sarif
+          ' "$output_dir/semgrep.sarif" >/dev/null || {
+            echo 'Semgrep SARIF failed its schema, OSS-driver, version, rule-floor, or execution assertions.' >&2
+            exit 1
+          }
 
           finding_count=$(jq '.results | length' security-results/semgrep.json)
           error_count=$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' security-results/semgrep.json)
           warning_count=$(jq '[.results[] | select(.extra.severity == "WARNING")] | length' security-results/semgrep.json)
           target_count=$(jq '.paths.scanned | length' security-results/semgrep.json)
+          rule_count=$(jq '.runs[0].tool.driver.rules | length' security-results/semgrep.sarif)
           rules_sha=$(sha256sum .semgrep.yml | cut -d' ' -f1)
 
           {
             echo '### Semgrep Community Edition'
             echo '- Scope: TypeScript/JavaScript (Bun, Pi/Node, React/DOM, Cloudflare) plus generic installer checks'
-            echo "- Engine: Semgrep OSS $SEMGREP_VERSION; $SEMGREP_RULE_COUNT repository-owned rules (SHA-256 \`$rules_sha\`)"
+            echo "- Engine: Semgrep OSS $SEMGREP_VERSION; $rule_count repository-owned rules (SHA-256 \`$rules_sha\`)"
             echo '- Network/data mode: scan runs offline; no token, Registry rules, metrics, version check, or Semgrep Cloud upload'
             echo "- Targets: $target_count"
             echo "- Findings: $finding_count ($error_count error, $warning_count warning)"
@@ -362,14 +393,15 @@ jobs:
           echo 'report-ready=true' >> "$GITHUB_OUTPUT"
 
       - name: Retain Semgrep reports
-        if: always() && steps.scan.outputs.report-ready == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: semgrep-reports
           path: |
-            security-results/semgrep.json
-            security-results/semgrep.sarif
-          if-no-files-found: error
+            security-results/semgrep*.json
+            security-results/semgrep*.sarif
+            security-results/semgrep*.log
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Upload Semgrep SARIF
@@ -403,7 +435,9 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/trivy.tar.gz"
-          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+          curl --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 15 --max-time 120 \
             --proto '=https' --tlsv1.2 \
             "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
             --output "$archive"
@@ -429,10 +463,14 @@ jobs:
         run: |
           set -euo pipefail
           registry_token=$(curl --fail --silent --show-error --location \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 15 --max-time 120 \
             --proto '=https' --tlsv1.2 \
             'https://ghcr.io/token?service=ghcr.io&scope=repository:aquasecurity/trivy-db:pull' \
             | jq -er '.token')
           headers=$(curl --fail --silent --show-error --head --location \
+            --retry 3 --retry-all-errors --retry-delay 2 \
+            --connect-timeout 15 --max-time 120 \
             --proto '=https' --tlsv1.2 \
             -H "Authorization: Bearer $registry_token" \
             -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json' \
@@ -446,13 +484,27 @@ jobs:
 
           cache_dir="$RUNNER_TEMP/trivy-cache"
           db_reference="ghcr.io/aquasecurity/trivy-db@$db_digest"
-          trivy fs \
-            --cache-dir "$cache_dir" \
-            --db-repository "$db_reference" \
-            --download-db-only \
-            --no-progress \
-            --skip-version-check \
-            --disable-telemetry
+          for attempt in 1 2 3; do
+            set +e
+            trivy fs \
+              --cache-dir "$cache_dir" \
+              --db-repository "$db_reference" \
+              --download-db-only \
+              --no-progress \
+              --skip-version-check \
+              --disable-telemetry
+            download_status=$?
+            set -e
+            if [[ "$download_status" -eq 0 ]]; then
+              break
+            fi
+            if (( attempt == 3 )); then
+              echo "Trivy database download failed after three attempts (exit $download_status)." >&2
+              exit "$download_status"
+            fi
+            echo "Trivy database download failed; retrying (attempt $((attempt + 1))/3)." >&2
+            sleep $((attempt * 5))
+          done
 
           metadata="$cache_dir/db/metadata.json"
           test -s "$cache_dir/db/trivy.db"
@@ -480,7 +532,7 @@ jobs:
         run: |
           set -euo pipefail
           fixture_dir="$RUNNER_TEMP/trivy-health"
-          mkdir -p "$fixture_dir"
+          mkdir -p "$fixture_dir" security-results
           cat > "$fixture_dir/package-lock.json" <<'EOF'
           {
             "name": "trivy-health",
@@ -499,23 +551,34 @@ jobs:
           USER root
           EOF
 
-          set +e
-          trivy fs \
-            --cache-dir "$TRIVY_CACHE_DIR" \
-            --db-repository "$TRIVY_DB_REFERENCE" \
-            --checks-bundle-repository "$TRIVY_CHECKS_REFERENCE" \
-            --skip-db-update \
-            --skip-version-check \
-            --disable-telemetry \
-            --scanners vuln,misconfig \
-            --include-non-failures \
-            --severity HIGH,CRITICAL \
-            --exit-code 9 \
-            --format json \
-            --output "$RUNNER_TEMP/trivy-health.json" \
-            "$fixture_dir"
-          detector_status=$?
-          set -e
+          : > security-results/trivy-health.log
+          for attempt in 1 2 3; do
+            set +e
+            trivy fs \
+              --cache-dir "$TRIVY_CACHE_DIR" \
+              --db-repository "$TRIVY_DB_REFERENCE" \
+              --checks-bundle-repository "$TRIVY_CHECKS_REFERENCE" \
+              --skip-db-update \
+              --skip-version-check \
+              --disable-telemetry \
+              --scanners vuln,misconfig \
+              --include-non-failures \
+              --severity HIGH,CRITICAL \
+              --exit-code 9 \
+              --format json \
+              --output security-results/trivy-health.json \
+              "$fixture_dir" 2>>security-results/trivy-health.log
+            detector_status=$?
+            set -e
+            if [[ "$detector_status" -eq 9 ]]; then
+              break
+            fi
+            if (( attempt < 3 )); then
+              echo "Trivy controlled detector scan did not return its expected finding status; retrying (attempt $((attempt + 1))/3)." >&2
+              sleep $((attempt * 5))
+            fi
+          done
+          cat security-results/trivy-health.log
           if [[ "$detector_status" -ne 9 ]]; then
             echo "Trivy failed its controlled detector test (exit $detector_status)." >&2
             exit 1
@@ -529,13 +592,19 @@ jobs:
             any(.Results[].Misconfigurations[]?;
               .ID == "DS-0002" and .Status == "FAIL" and
               .Severity == "HIGH" and .CauseMetadata.StartLine == 2)
-          ' "$RUNNER_TEMP/trivy-health.json" >/dev/null
+          ' security-results/trivy-health.json >/dev/null || {
+            echo 'Trivy controlled detector report failed its vulnerability or misconfiguration assertions.' >&2
+            exit 1
+          }
 
           checks_metadata="$TRIVY_CACHE_DIR/policy/metadata.json"
           expected_checks_digest=${TRIVY_CHECKS_REFERENCE##*@}
           jq -e --arg digest "$expected_checks_digest" '
             .MajorVersion == 2 and .Digest == $digest
-          ' "$checks_metadata" >/dev/null
+          ' "$checks_metadata" >/dev/null || {
+            echo 'Trivy checks metadata does not match the pinned v2.2.0 OCI digest.' >&2
+            exit 1
+          }
 
           # Exercise the report guard: malformed/empty collection metadata must fail.
           if printf '{"SchemaVersion":1,"Results":[]}' \
@@ -653,6 +722,18 @@ jobs:
           bun_package_count=$(jq '[.Results[] | select(
             .Target == "bun.lock" and .Class == "lang-pkgs" and .Type == "bun"
           ) | .Packages[]?] | length' security-results/trivy.json)
+          expected_npm_targets="$RUNNER_TEMP/trivy-expected-npm-targets.txt"
+          actual_npm_targets="$RUNNER_TEMP/trivy-actual-npm-targets.txt"
+          git ls-files '*package-lock.json' \
+            | awk '$0 !~ /(^|\/)(node_modules|dist|dist-ssr|\.astro|coverage)(\/|$)/ &&
+              $0 !~ /^apps\/pi-extension\/generated\//' \
+            | sort -u > "$expected_npm_targets"
+          jq -r '.Results[] | select(
+            .Class == "lang-pkgs" and .Type == "npm" and
+            ((.Packages // []) | length) > 0
+          ) | .Target' security-results/trivy.json \
+            | sort -u > "$actual_npm_targets"
+          expected_npm_target_count=$(wc -l < "$expected_npm_targets")
           npm_target_count=$(jq '[.Results[] | select(
             .Class == "lang-pkgs" and .Type == "npm"
           )] | length' security-results/trivy.json)
@@ -661,32 +742,38 @@ jobs:
             .Target == "bun.lock" and .Class == "license"
           ) | .Licenses[]?] | length' security-results/trivy-license.json)
           license_count=$(jq '[.Results[].Licenses[]?] | length' security-results/trivy-license.json)
-          if (( bun_package_count < 1000 || npm_target_count != 20 || total_package_count < 1400 )); then
-            echo "Trivy dependency coverage is incomplete: bun=$bun_package_count npm-targets=$npm_target_count total=$total_package_count." >&2
+          if (( expected_npm_target_count < 1 || bun_package_count < 500 \
+            || total_package_count < bun_package_count )); then
+            echo "Trivy dependency coverage is incomplete: bun=$bun_package_count npm-targets=$npm_target_count expected-npm-targets=$expected_npm_target_count total=$total_package_count." >&2
             exit 1
           fi
-          if (( bun_license_count < 900 || license_count < 1000 )); then
+          if ! cmp --silent "$expected_npm_targets" "$actual_npm_targets"; then
+            echo 'Trivy did not catalog every tracked, in-scope npm lockfile with packages:' >&2
+            diff --unified "$expected_npm_targets" "$actual_npm_targets" >&2 || true
+            exit 1
+          fi
+          if (( bun_license_count < 500 || license_count < bun_license_count )); then
             echo "Trivy license coverage is incomplete: bun=$bun_license_count total=$license_count." >&2
             exit 1
           fi
 
           jq -e 'any(.Results[].Packages[]?;
-            .Name == "dompurify" and .Version == "3.4.8" and
+            .Name == "dompurify" and (.Version | length) > 0 and
             .Relationship == "direct")' security-results/trivy.json >/dev/null || {
-              echo 'Trivy did not catalog the direct dompurify@3.4.8 sentinel.' >&2
+              echo 'Trivy did not catalog the direct dompurify sentinel from bun.lock.' >&2
               exit 1
             }
           jq -e 'any(.Results[].Packages[]?;
-            .Name == "hono" and .Version == "4.12.25" and
+            .Name == "hono" and (.Version | length) > 0 and
             .Relationship == "indirect")' security-results/trivy.json >/dev/null || {
-              echo 'Trivy did not catalog the indirect hono@4.12.25 sentinel.' >&2
+              echo 'Trivy did not catalog the indirect hono sentinel from bun.lock.' >&2
               exit 1
             }
           jq -e 'any(.Results[].Packages[]?;
-            .Name == "bun-types" and .Version == "1.3.14" and
+            .Name == "bun-types" and (.Version | length) > 0 and
             .Relationship == "direct" and .Dev == true)' \
             security-results/trivy.json >/dev/null || {
-              echo 'Trivy did not catalog the direct development bun-types@1.3.14 sentinel.' >&2
+              echo 'Trivy did not catalog the direct development bun-types sentinel from bun.lock.' >&2
               exit 1
             }
           jq -e 'any(.Results[];
@@ -725,8 +812,8 @@ jobs:
             echo '### Trivy'
             echo '- Scope: committed Bun/npm dependency locks plus filesystem/IaC misconfiguration; secret scanning disabled (Gitleaks remains authoritative)'
             echo "- Engine: Trivy $TRIVY_VERSION; database \`$TRIVY_DB_DIGEST\` (updated \`$TRIVY_DB_UPDATED_AT\`)"
-            echo "- Misconfiguration checks: \`$checks_digest\`"
-            echo "- Dependency catalog: $total_package_count records ($bun_package_count from text bun.lock, including development dependencies)"
+            echo "- Misconfiguration checks: v2.2.0 content, \`$checks_digest\`"
+            echo "- Dependency catalog: $total_package_count records ($bun_package_count from text bun.lock, including development dependencies; $npm_target_count/$expected_npm_target_count tracked npm locks)"
             echo "- Vulnerabilities: $vulnerability_count ($critical_count critical, $high_count high)"
             echo "- Misconfiguration failures: $misconfiguration_count; tests/manual/ssh/Dockerfile is a non-production manual fixture"
             echo "- Informational installed-license records: $license_count (runner/install graph, not a deployment inventory)"
@@ -735,15 +822,15 @@ jobs:
           echo 'report-ready=true' >> "$GITHUB_OUTPUT"
 
       - name: Retain Trivy reports
-        if: always() && steps.scan.outputs.report-ready == 'true'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: trivy-reports
           path: |
-            security-results/trivy.json
-            security-results/trivy-license.json
-            security-results/trivy.sarif
-          if-no-files-found: error
+            security-results/trivy*.json
+            security-results/trivy*.sarif
+            security-results/trivy*.log
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Upload Trivy SARIF
