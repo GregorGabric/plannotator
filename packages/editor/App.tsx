@@ -2767,8 +2767,13 @@ const App: React.FC = () => {
         }
         if (data.origin) {
           setOrigin(data.origin);
-          // For Claude Code, check if user needs to configure permission mode
-          if (data.origin === 'claude-code' && data.mode !== 'goal-setup' && needsPermissionModeSetup()) {
+          // For Claude Code, check if user needs to configure permission mode.
+          // Plan review only: the setting decides what happens after a plan is
+          // APPROVED, which is meaningless in annotate / annotate-last /
+          // annotate-folder / archive / goal-setup sessions. Plan review is the
+          // absence of a mode field (the plan server sends `mode` only for
+          // archive; annotate and goal-setup always name themselves).
+          if (data.origin === 'claude-code' && data.mode === undefined && needsPermissionModeSetup()) {
             setShowPermissionModeSetup(true);
           }
           // Load saved permission mode preference
