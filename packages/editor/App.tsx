@@ -128,6 +128,14 @@ const DEMO_PLAN_CONTENT = USE_DIFF_DEMO
 import { useCheckboxOverrides } from './hooks/useCheckboxOverrides';
 import { usePlanDiffViewAutoExit } from './hooks/usePlanDiffViewAutoExit';
 import { AppHeader } from './components/AppHeader';
+import { FolderAnnotationEmptyState } from './components/FolderAnnotationEmptyState';
+import {
+  COMPACT_PLAN_ARTIFACT,
+  openCompactPlanNavigator,
+  shouldPresentDesktopPlanPanel,
+  toggleCompactPlanNavigator,
+  type CompactPlanSurface,
+} from './compactPlanSurface';
 import {
   AnnotateAgentTerminalPanel,
   type AnnotateAgentTerminalPanelHandle,
@@ -520,7 +528,23 @@ const App: React.FC = () => {
   });
   const [showLookAndFeelAnnouncement, setShowLookAndFeelAnnouncement] = useState(needsLookAndFeelAnnouncement);
   const isMobile = useIsMobile();
-  const usesDocumentScroll = useCompactTouchLayout();
+  const isCompactTouchLayout = useCompactTouchLayout();
+  const usesDocumentScroll = isCompactTouchLayout;
+  const [compactPlanSurface, setCompactPlanSurface] = useState<CompactPlanSurface>(COMPACT_PLAN_ARTIFACT);
+  const [compactNavigatorTab, setCompactNavigatorTab] = useState<SidebarTab>('toc');
+  const isCompactNavigatorOpen = isCompactTouchLayout && compactPlanSurface.type === 'navigator';
+  const isCompactFilesSurfaceOpen =
+    isCompactNavigatorOpen && compactPlanSurface.type === 'navigator' && compactPlanSurface.tab === 'files';
+  const isCompactContentsSurfaceOpen =
+    isCompactNavigatorOpen && compactPlanSurface.type === 'navigator' && compactPlanSurface.tab === 'toc';
+  const effectivePanelOpen = shouldPresentDesktopPlanPanel(isCompactTouchLayout, isPanelOpen);
+
+  // Compact interactions never write into the remembered desktop rail/panel
+  // state. Crossing back to a fine-pointer workspace simply removes the
+  // transient foreground surface and reveals the incumbent desktop layout.
+  useEffect(() => {
+    if (!isCompactTouchLayout) setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
+  }, [isCompactTouchLayout]);
 
   const viewerRef = useRef<ViewerHandle>(null);
   // Desktop uses the main document element as its native scroll viewport.
@@ -622,20 +646,40 @@ const App: React.FC = () => {
   }, [wideModeType, sidebar.close, sidebar.open]);
 
   const openSidebarTab = useCallback((tab: SidebarTab) => {
+    if (isCompactTouchLayout) {
+      setCompactNavigatorTab(tab);
+      setCompactPlanSurface(openCompactPlanNavigator(tab));
+      return;
+    }
     if (wideModeType !== null) {
       exitWideMode({ restore: false, sidebarTab: tab, panelOpen: false });
       return;
     }
     sidebar.open(tab);
-  }, [exitWideMode, wideModeType, sidebar.open]);
+  }, [exitWideMode, isCompactTouchLayout, wideModeType, sidebar.open]);
 
   const toggleSidebarTab = useCallback((tab: SidebarTab) => {
+    if (isCompactTouchLayout) {
+      setCompactNavigatorTab(tab);
+      setCompactPlanSurface((surface) => toggleCompactPlanNavigator(surface, tab));
+      return;
+    }
     if (wideModeType !== null) {
       exitWideMode({ restore: false, sidebarTab: tab, panelOpen: false });
       return;
     }
     sidebar.toggleTab(tab);
-  }, [exitWideMode, wideModeType, sidebar.toggleTab]);
+  }, [exitWideMode, isCompactTouchLayout, wideModeType, sidebar.toggleTab]);
+
+  const closeCompactNavigator = useCallback((restoreFocus = true) => {
+    setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
+    if (!restoreFocus) return;
+    window.setTimeout(() => {
+      document
+        .getElementById('pn-compact-plan-navigator-trigger')
+        ?.focus({ preventScroll: true });
+    }, 0);
+  }, []);
 
   const handleAnnotationPanelToggle = useCallback(() => {
     if (wideModeType !== null) {
@@ -744,10 +788,10 @@ const App: React.FC = () => {
 
   // Clear diff view when switching away from versions tab
   useEffect(() => {
-    if (sidebar.activeTab === 'toc' && isPlanDiffActive) {
+    if ((sidebar.activeTab === 'toc' || isCompactContentsSurfaceOpen) && isPlanDiffActive) {
       setIsPlanDiffActive(false);
     }
-  }, [sidebar.activeTab]);
+  }, [isCompactContentsSurfaceOpen, isPlanDiffActive, sidebar.activeTab]);
 
   // Clear diff view on Escape key
   useEffect(() => {
@@ -1100,7 +1144,7 @@ const App: React.FC = () => {
   }, [vaultPath]);
 
   useEffect(() => {
-    if (sidebar.activeTab === 'files' && showFilesTab) {
+    if ((sidebar.activeTab === 'files' || isCompactFilesSurfaceOpen) && showFilesTab) {
       // Load regular dirs
       if (fileBrowserDirs.length > 0) {
         const regularLoaded = fileBrowser.dirs.filter(d => !d.isVault).map(d => d.path);
@@ -1114,7 +1158,7 @@ const App: React.FC = () => {
         fileBrowser.addVaultDir(vaultPath);
       }
     }
-  }, [sidebar.activeTab, showFilesTab, fileBrowserDirs, vaultPath]);
+  }, [fileBrowserDirs, isCompactFilesSurfaceOpen, showFilesTab, sidebar.activeTab, vaultPath]);
 
   const buildCurrentMessageState = React.useCallback((): MessageAnnotationState | null => {
     if (annotateSource !== 'message' || !selectedMessageId) return null;
@@ -1368,7 +1412,9 @@ const App: React.FC = () => {
     const filePaths = new Set(allAnnotationCounts.keys());
     if (filePaths.size === 0) return;
     // Open sidebar to the files tab so the flash is visible
-    if (!sidebar.isOpen || sidebar.activeTab !== 'files') {
+    if (isCompactTouchLayout
+      ? !isCompactFilesSurfaceOpen
+      : (!sidebar.isOpen || sidebar.activeTab !== 'files')) {
       openSidebarTab('files');
     }
     // Cancel any pending clear from a previous flash
@@ -1379,7 +1425,7 @@ const App: React.FC = () => {
       setHighlightedFiles(filePaths);
       flashTimerRef.current = setTimeout(() => setHighlightedFiles(undefined), 1200);
     });
-  }, [allAnnotationCounts, openSidebarTab, sidebar, hasFileAnnotations]);
+  }, [allAnnotationCounts, isCompactFilesSurfaceOpen, isCompactTouchLayout, openSidebarTab, sidebar]);
 
   // Context-aware back label for linked doc navigation
   const backLabel = annotateSource === 'folder' ? 'file list'
@@ -3659,7 +3705,7 @@ const App: React.FC = () => {
 
   // Opening the Ask AI surface with a provider selected is the other explicit
   // gesture that should surface the provider's real model list.
-  const aiSurfaceOpen = isPanelOpen && rightSidebarTab === 'ai';
+  const aiSurfaceOpen = effectivePanelOpen && rightSidebarTab === 'ai';
   useEffect(() => {
     if (!aiAvailable || !aiSurfaceOpen) return;
     activateAIProvider(aiConfig.providerId);
@@ -4233,6 +4279,131 @@ const App: React.FC = () => {
     !isSharedSession &&
     !goalSetupMode &&
     !showPermissionModeSetup;
+  const compactNavigatorTabs: SidebarTab[] = [
+    ...(hasTocEntries ? ['toc' as const] : []),
+    ...(!isHtmlSurface && activeDiffVersionInfo !== null && activeDiffVersionInfo.totalVersions > 1
+      ? ['versions' as const]
+      : []),
+    ...(annotateSource === 'message' && recentMessages.length > 1 ? ['messages' as const] : []),
+    ...(showFilesTab && !archive.archiveMode ? ['files' as const] : []),
+    ...(isApiMode && !annotateMode && !goalSetupMode ? ['archive' as const] : []),
+  ];
+  const compactNavigatorAvailable = !goalSetupMode && compactNavigatorTabs.length > 0;
+  const effectiveCompactNavigatorTab = compactNavigatorTabs.includes(compactNavigatorTab)
+    ? compactNavigatorTab
+    : (compactNavigatorTabs[0] ?? 'toc');
+
+  useEffect(() => {
+    if (isCompactNavigatorOpen && !compactNavigatorAvailable) {
+      closeCompactNavigator(false);
+    }
+  }, [closeCompactNavigator, compactNavigatorAvailable, isCompactNavigatorOpen]);
+
+  const handleNavigatorTabChange = (tab: SidebarTab) => {
+    if (isCompactTouchLayout) openSidebarTab(tab);
+    else toggleSidebarTab(tab);
+    if (tab === 'archive' && !archive.archiveMode) archive.fetchPlans();
+  };
+
+  const handleNavigatorFileSelect = (...args: Parameters<typeof handleFileBrowserSelect>) => {
+    // Plan/review linked-doc browsing still swaps the root document under the
+    // editor. Folder mode snapshots the active file first.
+    if (isEditingMarkdown && annotateSource !== 'folder') {
+      toast('Finish editing first', { description: 'Use "Done editing" before opening files.' });
+      return;
+    }
+    // Wider annotatable types are view-only. Switching to one mid-edit would
+    // silently downgrade "Done editing" to feedback-only edits.
+    if (isEditingMarkdown && !isSourceSaveFilePath(args[0])) {
+      toast('Finish editing first', { description: 'Use "Done editing" before opening non-editable files.' });
+      return;
+    }
+    handleFileBrowserSelect(...args);
+    if (isCompactTouchLayout) closeCompactNavigator();
+  };
+
+  const handleNavigatorArchiveSelect = (...args: Parameters<typeof archive.select>) => {
+    if (isEditingMarkdown) {
+      toast('Finish editing first', { description: 'Use "Done editing" before browsing archived plans.' });
+      return;
+    }
+    archive.select(...args);
+    if (isCompactTouchLayout) closeCompactNavigator();
+  };
+
+  const handleNavigatorMessageSelect = (messageId: string) => {
+    handleSelectMessage(messageId);
+    if (isCompactTouchLayout) closeCompactNavigator();
+  };
+
+  const handleNavigatorDiffActivate = () => {
+    handleActivatePlanDiff();
+    if (isCompactTouchLayout && !isEditingMarkdown) closeCompactNavigator();
+  };
+
+  const renderPlanSidebar = (presentation: 'desktop' | 'overlay') => {
+    const compact = presentation === 'overlay';
+    return (
+      <SidebarContainer
+        presentation={presentation}
+        activeTab={compact ? effectiveCompactNavigatorTab : sidebar.activeTab}
+        onTabChange={handleNavigatorTabChange}
+        onClose={compact ? closeCompactNavigator : sidebar.close}
+        width={compact ? '100%' : `var(--toc-w, ${tocResize.width}px)`}
+        showAgentTerminalButton={!compact && showAgentTerminalControls}
+        isAgentTerminalOpen={isAgentTerminalOpen}
+        isAgentTerminalRunning={isAgentTerminalRunning}
+        onToggleAgentTerminal={toggleAgentTerminal}
+        showContentsTab={!compact || hasTocEntries}
+        blocks={blocks}
+        annotations={annotations}
+        activeSection={activeSection}
+        onTocNavigate={(blockId) => {
+          handleTocNavigate(blockId);
+          if (compact) closeCompactNavigator();
+        }}
+        linkedDocFilepath={linkedDocHook.filepath}
+        onLinkedDocBack={linkedDocHook.isActive
+          ? () => {
+              handleLinkedDocBack();
+              if (compact) closeCompactNavigator();
+            }
+          : undefined}
+        backLabel={backLabel}
+        showFilesTab={showFilesTab && !archive.archiveMode}
+        fileAnnotationCounts={fileAnnotationCounts}
+        highlightedFiles={highlightedFiles}
+        fileEditStatuses={editableDocuments.fileEditStatuses}
+        fileBrowser={fileBrowser}
+        onFilesSelectFile={handleNavigatorFileSelect}
+        onFilesFetchAll={() => fileBrowser.fetchAll(fileBrowserDirs)}
+        onFilesRetryVaultDir={(vaultPath) => fileBrowser.addVaultDir(vaultPath)}
+        hasFileAnnotations={hasFileAnnotations}
+        showVersionsTab={!isHtmlSurface && activeDiffVersionInfo !== null && activeDiffVersionInfo.totalVersions > 1}
+        versionInfo={activeDiffVersionInfo}
+        versions={planDiff.versions}
+        selectedBaseVersion={planDiff.diffBaseVersion}
+        onSelectBaseVersion={handleSelectBaseVersion}
+        isPlanDiffActive={isPlanDiffActive}
+        hasPreviousVersion={planDiff.hasPreviousVersion}
+        onActivatePlanDiff={handleNavigatorDiffActivate}
+        isLoadingVersions={planDiff.isLoadingVersions}
+        isSelectingVersion={planDiff.isSelectingVersion}
+        fetchingVersion={planDiff.fetchingVersion}
+        onFetchVersions={planDiff.fetchVersions}
+        showArchiveTab={isApiMode && !annotateMode && !goalSetupMode}
+        archivePlans={archive.plans}
+        selectedArchiveFile={archive.selectedFile}
+        onArchiveSelect={handleNavigatorArchiveSelect}
+        isLoadingArchive={archive.isLoading}
+        showMessagesTab={annotateSource === 'message' && recentMessages.length > 1}
+        messages={recentMessages}
+        selectedMessageId={selectedMessageId}
+        onSelectMessage={handleNavigatorMessageSelect}
+        messageAnnotationCounts={activeMessageAnnotationCounts}
+      />
+    );
+  };
   // Mobile Safari paints the browser-controls backdrop from the document/app
   // canvas, not from the nested document scroller. Keep that canvas continuous
   // with the active surface so a card-backed plan does not end in a dark band.
@@ -4260,6 +4431,10 @@ const App: React.FC = () => {
           htmlSurface={isHtmlSurface}
           htmlToolsHidden={htmlToolsHidden}
           onToggleHtmlTools={() => setHtmlToolsHidden((v) => !v)}
+          compactTouchLayout={isCompactTouchLayout}
+          compactNavigatorAvailable={compactNavigatorAvailable}
+          compactNavigatorOpen={isCompactNavigatorOpen}
+          onCompactNavigatorToggle={() => toggleSidebarTab(effectiveCompactNavigatorTab)}
           isApiMode={isApiMode}
           annotateMode={annotateMode}
           archiveMode={archive.archiveMode}
@@ -4272,9 +4447,9 @@ const App: React.FC = () => {
           origin={origin}
           isSubmitting={isSubmitting}
           isExiting={isExiting}
-          isPanelOpen={isPanelOpen && rightSidebarTab === 'annotations'}
+          isPanelOpen={effectivePanelOpen && rightSidebarTab === 'annotations'}
           aiAvailable={canUseAskAI}
-          isAIChatOpen={isPanelOpen && rightSidebarTab === 'ai'}
+          isAIChatOpen={effectivePanelOpen && rightSidebarTab === 'ai'}
           aiHasMessages={visibleAIMessages.length > 0}
           hasAnyAnnotations={hasAnyAnnotations || hasDirectEdits || hasSavedFileChanges}
           annotationCount={feedbackAnnotationCount}
@@ -4325,6 +4500,8 @@ const App: React.FC = () => {
           bearConfigured={getBearSettings().enabled}
           octarineConfigured={isOctarineConfigured()}
         />
+
+        {isCompactNavigatorOpen && compactNavigatorAvailable && renderPlanSidebar('overlay')}
 
         {/* Linked document error banner */}
         {linkedDocHook.error && (
@@ -4421,7 +4598,7 @@ const App: React.FC = () => {
             </div>
           )}
           {/* Left Sidebar: collapsed tab flags (when sidebar is closed) */}
-          {wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && !htmlChromeHidden && (
+          {!isCompactTouchLayout && wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && !htmlChromeHidden && (
             <SidebarTabs
               activeTab={sidebar.activeTab}
               onToggleTab={toggleSidebarTab}
@@ -4440,83 +4617,9 @@ const App: React.FC = () => {
           )}
 
           {/* Left Sidebar: open state (TOC or Version Browser) */}
-          {sidebar.isOpen && !goalSetupMode && (
+          {!isCompactTouchLayout && sidebar.isOpen && !goalSetupMode && (
             <div className="contents group/sidebar">
-              <SidebarContainer
-                activeTab={sidebar.activeTab}
-                onTabChange={(tab) => {
-                  toggleSidebarTab(tab);
-                  if (tab === 'archive' && !archive.archiveMode) archive.fetchPlans();
-                }}
-                onClose={sidebar.close}
-                width={`var(--toc-w, ${tocResize.width}px)`}
-                showAgentTerminalButton={showAgentTerminalControls}
-                isAgentTerminalOpen={isAgentTerminalOpen}
-                isAgentTerminalRunning={isAgentTerminalRunning}
-                onToggleAgentTerminal={toggleAgentTerminal}
-                blocks={blocks}
-                annotations={annotations}
-                activeSection={activeSection}
-                onTocNavigate={handleTocNavigate}
-                linkedDocFilepath={linkedDocHook.filepath}
-                onLinkedDocBack={linkedDocHook.isActive ? handleLinkedDocBack : undefined}
-                backLabel={backLabel}
-                showFilesTab={showFilesTab && !archive.archiveMode}
-                fileAnnotationCounts={fileAnnotationCounts}
-                highlightedFiles={highlightedFiles}
-                fileEditStatuses={editableDocuments.fileEditStatuses}
-                fileBrowser={fileBrowser}
-                onFilesSelectFile={(...args: Parameters<typeof handleFileBrowserSelect>) => {
-                  // Plan/review linked-doc browsing still swaps the root document
-                  // under the editor. Folder mode snapshots the active file first.
-                  if (isEditingMarkdown && annotateSource !== 'folder') {
-                    toast('Finish editing first', { description: 'Use "Done editing" before opening files.' });
-                    return;
-                  }
-                  // Mid-edit, only files that can themselves be edited (source-save
-                  // capable: .md/.mdx/.txt) may be opened. Wider annotatable types
-                  // (.yaml/.json/…) are view-only — switching to one mid-edit would
-                  // silently downgrade "Done editing" to feedback-only edits.
-                  if (isEditingMarkdown && !isSourceSaveFilePath(args[0])) {
-                    toast('Finish editing first', { description: 'Use "Done editing" before opening non-editable files.' });
-                    return;
-                  }
-                  handleFileBrowserSelect(...args);
-                }}
-                onFilesFetchAll={() => fileBrowser.fetchAll(fileBrowserDirs)}
-                onFilesRetryVaultDir={(vaultPath) => fileBrowser.addVaultDir(vaultPath)}
-                hasFileAnnotations={hasFileAnnotations}
-                showVersionsTab={!isHtmlSurface && activeDiffVersionInfo !== null && activeDiffVersionInfo.totalVersions > 1}
-                versionInfo={activeDiffVersionInfo}
-                versions={planDiff.versions}
-                selectedBaseVersion={planDiff.diffBaseVersion}
-                onSelectBaseVersion={handleSelectBaseVersion}
-                isPlanDiffActive={isPlanDiffActive}
-                hasPreviousVersion={planDiff.hasPreviousVersion}
-                onActivatePlanDiff={handleActivatePlanDiff}
-                isLoadingVersions={planDiff.isLoadingVersions}
-                isSelectingVersion={planDiff.isSelectingVersion}
-                fetchingVersion={planDiff.fetchingVersion}
-                onFetchVersions={planDiff.fetchVersions}
-                showArchiveTab={isApiMode && !annotateMode && !goalSetupMode}
-                archivePlans={archive.plans}
-                selectedArchiveFile={archive.selectedFile}
-                onArchiveSelect={(...args: Parameters<typeof archive.select>) => {
-                  // Archive selection swaps the markdown state under the open
-                  // editor — block it rather than corrupt the edit session.
-                  if (isEditingMarkdown) {
-                    toast('Finish editing first', { description: 'Use "Done editing" before browsing archived plans.' });
-                    return;
-                  }
-                  archive.select(...args);
-                }}
-                isLoadingArchive={archive.isLoading}
-                showMessagesTab={annotateSource === 'message' && recentMessages.length > 1}
-                messages={recentMessages}
-                selectedMessageId={selectedMessageId}
-                onSelectMessage={handleSelectMessage}
-                messageAnnotationCounts={activeMessageAnnotationCounts}
-              />
+              {renderPlanSidebar('desktop')}
               <ResizeHandle {...tocResize.handleProps} className="hidden lg:block z-[55]" side="left" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={sidebar.close} />
             </div>
           )}
@@ -4626,12 +4729,10 @@ const App: React.FC = () => {
               )}
               {/* Folder annotation empty state — shown before user picks a file */}
               {annotateSource === 'folder' && !markdown && !linkedDocHook.isActive && !goalSetupMode && (
-                <div className="w-full flex justify-center">
-                  <div className="w-full max-w-3xl p-12 text-center text-muted-foreground">
-                    <p className="text-lg font-medium mb-2">Select a file to annotate</p>
-                    <p className="text-sm">Pick a markdown or HTML file from the sidebar to begin.</p>
-                  </div>
-                </div>
+                <FolderAnnotationEmptyState
+                  compactTouchLayout={isCompactTouchLayout}
+                  onChooseFile={() => openSidebarTab('files')}
+                />
               )}
               {/* Normal Plan View — always mounted, hidden during diff mode */}
               <div className={`w-full relative ${isHtmlSurface ? 'flex-1 flex flex-col' : `flex justify-center${isEditingMarkdown ? ' flex-1 min-h-0' : ''}`}`} style={{ display: goalSetupMode || (isPlanDiffActive && planDiff.diffBlocks) || (annotateSource === 'folder' && !markdown && !linkedDocHook.isActive) ? 'none' : undefined }}>
@@ -4847,7 +4948,7 @@ const App: React.FC = () => {
                             // only changed via handleSelectMessage), so findIndex is >= 0.
                             current: recentMessages.findIndex((m) => m.messageId === selectedMessageId) + 1,
                             total: recentMessages.length,
-                            onOpen: () => sidebar.open('messages'),
+                            onOpen: () => openSidebarTab('messages'),
                           }
                         : undefined
                     }
@@ -4868,11 +4969,11 @@ const App: React.FC = () => {
               ancestor (`contents` = no layout box). */}
           <div className="contents group/sidebar">
           {/* Resize Handle */}
-          {isPanelOpen && wideModeType === null && !goalSetupMode && (rightSidebarTab === 'annotations' || canUseAskAI) && <ResizeHandle {...panelResize.handleProps} className="hidden md:block z-[55]" side="right" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsPanelOpen(false)} />}
+          {effectivePanelOpen && wideModeType === null && !goalSetupMode && (rightSidebarTab === 'annotations' || canUseAskAI) && <ResizeHandle {...panelResize.handleProps} className="hidden md:block z-[55]" side="right" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsPanelOpen(false)} />}
 
           {/* Annotation Panel */}
           <AnnotationPanel
-            isOpen={isPanelOpen && rightSidebarTab === 'annotations' && wideModeType === null && !goalSetupMode}
+            isOpen={effectivePanelOpen && rightSidebarTab === 'annotations' && wideModeType === null && !goalSetupMode}
             blocks={blocks}
             annotations={allAnnotations}
             selectedId={selectedAnnotationId ?? selectedCodeAnnotationId}
@@ -4901,7 +5002,7 @@ const App: React.FC = () => {
             onOtherFileAnnotationsClick={handleFlashAnnotatedFiles}
             readOnly={documentReadOnly}
           />
-          {isPanelOpen && rightSidebarTab === 'ai' && wideModeType === null && !goalSetupMode && canUseAskAI && (
+          {effectivePanelOpen && rightSidebarTab === 'ai' && wideModeType === null && !goalSetupMode && canUseAskAI && (
             <aside
               data-annotation-panel="true"
               className={`border-l border-border/50 bg-card flex flex-col flex-shrink-0 ${

@@ -528,7 +528,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
         {showFilterInput ? (
           <div
             onBlur={handleFilterBlur}
-            className="flex h-6 items-center gap-1.5 rounded-sm bg-muted/25 px-1.5 text-muted-foreground focus-within:bg-muted/40"
+            className="file-browser-filter-field flex h-6 items-center gap-1.5 rounded-sm bg-muted/25 px-1.5 text-muted-foreground focus-within:bg-muted/40"
           >
             <Search size={12} className="shrink-0 text-muted-foreground/55" aria-hidden="true" />
             <input
@@ -556,7 +556,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({
                   setFilterQuery("");
                   inputRef.current?.focus();
                 }}
-                className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:bg-muted"
+                className="file-browser-filter-clear flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground/55 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:bg-muted"
                 aria-label="Clear file filter"
                 title="Clear file filter"
               >

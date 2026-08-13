@@ -1,7 +1,7 @@
 # Spec: Mobile Plan Shell and Navigation — Phase 2B
 
 Date: 2026-08-13
-Status: Proposed; implementation begins after the Phase 2A filename micro-gate
+Status: In progress; checkpoint 2B.1 ready for physical iPhone/iPad review while the Phase 2A filename micro-gate continues in parallel
 Depends on: Phase 1 mobile platform foundation and Phase 2A mobile Code Review shell
 Research: [`SPIKE-mobile-web-compatibility-20260812.md`](../research/SPIKE-mobile-web-compatibility-20260812.md)
 Sequence: [`synthesis-mobile-feedback-triage-20260812.md`](../research/synthesis-mobile-feedback-triage-20260812.md)

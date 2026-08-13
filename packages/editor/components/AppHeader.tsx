@@ -19,6 +19,12 @@ interface AppHeaderProps {
   htmlSurface?: boolean;
   htmlToolsHidden?: boolean;
   onToggleHtmlTools?: () => void;
+  /** Compact touch layouts replace the brand mark with a task-focused entry
+   * into the full-stage document navigator. Desktop never receives it. */
+  compactTouchLayout?: boolean;
+  compactNavigatorAvailable?: boolean;
+  compactNavigatorOpen?: boolean;
+  onCompactNavigatorToggle?: () => void;
   // Mode flags (stable after mount)
   isApiMode: boolean;
   annotateMode: boolean;
@@ -101,6 +107,10 @@ export const AppHeader = React.memo<AppHeaderProps>(({
   htmlSurface,
   htmlToolsHidden,
   onToggleHtmlTools,
+  compactTouchLayout = false,
+  compactNavigatorAvailable = false,
+  compactNavigatorOpen = false,
+  onCompactNavigatorToggle,
   isApiMode,
   annotateMode,
   archiveMode,
@@ -172,7 +182,14 @@ export const AppHeader = React.memo<AppHeaderProps>(({
       className={`h-12 flex items-center justify-between px-2 md:px-4 border-b border-border/50 bg-card/50 backdrop-blur-xl z-[50] ${sticky ? 'sticky top-0' : 'relative'}`}
     >
       <div className="flex items-center gap-2">
-        <AppHeaderLogo />
+        {compactTouchLayout && compactNavigatorAvailable && onCompactNavigatorToggle ? (
+          <CompactPlanNavigatorTrigger
+            open={compactNavigatorOpen}
+            onToggle={onCompactNavigatorToggle}
+          />
+        ) : (
+          <AppHeaderLogo />
+        )}
         {htmlSurface && onToggleHtmlTools && (
           <button
             type="button"
@@ -312,7 +329,7 @@ export const AppHeader = React.memo<AppHeaderProps>(({
         )}
 
         {/* Annotations panel toggle */}
-        {!goalSetupMode && (
+        {!compactTouchLayout && !goalSetupMode && (
           <button
             onClick={onAnnotationPanelToggle}
             className={`relative p-1.5 rounded-md text-xs font-medium transition-all ${
@@ -332,7 +349,7 @@ export const AppHeader = React.memo<AppHeaderProps>(({
             )}
           </button>
         )}
-        {!goalSetupMode && aiAvailable && (
+        {!compactTouchLayout && !goalSetupMode && aiAvailable && (
           <button
             onClick={onAIChatToggle}
             className={`relative p-1.5 rounded-md text-xs font-medium transition-all ${
@@ -391,6 +408,37 @@ export const AppHeader = React.memo<AppHeaderProps>(({
     </header>
   );
 });
+
+export const CompactPlanNavigatorTrigger = ({
+  open,
+  onToggle,
+}: {
+  open: boolean;
+  onToggle: () => void;
+}) => (
+  <button
+    id="pn-compact-plan-navigator-trigger"
+    type="button"
+    onClick={onToggle}
+    data-pn-touch-target="true"
+    data-pn-touch-target-icon="true"
+    data-pn-compact-navigator-trigger="true"
+    className={`-ml-1 flex h-11 min-w-11 items-center gap-2 rounded-lg px-2 text-sm font-semibold tracking-tight outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/60 ${
+      open
+        ? 'bg-primary/15 text-primary'
+        : 'text-foreground hover:bg-muted'
+    }`}
+    aria-label={open ? 'Close plan navigator' : 'Open plan navigator'}
+    aria-expanded={open}
+    aria-controls="pn-compact-plan-navigator"
+    title={open ? 'Close navigator' : 'Navigate plan'}
+  >
+    <svg className="h-[18px] w-[18px] flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 6h14M5 12h14M5 18h9" />
+    </svg>
+    <span>Plan</span>
+  </button>
+);
 
 const AppHeaderLogo = () => (
   <div className="flex items-center gap-2 md:gap-3">
