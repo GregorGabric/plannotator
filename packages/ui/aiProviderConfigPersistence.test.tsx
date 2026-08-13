@@ -98,14 +98,15 @@ afterAll(async () => {
 });
 
 describe('useAIProviderConfig persistence', () => {
-  test.skipIf(!hasDom)('persists an auto-resolved provider without persisting its fallback model', async () => {
+  test.skipIf(!hasDom)('does not persist an automatically resolved provider or fallback model', async () => {
     const getResult = await mountHarness(fallbackOnlyProviders);
 
     expect(getResult().aiConfig.providerId).toBe('codex-local');
     expect(getResult().aiConfig.model).toBe('gpt-5.6-sol');
 
     const persisted = getAIProviderSettings();
-    expect(persisted.providerId).toBe('codex-local');
+    expect(persisted.providerId).toBeNull();
+    expect(persisted.providerByOrigin).toEqual({});
     expect(persisted.preferredModels['codex-local']).toBeUndefined();
   });
 

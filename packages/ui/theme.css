@@ -719,7 +719,7 @@ body {
   box-sizing: border-box;
   height: 100vh;
   height: 100dvh;
-  height: var(--pn-viewport-height, 100dvh);
+  height: var(--pn-viewport-height, 100vh);
   padding-top: var(--pn-safe-top);
   padding-right: var(--pn-safe-right);
   padding-left: var(--pn-safe-left);
@@ -740,7 +740,7 @@ body {
 
 .pn-viewport-bounded {
   max-height: calc(
-    var(--pn-viewport-height, 100dvh) - var(--pn-safe-top) - var(--pn-safe-bottom)
+    var(--pn-viewport-height, 100vh) - var(--pn-safe-top) - var(--pn-safe-bottom)
   );
 }
 

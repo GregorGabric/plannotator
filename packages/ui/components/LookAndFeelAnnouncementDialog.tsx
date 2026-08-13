@@ -121,7 +121,7 @@ export const LookAndFeelAnnouncementDialog: React.FC<LookAndFeelAnnouncementDial
         className="flex w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
         style={{
           maxHeight:
-            'calc(var(--pn-viewport-height, 100dvh) - max(0.75rem, var(--pn-safe-top, 0px)) - max(0.75rem, var(--pn-safe-bottom, 0px)))',
+            'calc(var(--pn-viewport-height, 100vh) - max(0.75rem, var(--pn-safe-top, 0px)) - max(0.75rem, var(--pn-safe-bottom, 0px)))',
         }}
       >
         <header className="border-b border-border px-4 py-4 sm:px-6 sm:py-5">
