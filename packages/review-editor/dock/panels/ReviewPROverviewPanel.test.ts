@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PRContext } from '@plannotator/shared/pr-types';
-import { getPRDiscussionCount } from './ReviewPROverviewPanel';
+import { getPRDiscussionCount } from './prDiscussion';
 
 function makeContext(overrides: Partial<PRContext> = {}): PRContext {
   return {

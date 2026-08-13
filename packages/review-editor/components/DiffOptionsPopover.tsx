@@ -131,7 +131,7 @@ export const DiffOptionsPopover: React.FC<DiffOptionsPopoverProps> = ({
         <Popover.Positioner align="end" sideOffset={6} className="z-50">
           <Popover.Popup
             data-pn-compact-diff-options={compactTouchLayout || undefined}
-            className="w-[min(18rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100dvh)-2rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto bg-popover text-popover-foreground border border-border rounded-lg shadow-lg origin-[var(--transform-origin)] transition-opacity data-starting-style:opacity-0 data-ending-style:opacity-0"
+            className="w-[min(18rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100vh)-2rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto bg-popover text-popover-foreground border border-border rounded-lg shadow-lg origin-[var(--transform-origin)] transition-opacity data-starting-style:opacity-0 data-ending-style:opacity-0"
           >
           <div className="p-2.5 space-y-2">
             <div className="space-y-1.5">

@@ -342,7 +342,7 @@ export function ReviewSubmissionDialog({
       open={isOpen}
       disablePointerDismissal
       onOpenChange={(open) => {
-        if (!open) onCancel();
+        if (!open && !isSubmitting) onCancel();
       }}
     >
       <DialogContent

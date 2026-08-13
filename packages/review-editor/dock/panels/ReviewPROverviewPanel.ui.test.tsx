@@ -4,9 +4,12 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { IDockviewPanelProps } from 'dockview-react';
 import type { PRContext, PRMetadata } from '@plannotator/shared/pr-types';
 import { ReviewStateProvider, type ReviewState } from '../ReviewStateContext';
-import { ReviewPROverviewPanel } from './ReviewPROverviewPanel';
 
 const hasDom = typeof document !== 'undefined';
+const overviewModule = hasDom ? await import('./ReviewPROverviewPanel') : null;
+// SAFETY: DOM-gated tests never render this component when the dynamic import is absent.
+const ReviewPROverviewPanel = overviewModule?.ReviewPROverviewPanel as
+  typeof import('./ReviewPROverviewPanel')['ReviewPROverviewPanel'];
 let root: Root | null = null;
 let host: HTMLElement | null = null;
 

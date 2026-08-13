@@ -175,7 +175,7 @@ export function StackedPRLabel({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner side="bottom" align="start" sideOffset={6} className="z-50">
-          <Popover.Popup className="w-[min(20rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100dvh)-2rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto bg-popover text-popover-foreground border border-border rounded shadow-lg origin-[var(--transform-origin)] transition-opacity data-starting-style:opacity-0 data-ending-style:opacity-0">
+          <Popover.Popup className="w-[min(20rem,calc(100vw-1rem))] max-h-[calc(var(--pn-viewport-height,100vh)-2rem-var(--pn-safe-top)-var(--pn-safe-bottom))] overflow-y-auto bg-popover text-popover-foreground border border-border rounded shadow-lg origin-[var(--transform-origin)] transition-opacity data-starting-style:opacity-0 data-ending-style:opacity-0">
           {/* Section 1: Stack Tree */}
           <div className="px-3 pt-3 pb-2">
             <div className="flex items-center justify-between mb-2">

@@ -7,6 +7,7 @@ import { PRCommentsTab } from '../../components/PRCommentsTab';
 import { PRChecksTab } from '../../components/PRChecksTab';
 import { OverlayScrollArea } from '@plannotator/ui/components/OverlayScrollArea';
 import { getMRLabel } from '@plannotator/shared/pr-types';
+import { getPRDiscussionCount } from './prDiscussion';
 
 /**
  * Combined PR overview — one dock panel that shows the PR summary, checks, and
@@ -26,13 +27,6 @@ function RegionHeader({ children, action }: { children: React.ReactNode; action?
       {action}
     </div>
   );
-}
-
-/** Matches the PR comments timeline's inclusion rules. */
-export function getPRDiscussionCount(context: PRContext): number {
-  const visibleReviews = context.reviews.filter((review) => review.state !== 'COMMENTED' || review.body).length;
-  const visibleThreads = (context.reviewThreads ?? []).filter((thread) => thread.comments.length > 0).length;
-  return context.comments.length + visibleReviews + visibleThreads;
 }
 
 /**
