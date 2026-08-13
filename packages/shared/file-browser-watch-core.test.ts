@@ -19,7 +19,7 @@ interface Recorded {
 
 function makeRegistry(options?: {
 	teardownGraceMs?: number;
-	contentWatchBackend?: "auto" | "chokidar";
+	contentWatchBackend?: "auto" | "chokidar" | "native";
 	nativeWatch?: unknown;
 }) {
 	const recorded = new Map<string, Recorded>();
@@ -68,7 +68,10 @@ describe("file-browser-watch-core", () => {
 		const throwingNativeWatch = () => {
 			throw new Error("recursive watch unavailable");
 		};
-		const { registry, recorded, subscribe } = makeRegistry({ nativeWatch: throwingNativeWatch });
+		const { registry, recorded, subscribe } = makeRegistry({
+			contentWatchBackend: "native",
+			nativeWatch: throwingNativeWatch,
+		});
 		try {
 			subscribe("client", dirTarget(root));
 			// Let the deferred warmup run and chokidar's scan settle.
@@ -82,7 +85,7 @@ describe("file-browser-watch-core", () => {
 		}
 	});
 
-	test.skipIf(process.platform === "linux")(
+	test(
 		"a native-watch runtime error swaps to chokidar and forces a catch-up refresh",
 		async () => {
 			const root = makeTempDir();
@@ -94,7 +97,10 @@ describe("file-browser-watch-core", () => {
 				created = emitter;
 				return emitter;
 			}) as unknown as typeof import("node:fs").watch;
-			const { registry, recorded, subscribe } = makeRegistry({ nativeWatch: fakeNativeWatch });
+			const { registry, recorded, subscribe } = makeRegistry({
+				contentWatchBackend: "native",
+				nativeWatch: fakeNativeWatch,
+			});
 			try {
 				subscribe("client", dirTarget(root));
 				await waitFor(() => created !== null);
@@ -102,7 +108,9 @@ describe("file-browser-watch-core", () => {
 				// The swap itself forces one refresh so changes made during the
 				// gap are not lost.
 				await waitFor(() => (recorded.get("client")?.events.length ?? 0) > 0);
-				// And the chokidar replacement keeps delivering real events.
+				// And the chokidar replacement keeps delivering real events, with the
+				// swap counted as a second construction in the diagnostics.
+				expect(registry.diagnostics().contentWatcherStarts).toBe(2);
 				await Bun.sleep(250);
 				const before = recorded.get("client")?.events.length ?? 0;
 				writeFileSync(join(root, "after-swap.md"), "x");

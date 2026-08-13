@@ -16,7 +16,11 @@
  * 3. On macOS and Windows the content watcher is the platform's native
  *    recursive fs.watch (measured at ~0ms for the same tree). chokidar
  *    remains the Linux backend (recursive fs.watch is unreliable there) and
- *    the runtime fallback whenever native watching fails.
+ *    the runtime fallback whenever native watching fails. That fallback is a
+ *    correctness fallback, not a performance one: the deferred warmup moves
+ *    the scan off the first request, but a chokidar scan of a large tree
+ *    still saturates the event loop while it runs. The reconnect grace keeps
+ *    that a once-per-session cost instead of a per-reconnect one.
  *
  * The registry is transport-generic: the Bun runtime subscribes
  * ReadableStream controllers, the Pi runtime subscribes node:http responses.
@@ -49,8 +53,12 @@ export interface FileBrowserWatchRegistryOptions<S> {
 	/** Reconnect grace before an unsubscribed watcher is torn down. */
 	teardownGraceMs?: number;
 	debounceMs?: number;
-	/** Tests force "chokidar" to exercise the fallback backend everywhere. */
-	contentWatchBackend?: "auto" | "chokidar";
+	/**
+	 * Tests force "chokidar" to exercise the fallback backend everywhere, or
+	 * "native" to exercise the native branch and its fallback paths on
+	 * platforms where auto would pick chokidar (Linux CI).
+	 */
+	contentWatchBackend?: "auto" | "chokidar" | "native";
 	/** Test seam for native-watch failure modes. Defaults to fs.watch. */
 	nativeWatch?: typeof nodeFsWatch;
 }
@@ -140,6 +148,7 @@ export function createFileBrowserWatchRegistry<S>(
 	const debounceMs = () => options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
 
 	function broadcast(entry: WatchEntry<S>, reason: "files" | "git"): void {
+		const hadSubscribers = entry.subscribers.size > 0;
 		for (const [subscriber, clientDirPath] of entry.subscribers) {
 			const event: FileBrowserChangeEvent = {
 				type: "changed",
@@ -155,6 +164,10 @@ export function createFileBrowserWatchRegistry<S>(
 			}
 			if (!delivered) entry.subscribers.delete(subscriber);
 		}
+		// Dead subscribers discovered here never call release(), so an entry
+		// emptied by delivery failures must still enter the teardown grace or
+		// it lives until closeAll.
+		if (hadSubscribers && entry.subscribers.size === 0) scheduleTeardown(entry);
 	}
 
 	function scheduleBroadcast(entry: WatchEntry<S>, reason: "files" | "git"): void {
@@ -200,7 +213,7 @@ export function createFileBrowserWatchRegistry<S>(
 		}
 
 		const backend = options.contentWatchBackend ?? "auto";
-		if (backend === "auto" && nativeRecursiveSupported()) {
+		if (backend === "native" || (backend === "auto" && nativeRecursiveSupported())) {
 			try {
 				const nativeWatch = options.nativeWatch ?? nodeFsWatch;
 				const watcher = nativeWatch(target.watchPath, { recursive: true, persistent: true }, (_event, filename) => {
@@ -214,7 +227,7 @@ export function createFileBrowserWatchRegistry<S>(
 						// A watcher event must never take down the server.
 					}
 				});
-				watcher.on("error", () => {
+				watcher.on("error", (error) => {
 					// Native watching failed at runtime. Swap to the chokidar backend
 					// and force one refresh so anything that changed during the swap
 					// window is not lost.
@@ -224,14 +237,23 @@ export function createFileBrowserWatchRegistry<S>(
 						// Already closed.
 					}
 					if (isCurrent(entry) && entry.contentWatcher === watcher) {
+						console.error(
+							`[plannotator] Native file watching failed for ${target.watchPath}; switching to the fallback watcher:`,
+							error,
+						);
+						contentWatcherStarts += 1;
 						entry.contentWatcher = startChokidarContentWatcher(entry, target);
 						scheduleBroadcast(entry, "files");
 					}
 				});
 				entry.contentWatcher = watcher;
 				return;
-			} catch {
+			} catch (error) {
 				// Native creation failed. Fall through to chokidar.
+				console.error(
+					`[plannotator] Native file watching unavailable for ${target.watchPath}; using the fallback watcher:`,
+					error,
+				);
 			}
 		}
 		entry.contentWatcher = startChokidarContentWatcher(entry, target);
@@ -241,9 +263,10 @@ export function createFileBrowserWatchRegistry<S>(
 		if (!isCurrent(entry)) return;
 		try {
 			startContentWatcher(entry, target);
-		} catch {
-			// A watcher that cannot start must not take down the stream; the
-			// subscriber simply gets no live refreshes.
+		} catch (error) {
+			// A watcher that cannot start must not take down the stream, but the
+			// subscriber is now living without live refreshes; say so.
+			console.error(`[plannotator] File watcher failed to start for ${target.watchPath}:`, error);
 		}
 		try {
 			const gitWatchPaths = target.watchGit
@@ -264,8 +287,9 @@ export function createFileBrowserWatchRegistry<S>(
 				entry.gitWatcher.on("all", () => scheduleBroadcast(entry, "git"));
 				entry.gitWatcher.on("error", () => scheduleBroadcast(entry, "git"));
 			}
-		} catch {
+		} catch (error) {
 			// Same containment for the git metadata watcher.
+			console.error(`[plannotator] Git metadata watcher failed to start for ${target.watchPath}:`, error);
 		}
 	}
 
@@ -277,14 +301,23 @@ export function createFileBrowserWatchRegistry<S>(
 		entry.debounceTimer = null;
 		entry.warmupTimer = null;
 		entry.teardownTimer = null;
-		void entry.contentWatcher?.close();
-		void entry.gitWatcher?.close();
+		try {
+			void entry.contentWatcher?.close();
+		} catch {
+			// A throwing close must not block the rest of the teardown.
+		}
+		try {
+			void entry.gitWatcher?.close();
+		} catch {
+			// Same.
+		}
 		if (watchers.get(entry.key) === entry) {
 			watchers.delete(entry.key);
 		}
 	}
 
 	function scheduleTeardown(entry: WatchEntry<S>): void {
+		if (entry.closed) return;
 		if (entry.teardownTimer) clearTimeout(entry.teardownTimer);
 		const timer = setTimeout(() => {
 			entry.teardownTimer = null;

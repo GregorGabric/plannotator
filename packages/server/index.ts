@@ -607,8 +607,8 @@ export async function startPlannotatorServer(
   const stop = () => {
     stopPromise ??= (async () => {
       try {
-        aiRuntime?.dispose();
         closeAllFileBrowserWatchers();
+        aiRuntime?.dispose();
       } finally {
         await server.stop(true);
       }

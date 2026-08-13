@@ -485,8 +485,8 @@ export async function startPlanReviewServer(options: {
 		stop: () => {
 			// try/finally: a throwing dispose must never leave the listener bound.
 			try {
-				aiRuntime?.dispose();
 				closeAllFileBrowserWatchers();
+				aiRuntime?.dispose();
 			} finally {
 				server.close();
 				// close() only stops the listener; drain browser keep-alive sockets so a
