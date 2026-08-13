@@ -67,12 +67,13 @@ function makeWorkspace(projectConfig?: unknown): string {
 	return cwd;
 }
 
-function createContext(options: { cwd?: string; entries?: SessionEntry[] } = {}) {
+function createContext(options: { cwd?: string; entries?: SessionEntry[]; projectTrusted?: boolean } = {}) {
 	const entries = options.entries ?? [];
 	const notifications: Array<{ message: string; level: string | undefined }> = [];
 	return {
 		cwd: options.cwd ?? process.cwd(),
 		hasUI: false,
+		isProjectTrusted: () => options.projectTrusted ?? true,
 		isIdle: () => true,
 		model: undefined,
 		modelRegistry: { find: () => undefined },
@@ -368,6 +369,20 @@ describe("Plannotator phase framing messages", () => {
 		const warnings = templateWarnings(context);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]?.message).toContain("bogus");
+	});
+
+	test("ignores project Plannotator config when Pi denies project trust", async () => {
+		const cwd = makeWorkspace({
+			phases: { planning: { instructions: "untrusted-project-instructions" } },
+		});
+		const runtime = createRuntime();
+		const context = createContext({ cwd, projectTrusted: false });
+		await runtime.run("session_start", context);
+		await runtime.commands.get("plannotator-plan-mode")?.handler("", context);
+
+		const result = await startAgent(runtime, context);
+		expect(result?.message?.content).toContain("[PLANNOTATOR - PLANNING PHASE]");
+		expect(result?.message?.content).not.toContain("untrusted-project-instructions");
 	});
 
 	test("persistState records the framing latch on both sides", async () => {

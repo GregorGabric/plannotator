@@ -1601,7 +1601,9 @@ Mark completed steps with [DONE:n] in your response.`
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
-		const loadedConfig = loadPlannotatorConfig(ctx.cwd);
+		const loadedConfig = loadPlannotatorConfig(ctx.cwd, {
+			projectTrusted: ctx.isProjectTrusted(),
+		});
 		plannotatorConfig = loadedConfig.config;
 		for (const warning of loadedConfig.warnings) {
 			ctx.ui.notify(`Plannotator config: ${warning}`, "warning");

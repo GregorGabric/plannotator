@@ -65,4 +65,23 @@ describe("Pi extension startup boundary", () => {
 		expect(manifest.files).toContain("plannotator-browser-runtime.ts");
 		expect(manifest.files).toContain("todo-providers/");
 	});
+
+	test("requires a Pi host that exposes the resolved project-trust decision", () => {
+		const manifest = JSON.parse(
+			readFileSync(join(extensionDirectory, "package.json"), "utf-8"),
+		) as {
+			peerDependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		};
+
+		expect(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"]).toBe(">=0.79.1");
+		for (const packageName of [
+			"@earendil-works/pi-coding-agent",
+			"@earendil-works/pi-agent-core",
+			"@earendil-works/pi-ai",
+			"@earendil-works/pi-tui",
+		]) {
+			expect(manifest.devDependencies?.[packageName]).toBe(">=0.79.1");
+		}
+	});
 });
