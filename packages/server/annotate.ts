@@ -16,7 +16,7 @@ import { getRepoInfo } from "./repo";
 import type { Origin } from "@plannotator/shared/agents";
 import { handleImage, handleUpload, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, handleReferenceSkills, handleReferenceSkillContent, handleSaveNotes, readDraftGenerationFromBody, readDraftGenerationFromUrl } from "./shared-handlers";
 import { handleDoc, handleDocExists, handleFileBrowserFiles, handleObsidianVaults, handleObsidianFiles, handleObsidianDoc, resolveAllowedDocPath, type FolderAnnotateHistory } from "./reference-handlers";
-import { handleFileBrowserFilesStream } from "./reference-watch";
+import { closeAllFileBrowserWatchers, handleFileBrowserFilesStream } from "./reference-watch";
 import { getExtraMarkdownExtensions, resolveUserPath, warmFileListCache } from "@plannotator/shared/resolve-file";
 import { contentHash, deleteDraft } from "./draft";
 import { getPlanVersion, getVersionCount, listVersions } from "@plannotator/shared/storage";
@@ -1016,6 +1016,7 @@ export async function startAnnotateServer(
     clientLease.closeSessions();
     aiRuntime?.dispose();
     agentTerminal.dispose();
+    closeAllFileBrowserWatchers();
     server.stop();
   };
 

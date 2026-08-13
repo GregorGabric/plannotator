@@ -49,7 +49,7 @@ import {
 	resolveAllowedDocPath,
 	type FolderAnnotateHistory,
 } from "./reference.ts";
-import { handleFileBrowserStreamRequest } from "./file-browser-watch.ts";
+import { closeAllFileBrowserWatchers, handleFileBrowserStreamRequest } from "./file-browser-watch.ts";
 import { getExtraMarkdownExtensions, resolveUserPath, warmFileListCache } from "../generated/resolve-file.ts";
 import { createExternalAnnotationHandler } from "./external-annotations.ts";
 import { createNodeAgentTerminalBridge } from "./agent-terminal.ts";
@@ -940,6 +940,7 @@ export async function startAnnotateServer(options: {
 				clientLease.closeSessions();
 				aiRuntime?.dispose();
 				agentTerminal.dispose();
+				closeAllFileBrowserWatchers();
 			} finally {
 				server.close();
 				// close() only stops the listener; drain browser keep-alive sockets so a
