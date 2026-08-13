@@ -19,6 +19,14 @@ import { REVIEW_ALL_FILES_PANEL_ID } from './reviewPanelTypes';
 export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (props) => {
   const storedDiffStyle = useConfigValue('diffStyle');
   const state = useReviewStateOptional();
+
+  // Dockview's tab strip is intentionally only 33px tall. Compact-touch
+  // controls need a 44px target, so placing them here makes their focus and
+  // hit geometry overlap the first file header below. Keep this dense control
+  // cluster on fine-pointer layouts; compact review exposes display settings
+  // through the ordinary Settings surface instead.
+  if (state?.isCompactTouchLayout) return null;
+
   const diffStyle = state?.diffStyle ?? storedDiffStyle;
   const setDiffStyle = state?.onDiffStyleChange ?? ((style: 'split' | 'unified') => {
     configStore.set('diffStyle', style);
@@ -31,8 +39,6 @@ export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (pr
     <div className="flex items-center gap-1 h-full pr-2 pl-1">
       {showCollapseAll && state && (
         <button
-          data-pn-touch-target={state.isCompactTouchLayout || undefined}
-          data-pn-touch-target-icon={state.isCompactTouchLayout || undefined}
           type="button"
           onClick={state.onToggleAllFilesCollapsed}
           className="p-1.5 rounded-md transition-colors text-muted-foreground hover:text-foreground hover:bg-muted"
@@ -63,35 +69,30 @@ export const ReviewDockRightActions: React.FC<IDockviewHeaderActionsProps> = (pr
         </button>
       )}
       <div className="flex items-center gap-1 bg-muted rounded-lg p-0.5">
-        {!state?.isCompactTouchLayout && (
-          <>
-            <button
-              onClick={() => setDiffStyle('split')}
-              className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                diffStyle === 'split'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Split
-            </button>
-            <button
-              onClick={() => setDiffStyle('unified')}
-              className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                diffStyle === 'unified'
-                  ? 'bg-background text-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Unified
-            </button>
-            <div className="w-px h-4 bg-border/60 mx-0.5" />
-          </>
-        )}
+        <button
+          onClick={() => setDiffStyle('split')}
+          className={`px-2 py-1 text-xs rounded-md transition-colors ${
+            diffStyle === 'split'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Split
+        </button>
+        <button
+          onClick={() => setDiffStyle('unified')}
+          className={`px-2 py-1 text-xs rounded-md transition-colors ${
+            diffStyle === 'unified'
+              ? 'bg-background text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Unified
+        </button>
+        <div className="w-px h-4 bg-border/60 mx-0.5" />
         <DiffOptionsPopover
           diffStyle={diffStyle}
           onDiffStyleChange={setDiffStyle}
-          compactTouchLayout={state?.isCompactTouchLayout}
         />
       </div>
     </div>

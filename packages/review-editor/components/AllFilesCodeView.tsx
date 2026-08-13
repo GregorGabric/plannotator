@@ -52,6 +52,7 @@ import {
   clearItemSearchHighlights,
   swapActiveSearchHighlight,
 } from '../utils/reviewSearchHighlight';
+import { useDocumentScrollBridge } from '../hooks/useDocumentScrollBridge';
 
 /**
  * AllFilesCodeView (migration phases P1 + P2 + P3 + P4)
@@ -143,11 +144,12 @@ import {
  *  - Safari scroll guardian: NOT carried forward. The old DiffViewer guardian
  *    targeted the OverlayScrollbars viewport wrapping many separate FileDiff
  *    shadow nodes and restored scrollTop on a ">200 -> 0" jump heuristic.
- *    CodeView owns its own scroll model and DELIBERATELY rebases the container's
- *    DOM scrollTop into a bounded 12M-px paged window, so that heuristic would
- *    misfire against CodeView's own rebasing. CodeView is the scroll authority
- *    here; we rely on it rather than a guardian that would fight it. (Still
- *    needs real WebKit validation.)
+ *    CodeView owns its own scroll model and deliberately rebases its DOM
+ *    scrollTop, so that heuristic would fight Pierre. Compact All Files instead
+ *    uses an opt-in document-scroll bridge: the page receives matching travel
+ *    (so Safari may collapse browser chrome) and mirrors window.scrollY into
+ *    this same CodeView. Pierre remains the rendering and logical-scroll
+ *    authority; desktop and non-active panels keep the native nested scroller.
  *
  * The worker pool remains a later phase.
  *
@@ -179,6 +181,14 @@ interface AllFilesCodeViewProps {
   pendingSelection: SelectedLineRange | null;
   reviewBase?: string;
   reviewSnapshotId?: string;
+  /** Compact coarse-pointer shell. Adjusts custom-header chrome and Pierre's
+   * matching virtualization metric without changing desktop geometry. */
+  compactTouchLayout?: boolean;
+  /** When active, vertical gestures scroll the document while CodeView mirrors
+   * that position internally. This lets iOS Safari collapse browser chrome
+   * without giving up Pierre's single virtualized renderer. */
+  documentScrollBridgeActive?: boolean;
+  onDocumentScrollRangeChange?: (range: number) => void;
   // Annotation / toolbar wiring (P2). Mirrors AllFilesDiffView's surface so the
   // toolbar opens against the file CodeView reports for a selection.
   onLineSelection: (range: SelectedLineRange | null) => void;
@@ -459,6 +469,7 @@ function buildItemIdentity(
 // internally responsive (ResizeObserver shrinks labels) but its OUTER box height
 // is fixed, so the responsive label changes never alter the row height.
 const PANEL_HEADER_HEIGHT = 33; // --panel-header-h
+const COMPACT_PANEL_HEADER_HEIGHT = 44;
 // Hunk separator height forced by usePierreTheme unsafeCSS:
 //   [data-separator='line-info'] { height: 24px; margin-block: 4px; }
 // => 24 + 4*2 = 32. Pierre's own 'line-info' default metric is also 32, so
@@ -490,6 +501,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   pendingSelection,
   reviewBase,
   reviewSnapshotId,
+  compactTouchLayout,
+  documentScrollBridgeActive = false,
+  onDocumentScrollRangeChange,
   onLineSelection,
   onAddAnnotationForFile,
   onEditAnnotation,
@@ -579,6 +593,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     observer.observe(el);
     return () => observer.disconnect();
   }, [scrollEl, leadingContent]);
+
   const toolbarHostRef = useRef<ToolbarHostHandle>(null);
 
   // NOTE: no center split dragger on this surface (parity with the legacy
@@ -691,6 +706,20 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     () => `${fileOrder ?? 'tree'}:${seedCollapsed ? 'c' : 'e'}:${prUrl ?? ''}:${prDiffScope ?? ''}:${reviewSnapshotId ?? ''}:${files.length}:${files.map((f, i) => `${f.path}#${patchHashes[i]}`).join('|')}`,
     [files, patchHashes, prUrl, prDiffScope, reviewSnapshotId, fileOrder, seedCollapsed],
   );
+
+  const getDocumentScrollRange = useCallback(() => {
+    const viewer = viewerRef.current?.getInstance();
+    if (!viewer) return Math.max(0, (scrollEl?.scrollHeight ?? 0) - (scrollEl?.clientHeight ?? 0));
+    // Match CodeView's getMaxScrollTopForHeight(): our only non-item space is
+    // the 8px top edge + measured leading content + 8px bottom edge.
+    return Math.max(0, viewer.getScrollHeight() + 16 + leadingHeight - viewer.getHeight());
+  }, [leadingHeight, scrollEl]);
+  useDocumentScrollBridge({
+    active: documentScrollBridgeActive,
+    scroller: scrollEl,
+    getScrollRange: getDocumentScrollRange,
+    onScrollRangeChange: onDocumentScrollRangeChange,
+  });
 
   // Visual-order list of file paths (for [/] stepping). Derived from items so it
   // matches CodeView's rendered order exactly.
@@ -2151,6 +2180,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     return (
       <div className="flex flex-col">
         <FileHeader
+        compactTouchLayout={compactTouchLayout}
         filePath={filePath}
         patch={file.patch}
         status={file.status}
@@ -2186,6 +2216,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
               e.stopPropagation();
               toggleItemCollapsed(item.id);
             }}
+            data-pn-touch-target={compactTouchLayout || undefined}
+            data-pn-touch-target-icon={compactTouchLayout || undefined}
             className="flex items-center justify-center w-6 h-6 rounded hover:bg-foreground/10 transition-colors flex-shrink-0"
             title={collapsed ? 'Expand diff' : 'Collapse diff'}
           >
@@ -2286,7 +2318,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // description card) so items start below it and it scrolls with them.
       layout: { gap: 0, paddingTop: 8 + leadingHeight, paddingBottom: 8 },
       itemMetrics: {
-        diffHeaderHeight: PANEL_HEADER_HEIGHT,
+        diffHeaderHeight: compactTouchLayout ? COMPACT_PANEL_HEADER_HEIGHT : PANEL_HEADER_HEIGHT,
         hunkSeparatorHeight: HUNK_SEPARATOR_HEIGHT,
         ...(customLineHeight != null && { lineHeight: customLineHeight }),
       },
@@ -2346,6 +2378,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       disableBackground,
       expandUnchanged,
       customLineHeight,
+      compactTouchLayout,
       leadingHeight,
       handleLineSelectionEnd,
       handleGutterUtilityClick,
@@ -2378,7 +2411,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // overflow-anchor:none disables the BROWSER's scroll anchoring, which
       // otherwise fights CodeView's own anchor resolution whenever item
       // heights change (our augmentation applies).
-      className={`relative h-full overflow-y-auto overflow-x-clip ${allowScrollChaining ? 'overscroll-auto' : 'overscroll-contain'} [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style]`}
+      className={`relative h-full ${documentScrollBridgeActive ? 'overflow-y-hidden' : 'overflow-y-auto'} overflow-x-clip ${allowScrollChaining ? 'overscroll-auto' : 'overscroll-contain'} [contain:strict] [overflow-anchor:none] [will-change:scroll-position] [&_diffs-container]:overflow-clip [&_diffs-container]:[contain:layout_paint_style]`}
       initialItems={identity.items}
       options={options}
       selectedLines={selectedLines}

@@ -750,6 +750,34 @@ body:has([data-pn-document-scroll="true"]) > #root {
   min-height: 100dvh;
 }
 
+/* Code review's Pierre CodeView must retain its own viewport for
+ * virtualization, but iOS Safari collapses browser chrome only when the page
+ * scrolls. The review header remains in normal document flow so it can leave
+ * with Safari's chrome; the diff workspace then becomes the sticky reading
+ * stage while AllFilesCodeView mirrors document travel into Pierre.
+ * Fine-pointer and non-All-Files layouts never opt into this contract. */
+body:has([data-pn-review-document-scroll="true"]) > #root {
+  height: auto;
+  min-height: var(--pn-viewport-height, 100dvh);
+}
+
+.pn-app-viewport[data-pn-review-document-scroll="true"] {
+  position: relative;
+  height: auto;
+  min-height: var(--pn-viewport-height, 100dvh);
+  overflow: visible;
+  padding-bottom: var(--pn-review-scroll-range, 0px);
+}
+
+.pn-app-viewport[data-pn-review-document-scroll="true"] > [data-pn-review-scroll-stage="true"] {
+  position: sticky;
+  top: 0;
+  flex: none;
+  width: 100%;
+  height: var(--pn-viewport-height, 100dvh);
+  min-height: 0;
+}
+
 /* The application stage owns the top and lateral safe areas. Bottom-edge
  * surfaces opt into `.pn-safe-bottom` themselves so the home-indicator inset
  * is never counted twice. The ordered height declarations preserve desktop
@@ -813,6 +841,15 @@ body:has([data-pn-document-scroll="true"]) > #root {
 @media (pointer: coarse), (max-width: 639px), (max-height: 419px) {
   .pn-responsive-composer-dialog {
     height: 100%;
+  }
+
+  /* Code review often promotes a line selection straight into the expanded
+   * composer. Keep its idle surface proportional to the content instead of
+   * covering the whole phone; once the keyboard reduces the visible viewport,
+   * the same cap naturally yields to all available space. Plan's explicit
+   * expanded-composer treatment remains unchanged. */
+  .pn-responsive-composer-dialog.pn-review-composer-dialog {
+    height: min(28rem, 100%);
   }
 }
 

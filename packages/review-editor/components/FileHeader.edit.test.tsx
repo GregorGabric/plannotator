@@ -123,6 +123,30 @@ describe.if(hasDom)('FileHeader edit affordance (DOM)', () => {
     expect(el.querySelector('[data-testid="edit-session-complete"]')).toBeNull();
     expect(el.querySelector('[data-testid="edit-session-cancel"]')).toBeNull();
   });
+
+  test('compact touch header keeps the file identity and removes desktop-only file actions', async () => {
+    const el = await mount(
+      <FileHeader
+        {...baseProps}
+        compactTouchLayout
+        status="modified"
+        onToggleViewed={() => {}}
+        onStage={() => {}}
+        canStage
+        onFileComment={() => {}}
+        onEditFile={() => {}}
+        collapseToggle={<button type="button" aria-label="Collapse diff" />}
+      />,
+    );
+
+    const header = el.firstElementChild as HTMLElement;
+    expect(header.style.height).toBe('44px');
+    expect(header.textContent).toContain('calc.ts');
+    expect(header.textContent).toContain('+1');
+    expect(header.textContent).toContain('-1');
+    expect(Array.from(header.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))).toEqual(['Collapse diff']);
+    expect(header.querySelector('[data-testid="edit-session-start"]')).toBeNull();
+  });
 });
 
 describe.if(hasDom)('EditSessionHud (DOM)', () => {

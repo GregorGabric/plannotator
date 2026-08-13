@@ -53,7 +53,11 @@ import { buildReviewAgentInstructions } from '@plannotator/ui/utils/reviewAgentI
 import { ResizeHandle } from '@plannotator/ui/components/ResizeHandle';
 import { FolderTree } from 'lucide-react';
 import { DockviewReact, type DockviewReadyEvent, type DockviewApi } from 'dockview-react';
-import { ReviewHeaderMenu } from './components/ReviewHeaderMenu';
+import {
+  ReviewHeaderMenu,
+  type CompactReviewAction,
+  type CompactReviewDestination,
+} from './components/ReviewHeaderMenu';
 import { ReviewSidebar } from './components/ReviewSidebar';
 import type { ReviewSidebarTab } from './components/ReviewSidebar';
 import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
@@ -304,6 +308,7 @@ const ReviewApp: React.FC = () => {
   // moves the viewport.
   const [scrollTargetAnnotation, setScrollTargetAnnotation] = useState<AnnotationScrollTarget | null>(null);
   const [isAllFilesActive, setIsAllFilesActive] = useState(false);
+  const [reviewDocumentScrollRange, setReviewDocumentScrollRange] = useState(0);
   // All-files collapse-all: the view registers its toggle here; the dock tab
   // strip's button (ReviewDockRightActions) invokes it and reflects the flag.
   const allFilesCollapseToggleRef = useRef<(() => void) | null>(null);
@@ -2980,6 +2985,7 @@ const ReviewApp: React.FC = () => {
     openDiffFile,
     onAllFilesVisibleFileChange: setAllFilesVisibleFile,
     isAllFilesActive,
+    onDocumentScrollRangeChange: setReviewDocumentScrollRange,
     allFilesOrder,
     allFilesAllCollapsed,
     onToggleAllFilesCollapsed,
@@ -3456,6 +3462,70 @@ const ReviewApp: React.FC = () => {
     />
   );
 
+  const compactReviewDestination: CompactReviewDestination | undefined =
+    isCompactTouchLayout && origin && prMetadata
+      ? {
+          value: reviewDestination,
+          platform: prMetadata.platform,
+          platformLabel,
+          onChange: (destination) => {
+            if (showDestSpotlight) dismissDestSpotlight();
+            setReviewDestination(destination);
+            storage.setItem('plannotator-review-dest', destination);
+            setPlatformActionError(null);
+          },
+        }
+      : undefined;
+
+  const compactActionBusy = isSendingFeedback || isApproving || isExiting || isPlatformActioning;
+  const compactReviewActions: CompactReviewAction[] = !isCompactTouchLayout
+    ? []
+    : !origin
+      ? [{
+          id: 'copy',
+          label: copyFeedback === 'Feedback copied!' ? 'Feedback copied' : 'Copy feedback',
+          onSelect: handleCopyFeedback,
+        }]
+      : [
+          {
+            id: 'exit',
+            label: 'Exit review',
+            onSelect: () => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit(),
+            disabled: compactActionBusy,
+          },
+          ...(totalAnnotationCount > 0
+            ? [{
+                id: 'feedback' as const,
+                label: platformMode ? 'Post comments' : 'Send feedback',
+                subtitle: `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`,
+                onSelect: () => platformMode ? openPlatformDialog('comment') : handleSendFeedback(),
+                disabled: compactActionBusy,
+              }]
+            : []),
+          {
+            id: 'approve',
+            label: 'Approve',
+            subtitle: platformMode && platformUser && prMetadata?.author === platformUser
+              ? `You can't approve your own ${mrLabel}`
+              : totalAnnotationCount > 0
+                ? `${totalAnnotationCount} unsent annotation${totalAnnotationCount === 1 ? '' : 's'}`
+                : undefined,
+            onSelect: () => {
+              if (platformMode) openPlatformDialog('approve');
+              else if (totalAnnotationCount > 0) setShowApproveWarning(true);
+              else handleApprove();
+            },
+            disabled: compactActionBusy || !!(platformMode && platformUser && prMetadata?.author === platformUser),
+          },
+        ];
+
+  const usesReviewDocumentScroll =
+    isCompactTouchLayout && (isAllFilesActive || isDiffPanelActive) && !guideVisible && files.length > 0;
+  useEffect(() => {
+    if (usesReviewDocumentScroll || window.scrollY === 0) return;
+    window.scrollTo(0, 0);
+  }, [usesReviewDocumentScroll]);
+
   if (isLoading) {
     return (
       <ThemeProvider defaultTheme="dark">
@@ -3475,14 +3545,21 @@ const ReviewApp: React.FC = () => {
       <div
         className="pn-app-viewport flex flex-col bg-background overflow-hidden"
         data-pn-compact-review-shell={isCompactTouchLayout || undefined}
+        data-pn-browser-canvas="background"
+        data-pn-document-scroll={usesReviewDocumentScroll ? 'true' : undefined}
+        data-pn-review-document-scroll={usesReviewDocumentScroll || undefined}
+        style={usesReviewDocumentScroll
+          ? ({ '--pn-review-scroll-range': `${reviewDocumentScrollRange}px` } as React.CSSProperties)
+          : undefined
+        }
       >
         {/* Header */}
         <header className={isCompactTouchLayout
-          ? 'min-h-[52px] flex items-center gap-1 px-1.5 border-b border-border/50 bg-card/50 backdrop-blur-xl z-50'
+          ? 'min-h-[52px] grid grid-cols-[44px_minmax(0,1fr)_44px] items-center border-b border-border/50 bg-card/50 backdrop-blur-xl z-50'
           : 'py-1 flex flex-col min-[480px]:flex-row items-stretch min-[480px]:items-center min-[480px]:justify-between gap-1 min-[480px]:gap-0 px-2 lg:px-4 border-b border-border/50 bg-card/50 backdrop-blur-xl z-50'
         }>
           <div className={isCompactTouchLayout
-            ? 'min-w-0 flex shrink items-center gap-1 overflow-hidden'
+            ? 'contents'
             : 'min-w-0 flex flex-1 items-center gap-2 lg:gap-3'
           }>
             {shouldShowFileTree && (
@@ -3505,6 +3582,7 @@ const ReviewApp: React.FC = () => {
                 <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
               </>
             )}
+            {isCompactTouchLayout && !shouldShowFileTree && <span aria-hidden />}
             {!isCompactTouchLayout && aiUIEnabled && hasSearchableFiles && (
               <>
                 <button
@@ -3533,7 +3611,10 @@ const ReviewApp: React.FC = () => {
               </>
             )}
             {prMetadata ? (
-              <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden">
+              <div className={isCompactTouchLayout
+                ? 'min-w-0 flex items-center justify-center overflow-hidden px-1'
+                : 'min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden'
+              }>
                 <span
                   className="min-w-0 max-w-[160px] xl:max-w-[240px] text-xs text-muted-foreground/60 hidden sm:inline-flex items-center gap-1"
                   title={displayRepo}
@@ -3563,7 +3644,10 @@ const ReviewApp: React.FC = () => {
                 )}
               </div>
             ) : repoInfo ? (
-              <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden">
+              <div className={isCompactTouchLayout
+                ? 'min-w-0 flex items-center justify-center overflow-hidden px-1'
+                : 'min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden'
+              }>
                 {repoInfo.branch && (
                   <span
                     className="text-xs font-mono text-foreground truncate"
@@ -3581,17 +3665,20 @@ const ReviewApp: React.FC = () => {
                 </span>
               </div>
             ) : (
-              <span className="text-xs text-muted-foreground/70">Review</span>
+              <span className={isCompactTouchLayout
+                ? 'min-w-0 text-center text-xs text-muted-foreground/70'
+                : 'text-xs text-muted-foreground/70'
+              }>Review</span>
             )}
           </div>
 
           <div className={isCompactTouchLayout
-            ? 'ml-auto min-w-0 flex flex-nowrap shrink-0 items-center justify-end gap-1'
+            ? 'contents'
             : 'min-w-0 w-full min-[480px]:w-auto flex flex-wrap min-[480px]:flex-nowrap shrink-0 items-center justify-end gap-1 lg:gap-2'
           }>
             {/* Split/Unified toggle + diff options moved to the dock tab strip
                 (rightHeaderActionsComponent → ReviewDockRightActions). */}
-            {origin ? (
+            {!isCompactTouchLayout && (origin ? (
               <>
                 {/* Destination dropdown (PR mode only) */}
                 {prMetadata && (
@@ -3871,7 +3958,7 @@ const ReviewApp: React.FC = () => {
                   </>
                 )}
               </button>
-            )}
+            ))}
 
             <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
 
@@ -3952,6 +4039,8 @@ const ReviewApp: React.FC = () => {
               onOpenAnnotations={isCompactTouchLayout ? () => reviewSidebar.open('annotations') : undefined}
               onOpenAI={isCompactTouchLayout && aiAvailable ? () => reviewSidebar.open('ai') : undefined}
               onOpenAgents={isCompactTouchLayout && agentJobs.capabilities?.available ? () => reviewSidebar.open('agents') : undefined}
+              compactDestination={compactReviewDestination}
+              compactActions={compactReviewActions}
               isFileTreeOpen={isNavigatorOpen}
               isSidebarOpen={reviewSidebar.isOpen}
               compactTouchLayout={isCompactTouchLayout}
@@ -4004,7 +4093,10 @@ const ReviewApp: React.FC = () => {
         )}
 
         {/* Main content */}
-        <div className={`relative flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
+        <div
+          data-pn-review-scroll-stage={usesReviewDocumentScroll || undefined}
+          className={`relative flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}
+        >
           {!guideOpen && shouldShowFileTree && isNavigatorOpen && sectionsAvailable && panelView === 'sections' && (
             <ReviewNavigatorContainer
               isCompactTouchLayout={isCompactTouchLayout}
@@ -4564,7 +4656,7 @@ const ReviewApp: React.FC = () => {
             setup → edit mode): it only mounts once none of the four is
             showing, so it never stacks with them. PR mode only — the switcher
             it points at doesn't render otherwise. */}
-        {showDestSpotlight && !!prMetadata && !isLoading && !showLookAndFeel && !guideIntroVisible && !showReviewSetup && !editModeIntroVisible && (
+        {showDestSpotlight && !isCompactTouchLayout && !!prMetadata && !isLoading && !showLookAndFeel && !guideIntroVisible && !showReviewSetup && !editModeIntroVisible && (
           <DestinationSpotlight
             targetRef={destToggleRef}
             platformLabel={platformLabel}

@@ -43,6 +43,8 @@ interface FileHeaderProps {
   isEditing?: boolean;
   /** When set, the Edit button is disabled with this tooltip. */
   editDisabledReason?: string | null;
+  /** Compact coarse-pointer treatment. Defaults to the enclosing review state. */
+  compactTouchLayout?: boolean;
 }
 
 function splitFilePath(filePath: string): { directory: string; name: string } {
@@ -124,9 +126,11 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
   onEditFile,
   isEditing = false,
   editDisabledReason,
+  compactTouchLayout,
 }) => {
   const [headerWidth, setHeaderWidth] = useState<number>(0);
   const state = useReviewStateOptional();
+  const isCompactTouchLayout = compactTouchLayout ?? state?.isCompactTouchLayout ?? false;
   const headerRef = useRef<HTMLDivElement>(null);
   const fileCommentRef = useRef<HTMLButtonElement>(null);
   const { directory, name } = splitFilePath(filePath);
@@ -160,8 +164,8 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
   return (
     <div
       ref={headerRef}
-      className="flex-shrink-0 px-3 border-b border-border/50 flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-muted/30"
-      style={{ height: 'var(--panel-header-h)' }}
+      className={`flex-shrink-0 border-b border-border/50 flex items-center justify-between gap-2 transition-colors duration-150 hover:bg-muted/30 ${isCompactTouchLayout ? 'pr-3' : 'px-3'}`}
+      style={{ height: isCompactTouchLayout ? '44px' : 'var(--panel-header-h)' }}
     >
       <div className="min-w-0 flex flex-1 items-center" onClick={onCollapseToggle} style={onCollapseToggle ? { cursor: 'pointer' } : undefined}>
         {collapseToggle}
@@ -206,7 +210,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
           </span>
         )}
       </div>
-      <div className={`flex flex-shrink-0 items-center pl-2 ${isCompact ? 'gap-1' : 'gap-2'}`}>
+      {!isCompactTouchLayout && <div className={`flex flex-shrink-0 items-center pl-2 ${isCompact ? 'gap-1' : 'gap-2'}`}>
         {showViewedControl && onToggleViewed && (
           <button
             onClick={onToggleViewed}
@@ -321,7 +325,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
             status !== 'deleted'
           }
         />
-      </div>
+      </div>}
     </div>
   );
 };
