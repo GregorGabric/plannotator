@@ -629,12 +629,22 @@ jobs:
           fi
           grep -F '[license] License scanning is enabled' security-results/trivy-license.log >/dev/null
 
-          jq -e '.SchemaVersion == 2 and .ArtifactType == "filesystem"' \
+          echo "Trivy dependency report metadata: $(jq -c \
+            '{SchemaVersion, ArtifactName, ArtifactType}' security-results/trivy.json)"
+          echo "Trivy license report metadata: $(jq -c \
+            '{SchemaVersion, ArtifactName, ArtifactType}' security-results/trivy-license.json)"
+
+          # trivy fs reports "repository" when it can read Git metadata from the
+          # checkout and "filesystem" otherwise. Both are defined artifact types
+          # in the pinned Trivy release and use the same local filesystem scanner.
+          jq -e '.SchemaVersion == 2 and
+            (.ArtifactType == "filesystem" or .ArtifactType == "repository")' \
             security-results/trivy.json >/dev/null || {
               echo 'Trivy vulnerability/misconfiguration report metadata is invalid.' >&2
               exit 1
             }
-          jq -e '.SchemaVersion == 2 and .ArtifactType == "filesystem"' \
+          jq -e '.SchemaVersion == 2 and
+            (.ArtifactType == "filesystem" or .ArtifactType == "repository")' \
             security-results/trivy-license.json >/dev/null || {
               echo 'Trivy license report metadata is invalid.' >&2
               exit 1
