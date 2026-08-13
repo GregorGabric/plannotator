@@ -3,7 +3,7 @@
  *
  * On a fine-pointer viewport the composer normally opens as a popover and the
  * expanded dialog is a user choice, so Escape and the Collapse button take it
- * back. When the anchor has no room, the position tracker FORCES the dialog —
+ * back. When the anchor has no room, the position tracker FORCES the dialog,
  * and collapsing recomputes the same geometry and immediately re-expands. That
  * made Escape a no-op and left the composer with no keyboard exit.
  */
