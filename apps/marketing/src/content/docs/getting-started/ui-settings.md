@@ -2,7 +2,7 @@
 title: "UI Settings"
 description: "In-browser settings for Plannotator — theme, identity, permission mode, auto-close, plan saving, and integrations."
 sidebar:
-  order: 6
+  order: 8
 section: "Getting Started"
 ---
 

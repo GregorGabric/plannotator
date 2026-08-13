@@ -2,7 +2,7 @@
 title: "OpenCode Migration (0.19.1)"
 description: "What changes for existing OpenCode users in Plannotator 0.19.1, and how to keep or change the old behavior."
 sidebar:
-  order: 6
+  order: 7
 section: "Getting Started"
 ---
 

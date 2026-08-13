@@ -2,7 +2,7 @@
 title: "OpenCode"
 description: "How Plannotator works with OpenCode — plugin setup, submit_plan tool, and agent switching."
 sidebar:
-  order: 5
+  order: 6
 section: "Getting Started"
 ---
 
