@@ -385,6 +385,33 @@ describe("Plannotator phase framing messages", () => {
 		expect(result?.message?.content).not.toContain("untrusted-project-instructions");
 	});
 
+	test("fails closed with an update warning when an older Pi host lacks project trust", async () => {
+		const cwd = makeWorkspace({
+			phases: { planning: { instructions: "untrusted-project-instructions" } },
+		});
+		const globalConfigDir = process.env.PI_CODING_AGENT_DIR!;
+		mkdirSync(globalConfigDir, { recursive: true });
+		writeFileSync(
+			join(globalConfigDir, "plannotator.json"),
+			JSON.stringify({ phases: { planning: { instructions: "trusted-global-instructions" } } }),
+			"utf-8",
+		);
+		const runtime = createRuntime();
+		const context = createContext({ cwd });
+		delete (context as { isProjectTrusted?: () => boolean }).isProjectTrusted;
+
+		await runtime.run("session_start", context);
+		await runtime.commands.get("plannotator-plan-mode")?.handler("", context);
+
+		const result = await startAgent(runtime, context);
+		expect(result?.message?.content).toContain("trusted-global-instructions");
+		expect(result?.message?.content).not.toContain("untrusted-project-instructions");
+		expect(context.notifications).toContainEqual({
+			message: "Plannotator requires Pi 0.79.1 or newer. Update Pi; project-local config is disabled on this host.",
+			level: "warning",
+		});
+	});
+
 	test("persistState records the framing latch on both sides", async () => {
 		const cwd = makeWorkspace();
 		const runtime = createRuntime();

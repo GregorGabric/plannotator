@@ -74,6 +74,8 @@ describe("Pi extension startup boundary", () => {
 			devDependencies?: Record<string, string>;
 		};
 
+		// Deliberate security/API floor: lowering it re-admits the four Pi
+		// advisories and removes the project-trust context API this extension uses.
 		expect(manifest.peerDependencies?.["@earendil-works/pi-coding-agent"]).toBe(">=0.79.1");
 		for (const packageName of [
 			"@earendil-works/pi-coding-agent",
