@@ -1,7 +1,7 @@
 # Spec: Mobile Plan Shell and Navigation — Phase 2B
 
 Date: 2026-08-13
-Status: In progress; checkpoint 2B.1 ready for physical iPhone/iPad review while the Phase 2A filename micro-gate continues in parallel
+Status: In progress; checkpoint 2B.2 implementation ready for physical iPhone/iPad review while the Phase 2A filename micro-gate continues in parallel
 Depends on: Phase 1 mobile platform foundation and Phase 2A mobile Code Review shell
 Research: [`SPIKE-mobile-web-compatibility-20260812.md`](../research/SPIKE-mobile-web-compatibility-20260812.md)
 Sequence: [`synthesis-mobile-feedback-triage-20260812.md`](../research/synthesis-mobile-feedback-triage-20260812.md)
@@ -108,8 +108,9 @@ It contains three geometrically stable regions:
    tab).
 2. **Document identity** — current basename or plan identity, with the full path
    available to accessibility and leading-ellipsis treatment when constrained.
-3. **Options** — opens a compact action menu containing Review, Annotations,
-   Ask AI when available, view/edit commands, and secondary application actions.
+3. **Options** — opens a compact action menu containing the incumbent terminal
+   decisions, Edit when available, and secondary application actions. Annotations
+   and Ask AI join this menu in checkpoint 2B.3.
 
 The header does not show simultaneous Send Feedback, Approve, Annotations, AI,
 and Options controls. It does not show desktop keyboard shortcuts. Branding is
@@ -150,10 +151,14 @@ Compact touch arrives in `artifact` with the document first. The existing
 input method and annotation semantics are preserved, but their full matrix is
 not persistently expanded.
 
-- Idle state shows one explicit `Annotate` entry with the current method named.
-- Opening it reveals the incumbent input-method choices and makes `Pinpoint`
-  clearly identifiable as the tap-oriented method. Phase 2B does not silently
-  overwrite the user's persisted method.
+- Compact touch always presents the incumbent Markup semantics: selecting a
+  target reveals the contextual Copy / Delete / Comment / Label actions instead
+  of requiring a permanent action-mode row. This is a compact presentation
+  decision and never overwrites the saved desktop action mode.
+- Idle state shows one explicit `Annotate · <method>` entry.
+- Opening it reveals only `Select text` and `Pinpoint`. Pinpoint is named as the
+  one-block tap method; Select text is named as the drag-over-text method.
+  Choices are session-local and never overwrite the saved desktop input method.
 - Markup / Comment / Redline / Label actions appear contextually after a valid
   target exists, not as a permanent second toolbar on arrival.
 - Compact controls use the shared 44 px touch contract and immediate press
@@ -169,8 +174,10 @@ unresolved semantics with CSS.
 
 ### Document card and direct editing
 
-Wide and Focus are secondary mobile presentation choices. They move into
-Options rather than occupying absolute micro-links above the document card.
+Wide and Focus are desktop workspace presentation choices. They are not shown
+on compact touch—not above the card and not in Options—because the phone already
+gives the artifact its available width and exposes no simultaneous panels to
+focus away.
 
 Direct Edit remains supported:
 
@@ -250,6 +257,38 @@ Physical gate:
 3. Enter direct edit, type with the software keyboard, Save, rotate, and Done.
 4. Confirm every edit control is fully visible and at least 44 px tall.
 5. Confirm no persistent duplicate toolbar or shortcut glyph dominates arrival.
+
+Implementation checkpoint:
+
+- The compact header is now a stable 52 px grid containing a 44 px navigation
+  target, centered current-document basename, and a 44 px Options target. It
+  remains normal-flow so the accepted Safari document-scroll behavior is
+  unchanged.
+- Close / Send Feedback / Approve, callback decisions, archive decisions, and
+  goal-setup decisions move into Options only on compact touch. Every item calls
+  the incumbent handler and therefore retains the established confirmation,
+  unsaved-file, transport, and agent-validation behavior.
+- Persistent Select / Pinpoint and Markup / Comment / Redline / Label groups are
+  replaced with one `Annotate · <method>` disclosure. The revealed choices are
+  only Select text and Pinpoint; contextual feedback actions still come from the
+  existing target toolbar.
+- Compact annotation always uses Markup semantics without writing the saved
+  desktop action mode. Compact input-method changes are session-only as well.
+- Wide and Focus are absent on compact touch. Desktop keeps their existing
+  absolute micro-controls and behavior unchanged.
+- Edit moves into Options. Once editing starts, a normal-flow row above the
+  editor identifies the document and exposes source-file Save plus Done/Cancel/
+  two-step Discard through the existing edit state machine.
+- Desktop rendered preflight retained the incumbent 48 px flex header, full
+  toolstrip, Wide / Focus / Edit controls, and exact page width with no overflow.
+  A narrow fine-pointer control also retained desktop composition. Compact
+  coarse-pointer rendering remains a physical-device gate.
+- A full-App coarse-pointer integration test now proves the real compact route:
+  current filename in the three-region header, one annotation disclosure, no
+  persistent desktop tool matrix, session-only input-method changes, review
+  decisions and Edit in Options, and the in-flow edit row. Eighteen focused DOM
+  tests and 72 editor tests pass, along with shared typecheck, production UI CSS,
+  Hook, and OpenCode builds plus `git diff --check`.
 
 ### 2B.3 — Auxiliary and completion surfaces
 

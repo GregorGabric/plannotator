@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import type { SourceSaveCapability } from "@plannotator/core/source-save";
 
 const hasDom = typeof document !== "undefined";
 
@@ -15,12 +16,15 @@ const appModule = hasDom ? await import("./App") : null;
 const App = appModule?.default as typeof import("./App")["default"];
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
+const originalMatchMedia = hasDom ? window.matchMedia : undefined;
 
 interface PlanResponse {
   readonly plan: string;
   readonly origin: "codex";
   readonly mode: "archive" | "annotate";
   readonly filePath?: string;
+  readonly sourceSave?: SourceSaveCapability;
+  readonly gate?: boolean;
   readonly archivePlans?: readonly [{
     readonly filename: string;
     readonly status: "approved";
@@ -76,9 +80,28 @@ function configureNotesApps(): void {
   noteSettings.set("plannotator-default-notes-app", "obsidian");
 }
 
+function useCompactTouchMedia(): void {
+  if (!hasDom) return;
+  window.matchMedia = ((query: string): MediaQueryList => ({
+    matches: query.includes("max-width") || query.includes("pointer: coarse"),
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => true,
+  })) as typeof window.matchMedia;
+}
+
 function findButton(label: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll("button"))
     .find((button) => button.textContent?.trim() === label);
+}
+
+function findButtonContaining(label: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll("button"))
+    .find((button) => button.textContent?.includes(label));
 }
 
 function responseFor(planResponse: PlanResponse): typeof fetch {
@@ -151,6 +174,7 @@ afterEach(async () => {
   host = null;
   globalThis.fetch = originalFetch;
   globalThis.EventSource = originalEventSource;
+  if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   noteSettings.clear();
   storageModule?.resetStorageBackend();
   if (hasDom) document.body.replaceChildren();
@@ -267,5 +291,61 @@ describe.if(hasDom)("App document permissions", () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
     expect(requestedRoutes).toContain("POST /api/save-notes");
+  });
+
+  test("compact touch presents a reading-first file surface without mutating desktop preferences", async () => {
+    configureNotesApps();
+    noteSettings.set("plannotator-input-method", "pinpoint");
+    useCompactTouchMedia();
+    await mountApp({
+      plan: "# Mobile document\n\nA paragraph to annotate and edit.",
+      origin: "codex",
+      mode: "annotate",
+      filePath: "/repo/docs/mobile.md",
+      sourceSave: {
+        enabled: true,
+        kind: "local-text-file",
+        scope: "single-file",
+        path: "/repo/docs/mobile.md",
+        basename: "mobile.md",
+        language: "markdown",
+        hash: "sha256:mobile",
+        mtimeMs: 1_000,
+        size: 52,
+        eol: "lf",
+      },
+      gate: true,
+      sharingEnabled: false,
+      serverConfig: {},
+    });
+
+    expect(document.querySelector("[data-pn-compact-document-title]")?.textContent).toBe("mobile.md");
+    expect(document.querySelector("[data-pn-compact-annotate-entry]")?.textContent).toContain("Pinpoint");
+    for (const label of ["Wide", "Focus", "Edit", "Markup", "Comment", "Redline", "Label"]) {
+      expect(findButton(label)).toBeUndefined();
+    }
+
+    const annotateEntry = document.querySelector<HTMLButtonElement>("[data-pn-compact-annotate-entry]");
+    if (!annotateEntry) throw new Error("Compact annotation entry did not render");
+    await act(async () => annotateEntry.click());
+    expect(findButtonContaining("Select text")).not.toBeUndefined();
+    expect(findButtonContaining("Pinpoint")).not.toBeUndefined();
+
+    await act(async () => findButtonContaining("Select text")?.click());
+    expect(document.querySelector("[data-pn-compact-annotate-entry]")?.textContent).toContain("Select text");
+    expect(noteSettings.get("plannotator-input-method")).toBe("pinpoint");
+
+    const optionsButton = document.querySelector<HTMLButtonElement>('button[aria-label="Options"]');
+    if (!optionsButton) throw new Error("Options menu trigger did not render");
+    await act(async () => optionsButton.click());
+    expect(findButton("Close session")).not.toBeUndefined();
+    expect(findButton("Approve")).not.toBeUndefined();
+    expect(findButtonContaining("Edit document")).not.toBeUndefined();
+
+    await act(async () => findButtonContaining("Edit document")?.click());
+    const editControls = document.querySelector("[data-pn-compact-edit-controls]");
+    expect(editControls?.textContent).toContain("Editing mobile.md");
+    expect(findButton("Saved")).not.toBeUndefined();
+    expect(findButton("Done")).not.toBeUndefined();
   });
 });

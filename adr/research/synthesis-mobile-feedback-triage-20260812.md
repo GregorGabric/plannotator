@@ -2,7 +2,7 @@
 
 Date: 2026-08-12
 Status: Phase 2A implementation accepted as the working mobile baseline;
-filename micro-gate pending in parallel, Phase 2B.1 ready for physical review
+filename micro-gate pending in parallel, Phase 2B.2 ready for physical review
 Source dossier: [`SPIKE-mobile-web-compatibility-20260812.md`](./SPIKE-mobile-web-compatibility-20260812.md)
 Foundation spec: [`mobile-platform-foundation-phase1-20260812.md`](../specs/mobile-platform-foundation-phase1-20260812.md)
 Phase 2B spec: [`mobile-plan-shell-phase2b-20260813.md`](../specs/mobile-plan-shell-phase2b-20260813.md)
@@ -44,6 +44,32 @@ and prevents a phone workaround from mutating desktop preferences.
 | Guided Review intro | Preserve | The reviewer found the initial Guide explanation useful. Guide is a strong candidate for mobile comprehension, not noise to remove. |
 | Edit Code to Suggest | Preserve | The tested dialog was acceptable; suggestion editing is not pulled into the next layout phase. |
 | All Files | Preserve and learn from | It was the cleanest Code Review presentation observed on the phone. |
+
+## Phase 2B physical feedback incorporated
+
+The first 2B.1 phone pass clarified that restoring folder navigation was not
+enough: once a file was selected, the Plan still exposed its entire desktop
+annotation matrix plus Wide / Focus / Edit micro-links. The reviewer also asked
+for Plan completion decisions to follow the Code Review pattern and move into
+Options.
+
+This feedback is assigned to 2B.2 and implemented as one compact document-
+chrome contract:
+
+- arrival shows one `Annotate · <method>` entry instead of Select / Pinpoint
+  beside Markup / Comment / Redline / Label;
+- compact targeting is always presented through Markup semantics, with Select
+  text and Pinpoint as the only up-front acquisition choices;
+- compact method choices remain session-only, protecting desktop preferences;
+- Wide and Focus are removed from compact touch entirely;
+- Edit moves into Options and gains a normal-flow Save / Done / Cancel row while
+  active; and
+- terminal decisions move into Options while calling the exact incumbent
+  handlers and warning paths.
+
+No Phase 3 multi-block or multi-line selection semantics are claimed by this
+cleanup. Pinpoint one-block targeting and native drag selection remain the
+known input foundations for the 2B.2 physical gate.
 
 ## Triage matrix
 

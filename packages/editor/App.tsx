@@ -128,7 +128,10 @@ const DEMO_PLAN_CONTENT = USE_DIFF_DEMO
 import { useCheckboxOverrides } from './hooks/useCheckboxOverrides';
 import { usePlanDiffViewAutoExit } from './hooks/usePlanDiffViewAutoExit';
 import { AppHeader } from './components/AppHeader';
+import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
 import { FolderAnnotationEmptyState } from './components/FolderAnnotationEmptyState';
+import { CompactAnnotationControls } from './components/CompactAnnotationControls';
+import { CompactEditControls } from './components/CompactEditControls';
 import {
   COMPACT_PLAN_ARTIFACT,
   openCompactPlanNavigator,
@@ -341,6 +344,7 @@ const App: React.FC = () => {
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<EditorMode>(getEditorMode);
   const [inputMethod, setInputMethod] = useState<InputMethod>(getInputMethod);
+  const [compactInputMethod, setCompactInputMethod] = useState<InputMethod>(getInputMethod);
   const [taterMode, setTaterMode] = useState(() => {
     const stored = storage.getItem('plannotator-tater-mode');
     return stored === 'true';
@@ -530,6 +534,8 @@ const App: React.FC = () => {
   const isMobile = useIsMobile();
   const isCompactTouchLayout = useCompactTouchLayout();
   const usesDocumentScroll = isCompactTouchLayout;
+  const effectiveEditorMode: EditorMode = isCompactTouchLayout ? 'selection' : editorMode;
+  const effectiveInputMethod = isCompactTouchLayout ? compactInputMethod : inputMethod;
   const [compactPlanSurface, setCompactPlanSurface] = useState<CompactPlanSurface>(COMPACT_PLAN_ARTIFACT);
   const [compactNavigatorTab, setCompactNavigatorTab] = useState<SidebarTab>('toc');
   const isCompactNavigatorOpen = isCompactTouchLayout && compactPlanSurface.type === 'navigator';
@@ -543,8 +549,12 @@ const App: React.FC = () => {
   // state. Crossing back to a fine-pointer workspace simply removes the
   // transient foreground surface and reveals the incumbent desktop layout.
   useEffect(() => {
-    if (!isCompactTouchLayout) setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
-  }, [isCompactTouchLayout]);
+    if (isCompactTouchLayout) return;
+    setCompactPlanSurface(COMPACT_PLAN_ARTIFACT);
+    // Keep the session-only compact method ready to inherit the latest
+    // explicit desktop choice without letting compact changes write it back.
+    setCompactInputMethod(inputMethod);
+  }, [inputMethod, isCompactTouchLayout]);
 
   const viewerRef = useRef<ViewerHandle>(null);
   // Desktop uses the main document element as its native scroll viewport.
@@ -2551,6 +2561,10 @@ const App: React.FC = () => {
   };
 
   const handleInputMethodChange = (method: InputMethod) => {
+    if (isCompactTouchLayout) {
+      setCompactInputMethod(method);
+      return;
+    }
     setInputMethod(method);
     // Surface-scoped persistence: an explicit choice made on the HTML surface
     // sticks for HTML sessions only; markdown keeps its own preference.
@@ -2565,11 +2579,13 @@ const App: React.FC = () => {
   useEffect(() => {
     if (prevSurfaceRef.current === isHtmlSurface) return;
     prevSurfaceRef.current = isHtmlSurface;
-    setInputMethod(getInputMethod(isHtmlSurface ? 'html' : 'markdown'));
+    const method = getInputMethod(isHtmlSurface ? 'html' : 'markdown');
+    setInputMethod(method);
+    setCompactInputMethod(method);
   }, [isHtmlSurface]);
 
   // Alt/Option key: hold to temporarily switch, double-tap to toggle
-  useInputMethodSwitch(inputMethod, handleInputMethodChange);
+  useInputMethodSwitch(effectiveInputMethod, handleInputMethodChange);
 
   // Check if we're in API mode (served from Bun hook server)
   // Skip if we loaded from a shared URL
@@ -4256,6 +4272,118 @@ const App: React.FC = () => {
   const handleSaveToOctarine = useCallback(() => headerHandlersRef.current.handleQuickSaveToNotes('octarine'), []);
   const handleSaveToBear = useCallback(() => headerHandlersRef.current.handleQuickSaveToNotes('bear'), []);
 
+  const compactDocumentTitle = useMemo(() => {
+    const path = linkedDocHook.filepath ?? sourceFilePath ?? fileBrowser.activeFile;
+    if (path) return path.replace(/\\/g, '/').split('/').pop() || path;
+    if (archive.currentInfo?.title) return archive.currentInfo.title;
+    if (annotateSource === 'message') return 'Message';
+    if (annotateSource === 'folder') return 'Choose a file';
+    return 'Plan';
+  }, [annotateSource, archive.currentInfo?.title, fileBrowser.activeFile, linkedDocHook.filepath, sourceFilePath]);
+
+  const callbackShareUrlReady = callbackConfig
+    ? Boolean(shareUrl || shortShareUrl || (renderAs === 'html' && (shareHtml || rawHtml)))
+    : true;
+  const compactActionBusy = isSubmitting || isExiting || goalSetupAction.isSubmitting;
+  const compactSessionActions: CompactPlanAction[] = !isCompactTouchLayout
+    ? []
+    : callbackConfig && !isApiMode && isSharedSession
+      ? [
+          {
+            id: 'feedback',
+            label: 'Send feedback to bot',
+            onSelect: handleCallbackFeedback,
+            disabled: compactActionBusy || !callbackShareUrlReady,
+          },
+          {
+            id: 'approve',
+            label: 'Approve design',
+            onSelect: handleCallbackApprove,
+            disabled: compactActionBusy || !callbackShareUrlReady,
+          },
+        ]
+      : isApiMode && !linkedDocHook.isActive && archive.archiveMode
+        ? [
+            { id: 'copy', label: 'Copy plan', onSelect: archive.copy },
+            { id: 'done', label: 'Done', onSelect: archive.done },
+          ]
+        : isApiMode && !linkedDocHook.isActive && goalSetupMode
+          ? [
+              {
+                id: 'exit',
+                label: 'Close goal setup',
+                onSelect: handleGoalSetupExit,
+                disabled: compactActionBusy,
+              },
+              {
+                id: 'approve',
+                label: goalSetupAction.submitLabel,
+                onSelect: handleGoalSetupSubmit,
+                disabled: !goalSetupAction.canSubmit || compactActionBusy,
+              },
+            ]
+          : isApiMode && (!linkedDocHook.isActive || annotateMode) && !archive.archiveMode && !goalSetupMode
+            ? [
+                ...(annotateMode
+                  ? [
+                      {
+                        id: 'exit' as const,
+                        label: 'Close session',
+                        onSelect: handleHeaderAnnotateExit,
+                        disabled: compactActionBusy,
+                      },
+                      ...(hasFeedbackContent
+                        ? [{
+                            id: 'feedback' as const,
+                            label: 'Send feedback',
+                            subtitle: feedbackAnnotationCount > 0
+                              ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
+                              : 'Edited document',
+                            onSelect: handleHeaderAnnotateFeedback,
+                            disabled: compactActionBusy,
+                          }]
+                        : []),
+                    ]
+                  : [{
+                      id: 'feedback' as const,
+                      label: 'Send feedback',
+                      subtitle: hasFeedbackToSend
+                        ? `${feedbackAnnotationCount} annotation${feedbackAnnotationCount === 1 ? '' : 's'}`
+                        : 'Add general feedback',
+                      onSelect: handleHeaderFeedback,
+                      disabled: compactActionBusy,
+                    }]),
+                ...((!annotateMode || gate)
+                  ? [{
+                      id: 'approve' as const,
+                      label: annotateMode ? annotateApprovalPolicy.label : 'Approve',
+                      subtitle: !annotateMode && hasFeedbackToSend ? 'Feedback remains unsent' : undefined,
+                      onSelect: handleHeaderApprove,
+                      disabled: compactActionBusy,
+                    }]
+                  : []),
+              ]
+            : [];
+  const compactDocumentActions: CompactPlanAction[] = !isCompactTouchLayout
+    ? []
+    : [
+        ...(isHtmlSurface
+          ? [{
+              id: 'tools' as const,
+              label: htmlToolsHidden ? 'Show annotation tools' : 'Hide annotation tools',
+              onSelect: () => setHtmlToolsHidden((hidden) => !hidden),
+            }]
+          : []),
+        ...(canEditMarkdown && !isEditingMarkdown && !isPlanDiffActive && !archive.archiveMode && !isHtmlSurface
+          ? [{
+              id: 'edit' as const,
+              label: 'Edit document',
+              subtitle: activeSourceSave ? `Edit ${activeSourceSave.basename}` : 'Edit the plan text directly',
+              onSelect: handleEditExitClick,
+            }]
+          : []),
+      ];
+
   const planMaxWidth = useMemo(() => {
     const widths: Record<PlanWidth, number> = { compact: 832, default: 1040, wide: 1280 };
     return widths[uiPrefs.planWidth] ?? 832;
@@ -4435,6 +4563,9 @@ const App: React.FC = () => {
           compactNavigatorAvailable={compactNavigatorAvailable}
           compactNavigatorOpen={isCompactNavigatorOpen}
           onCompactNavigatorToggle={() => toggleSidebarTab(effectiveCompactNavigatorTab)}
+          compactDocumentTitle={compactDocumentTitle}
+          compactSessionActions={compactSessionActions}
+          compactDocumentActions={compactDocumentActions}
           isApiMode={isApiMode}
           annotateMode={annotateMode}
           archiveMode={archive.archiveMode}
@@ -4454,7 +4585,7 @@ const App: React.FC = () => {
           hasAnyAnnotations={hasAnyAnnotations || hasDirectEdits || hasSavedFileChanges}
           annotationCount={feedbackAnnotationCount}
           linkedDocIsActive={linkedDocHook.isActive}
-          callbackShareUrlReady={callbackConfig ? Boolean(shareUrl || shortShareUrl || (renderAs === 'html' && (shareHtml || rawHtml))) : true}
+          callbackShareUrlReady={callbackShareUrlReady}
           canShareCurrentSession={canShareCurrentSession}
           agentName={agentName}
           availableAgents={availableAgents}
@@ -4675,7 +4806,8 @@ const App: React.FC = () => {
                   comment/markup mode). Hidden during plan diff, and on HTML surfaces
                   when the header's "Hide tools" toggle is on (leaving the rendered HTML
                   free of overlay controls). On HTML it floats top-left over the doc. */}
-              {!goalSetupMode && !isPlanDiffActive && !archive.archiveMode && !isEditingMarkdown && !htmlChromeHidden && (
+              {!goalSetupMode && !isPlanDiffActive && !archive.archiveMode && !isEditingMarkdown && !htmlChromeHidden &&
+                (!isCompactTouchLayout || !(annotateSource === 'folder' && !markdown && !linkedDocHook.isActive)) && (
                 <div
                   data-print-hide
                   className={isHtmlSurface
@@ -4683,14 +4815,21 @@ const App: React.FC = () => {
                     : "w-full mb-3 md:mb-4 flex items-center justify-start"}
                   style={isHtmlSurface || annotateReaderMaxWidth == null ? undefined : { maxWidth: annotateReaderMaxWidth }}
                 >
-                  <AnnotationToolstrip
-                    inputMethod={inputMethod}
-                    onInputMethodChange={handleInputMethodChange}
-                    mode={editorMode}
-                    onModeChange={handleEditorModeChange}
-                    taterMode={taterMode}
-                    showHelpLink={!isHtmlSurface}
-                  />
+                  {isCompactTouchLayout && !isHtmlSurface ? (
+                    <CompactAnnotationControls
+                      inputMethod={effectiveInputMethod}
+                      onInputMethodChange={handleInputMethodChange}
+                    />
+                  ) : (
+                    <AnnotationToolstrip
+                      inputMethod={inputMethod}
+                      onInputMethodChange={handleInputMethodChange}
+                      mode={editorMode}
+                      onModeChange={handleEditorModeChange}
+                      taterMode={taterMode}
+                      showHelpLink={!isHtmlSurface}
+                    />
+                  )}
                 </div>
               )}
 
@@ -4723,7 +4862,7 @@ const App: React.FC = () => {
                     onAddAnnotation={handleAddAnnotation}
                     onSelectAnnotation={handleSelectAnnotation}
                     selectedAnnotationId={selectedAnnotationId}
-                    mode={editorMode}
+                    mode={effectiveEditorMode}
                   />
                 </div>
               )}
@@ -4735,8 +4874,8 @@ const App: React.FC = () => {
                 />
               )}
               {/* Normal Plan View — always mounted, hidden during diff mode */}
-              <div className={`w-full relative ${isHtmlSurface ? 'flex-1 flex flex-col' : `flex justify-center${isEditingMarkdown ? ' flex-1 min-h-0' : ''}`}`} style={{ display: goalSetupMode || (isPlanDiffActive && planDiff.diffBlocks) || (annotateSource === 'folder' && !markdown && !linkedDocHook.isActive) ? 'none' : undefined }}>
-                {(canUseWideMode || canEditMarkdown) && !isPlanDiffActive && !archive.archiveMode && !isHtmlSurface && (
+              <div className={`w-full relative ${isHtmlSurface ? 'flex-1 flex flex-col' : `${isCompactTouchLayout && isEditingMarkdown ? 'flex flex-col items-center' : 'flex justify-center'}${isEditingMarkdown ? ' flex-1 min-h-0' : ''}`}`} style={{ display: goalSetupMode || (isPlanDiffActive && planDiff.diffBlocks) || (annotateSource === 'folder' && !markdown && !linkedDocHook.isActive) ? 'none' : undefined }}>
+                {!isCompactTouchLayout && (canUseWideMode || canEditMarkdown) && !isPlanDiffActive && !archive.archiveMode && !isHtmlSurface && (
                   <div
                     data-print-hide
                     className="absolute -top-5 left-0 right-0 mx-auto w-full flex justify-end pointer-events-none"
@@ -4850,6 +4989,17 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 )}
+                {isCompactTouchLayout && isEditingMarkdown && !isHtmlSurface && (
+                  <CompactEditControls
+                    documentTitle={compactDocumentTitle}
+                    sourceBacked={!!activeSourceSave}
+                    saveStatus={activeSaveStatus}
+                    cancelMode={cancelMode}
+                    confirmDiscard={confirmCancelEdits}
+                    onSave={() => { void handleSaveEditedSourceFile(); }}
+                    onExit={handleEditExitClick}
+                  />
+                )}
                 {renderAs === 'html' ? (
                   <HtmlViewer
                     key={(linkedDocHook.isActive ? `doc:${linkedDocHook.filepath}` : 'plan') + (isPlanDiffActive && htmlDiffHtml ? ':diff' : '')}
@@ -4859,8 +5009,8 @@ const App: React.FC = () => {
                     onAddAnnotation={handleAddAnnotation}
                     onSelectAnnotation={handleSelectAnnotation}
                     selectedAnnotationId={selectedAnnotationId}
-                    mode={editorMode}
-                    inputMethod={inputMethod}
+                    mode={effectiveEditorMode}
+                    inputMethod={effectiveInputMethod}
                     vimModeEnabled={vimModeEnabled}
                     vimHudEnabled={vimModeEnabled && vimHudEnabled}
                     vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}
@@ -4897,8 +5047,8 @@ const App: React.FC = () => {
                     onAddAnnotation={handleAddAnnotation}
                     onSelectAnnotation={handleSelectAnnotation}
                     selectedAnnotationId={selectedAnnotationId}
-                    mode={editorMode}
-                    inputMethod={inputMethod}
+                    mode={effectiveEditorMode}
+                    inputMethod={effectiveInputMethod}
                     vimModeEnabled={vimModeEnabled}
                     vimHudEnabled={vimModeEnabled && vimHudEnabled}
                     vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}
