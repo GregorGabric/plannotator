@@ -202,7 +202,7 @@ export const ReviewPROverviewPanel: React.FC<IDockviewPanelProps> = () => {
           </div>
         </>
       ) : (
-        <div className="flex-1 min-h-0 flex gap-3">
+        <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-3">
           {summaryRegion}
           {commentsRegion}
         </div>
