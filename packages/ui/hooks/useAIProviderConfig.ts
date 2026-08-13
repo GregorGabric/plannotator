@@ -59,14 +59,29 @@ export function useAIProviderConfig({
   // Auto-resolve provider/model once capabilities are known.
   useEffect(() => {
     if (!available || providers.length === 0) return;
-    setAiConfig(prev => {
-      const saved = getAIProviderSettings();
-      const selection = resolveAIProviderSelection({
-        providers,
+    const saved = getAIProviderSettings();
+    const selection = resolveAIProviderSelection({
+      providers,
+      origin,
+      settings: saved,
+      serverDefaultProvider: defaultProvider,
+    });
+
+    // Capability detection has already applied the established precedence
+    // (per-origin choice → origin match → saved global → server default →
+    // first available). Persist that provider silently so first use does not
+    // need an announcement dialog. Never persist the resolver-derived model:
+    // deferred model discovery may still be advertising only a fallback.
+    if (selection.providerId) {
+      saveAIProviderSelection({
+        providerId: selection.providerId,
+        model: null,
         origin,
         settings: saved,
-        serverDefaultProvider: defaultProvider,
       });
+    }
+
+    setAiConfig(prev => {
       if (prev.providerId === selection.providerId && prev.model === selection.model) return prev;
       return {
         ...prev,
