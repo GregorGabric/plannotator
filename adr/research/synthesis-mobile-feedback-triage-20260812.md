@@ -1,9 +1,11 @@
 # Synthesis: Mobile Feedback Triage and Phase Sequence
 
 Date: 2026-08-12
-Status: Phase 2A implemented; physical-device gate pending
+Status: Phase 2A implementation accepted as the working mobile baseline;
+filename micro-gate pending, Phase 2B specified
 Source dossier: [`SPIKE-mobile-web-compatibility-20260812.md`](./SPIKE-mobile-web-compatibility-20260812.md)
 Foundation spec: [`mobile-platform-foundation-phase1-20260812.md`](../specs/mobile-platform-foundation-phase1-20260812.md)
+Phase 2B spec: [`mobile-plan-shell-phase2b-20260813.md`](../specs/mobile-plan-shell-phase2b-20260813.md)
 
 ## Decision
 
@@ -287,6 +289,27 @@ Open the same GitHub PR through Tailscale on iPhone, then iPad if available:
 
 Range accumulation and multi-line touch selection are observations only in
 this gate; they remain Phase 3 work.
+
+#### Phase 2A physical closeout status
+
+The physical iPhone iteration established a stable baseline:
+
+- the page-scroll proxy failed decisively (frozen virtual window plus a large
+  blank tail) and was removed rather than patched around;
+- the restored Pierre-owned scroller was judged “much, much better,” and
+  continuous file scrolling works again;
+- the reviewer characterized the resulting application behavior as “pretty
+  good” and accepted the remaining Safari top-chrome behavior as a deferred,
+  isolated experiment rather than grounds for another renderer migration;
+- compact app/dock/file chrome and the comment composer remain in the Phase 2A
+  baseline; and
+- the final filename complaint was addressed by replacing the hard 14–32
+  character basename cut with Diffshub-style full-path, leading-ellipsis
+  treatment. That visible filename treatment is the only remaining micro-gate.
+
+Do not reopen the rejected scroll architecture during Phase 2B. A future
+document-native Pierre Virtualizer experiment, if pursued, must remain isolated
+and earn promotion through complete interaction parity plus physical testing.
 
 ## Why selection is not bundled into layout
 
