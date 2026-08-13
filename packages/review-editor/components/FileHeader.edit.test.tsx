@@ -125,9 +125,11 @@ describe.if(hasDom)('FileHeader edit affordance (DOM)', () => {
   });
 
   test('compact touch header keeps the file identity and removes desktop-only file actions', async () => {
+    const longPath = 'packages/review-editor/components/ExtremelyDescriptiveMobileFilename.tsx';
     const el = await mount(
       <FileHeader
         {...baseProps}
+        filePath={longPath}
         compactTouchLayout
         status="modified"
         onToggleViewed={() => {}}
@@ -141,7 +143,9 @@ describe.if(hasDom)('FileHeader edit affordance (DOM)', () => {
 
     const header = el.firstElementChild as HTMLElement;
     expect(header.style.height).toBe('44px');
-    expect(header.textContent).toContain('calc.ts');
+    const compactPath = header.querySelector<HTMLElement>('[data-pn-compact-file-path]');
+    expect(compactPath?.textContent).toBe(longPath);
+    expect(compactPath?.className).toContain('[direction:rtl]');
     expect(header.textContent).toContain('+1');
     expect(header.textContent).toContain('-1');
     expect(Array.from(header.querySelectorAll('button')).map((button) => button.getAttribute('aria-label'))).toEqual(['Collapse diff']);
