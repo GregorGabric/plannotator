@@ -71,6 +71,15 @@ No Phase 3 multi-block or multi-line selection semantics are claimed by this
 cleanup. Pinpoint one-block targeting and native drag selection remain the
 known input foundations for the 2B.2 physical gate.
 
+The next iPhone folder pass exposed one state-transition defect inside 2B.1:
+file selection closed the navigator, then asynchronous linked-document
+activation replayed the desktop “open Files sidebar” behavior and resurrected
+the compact navigator. That close/reopen sequence caused the visible flashing
+and forced the reviewer to use X before seeing the selected document. Compact
+activation now suppresses that desktop-only side effect; the selected filename
+and document render with the navigator remaining closed, while fine-pointer
+desktop keeps its incumbent sidebar activation.
+
 ## Triage matrix
 
 `Now` means the next implementation checkpoint. `Next` is the first structural

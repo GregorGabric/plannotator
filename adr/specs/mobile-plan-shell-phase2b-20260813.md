@@ -243,6 +243,22 @@ Physical gate:
    is the first surface.
 5. Rotate and confirm no desktop rail appears.
 
+Physical correction:
+
+- iPhone review found that selecting a folder file visibly changed the
+  document behind the navigator but left the navigator open. The transition
+  flashed because it briefly closed and then returned.
+- The selection handler was closing the compact foreground state correctly;
+  asynchronous document activation later invoked `useLinkedDoc`'s incumbent
+  desktop instruction to open the Files sidebar. On compact touch, that desktop
+  side effect reopened the navigator after the destination loaded.
+- Compact document activation now leaves foreground navigation to the compact
+  state owner. A file tap closes the navigator and the later activation cannot
+  resurrect it; desktop still opens its incumbent sidebar tab.
+- A full-App coarse-pointer test loads a real file tree through the shared
+  backend, selects a file, waits for `/api/doc`, and proves that the selected
+  document and filename render while the navigator remains closed.
+
 ### 2B.2 — Compact document chrome and direct edit
 
 Implement the three-region header, idle annotation entry/contextual tools,

@@ -12,6 +12,7 @@ if (hasDom) {
 }
 
 const storageModule = hasDom ? await import("@plannotator/ui/utils/storage") : null;
+const fileTreeModule = hasDom ? await import("@plannotator/ui/hooks/useFileBrowser") : null;
 const appModule = hasDom ? await import("./App") : null;
 const App = appModule?.default as typeof import("./App")["default"];
 const originalFetch = globalThis.fetch;
@@ -21,10 +22,11 @@ const originalMatchMedia = hasDom ? window.matchMedia : undefined;
 interface PlanResponse {
   readonly plan: string;
   readonly origin: "codex";
-  readonly mode: "archive" | "annotate";
+  readonly mode: "archive" | "annotate" | "annotate-folder";
   readonly filePath?: string;
   readonly sourceSave?: SourceSaveCapability;
   readonly gate?: boolean;
+  readonly projectRoot?: string;
   readonly archivePlans?: readonly [{
     readonly filename: string;
     readonly status: "approved";
@@ -94,6 +96,16 @@ function useCompactTouchMedia(): void {
   })) as typeof window.matchMedia;
 }
 
+function useSingleFileTree(): void {
+  fileTreeModule?.setFileTreeBackend({
+    loadTree: async () => Response.json({
+      tree: [{ name: "alpha.md", path: "alpha.md", type: "file" }],
+    }),
+    loadVaultTree: async () => Response.json({ error: "Unavailable" }, { status: 404 }),
+    watchTrees: () => undefined,
+  });
+}
+
 function findButton(label: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll("button"))
     .find((button) => button.textContent?.trim() === label);
@@ -132,6 +144,14 @@ function responseFor(planResponse: PlanResponse): typeof fetch {
     }
     if (url.pathname === "/api/draft") {
       return Response.json({ error: "Not found" }, { status: 404 });
+    }
+    if (url.pathname === "/api/doc") {
+      const filepath = url.searchParams.get("path");
+      return Response.json({
+        markdown: "# Selected file\n\nLoaded from the compact navigator.",
+        filepath,
+        renderAs: "markdown",
+      });
     }
     if (url.pathname === "/api/save-notes") {
       return Response.json({
@@ -177,6 +197,7 @@ afterEach(async () => {
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   noteSettings.clear();
   storageModule?.resetStorageBackend();
+  fileTreeModule?.resetFileTreeBackend();
   if (hasDom) document.body.replaceChildren();
 });
 
@@ -347,5 +368,43 @@ describe.if(hasDom)("App document permissions", () => {
     expect(editControls?.textContent).toContain("Editing mobile.md");
     expect(findButton("Saved")).not.toBeUndefined();
     expect(findButton("Done")).not.toBeUndefined();
+  });
+
+  test("compact folder selection closes the navigator after the async document activation", async () => {
+    configureNotesApps();
+    useCompactTouchMedia();
+    useSingleFileTree();
+    await mountApp({
+      plan: "",
+      origin: "codex",
+      mode: "annotate-folder",
+      filePath: "/repo",
+      projectRoot: "/repo",
+      sharingEnabled: false,
+      serverConfig: {},
+    });
+
+    for (let attempt = 0; attempt < 20 && !findButton("Choose a file"); attempt += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
+    const chooseFile = findButton("Choose a file");
+    if (!chooseFile) throw new Error("Folder arrival did not expose Choose a file");
+    await act(async () => chooseFile.click());
+
+    for (let attempt = 0; attempt < 20 && !findButtonContaining("alpha"); attempt += 1) {
+      await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    }
+    const alphaFile = findButtonContaining("alpha");
+    if (!alphaFile) throw new Error("Folder tree did not load alpha.md");
+    expect(document.querySelector("[data-pn-plan-navigator]")).not.toBeNull();
+
+    await act(async () => {
+      alphaFile.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(document.querySelector("[data-pn-plan-navigator]")).toBeNull();
+    expect(document.body.textContent).toContain("Selected file");
+    expect(document.querySelector("[data-pn-compact-document-title]")?.textContent).toBe("alpha.md");
   });
 });

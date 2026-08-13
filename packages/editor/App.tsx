@@ -817,9 +817,16 @@ const App: React.FC = () => {
 
   const linkedDocSidebar = useMemo(() => ({
     ...sidebar,
-    open: openSidebarTab,
+    // useLinkedDoc opens the relevant desktop rail after activating a file.
+    // Compact navigation is a foreground task instead: selecting a destination
+    // closes it, and the later async document activation must not resurrect it.
+    open: (tab?: SidebarTab) => {
+      if (isCompactTouchLayout) return;
+      openSidebarTab(tab ?? 'toc');
+    },
     toggleTab: toggleSidebarTab,
   }), [
+    isCompactTouchLayout,
     openSidebarTab,
     sidebar.activeTab,
     sidebar.close,
