@@ -26,8 +26,9 @@ export function markReviewSetupSeen(): void {
 export function initializeReviewSetup(store: typeof configStore = configStore): boolean {
   if (!needsReviewSetup()) return false;
 
-  // Tree + since-base is a valid coupled pair. The shared setter also records
-  // Tree as last-used, so accepting the dialog opens this first review in Tree.
+  // Selecting Tree preserves whichever defaultDiffType the store resolved.
+  // The shared setter also records Tree as last-used, so accepting the dialog
+  // opens this first review in Tree without writing server-backed config.
   setReviewPanelView('tree', undefined, store);
   markReviewSetupSeen();
   return true;

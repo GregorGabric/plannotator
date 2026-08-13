@@ -35,18 +35,30 @@ describe('initializeReviewSetup', () => {
     expect(needsReviewSetup()).toBe(false);
   });
 
-  test('a returning reviewer keeps both the persisted view and last-used memo', () => {
+  test('an unseen reviewer inherits an existing classic diff default', () => {
     installMemoryBackend({
-      'plannotator-review-setup-seen': 'true',
-      'plannotator-review-panel-view': 'tree',
-      'plannotator-review-panel-view-last-used': 'sections',
       'plannotator-default-diff-type': 'uncommitted',
     });
     const store = makeStore();
 
-    expect(initializeReviewSetup(store)).toBe(false);
+    expect(initializeReviewSetup(store)).toBe(true);
     expect(store.get('reviewPanelView')).toBe('tree');
-    expect(store.get('reviewPanelViewLastUsed')).toBe('sections');
+    expect(store.get('reviewPanelViewLastUsed')).toBe('tree');
     expect(store.get('defaultDiffType')).toBe('uncommitted');
+  });
+
+  test('a returning reviewer keeps both the persisted view and last-used memo', () => {
+    installMemoryBackend({
+      'plannotator-review-setup-seen': 'true',
+      'plannotator-review-panel-view': 'sections',
+      'plannotator-review-panel-view-last-used': 'tree',
+      'plannotator-default-diff-type': 'since-base',
+    });
+    const store = makeStore();
+
+    expect(initializeReviewSetup(store)).toBe(false);
+    expect(store.get('reviewPanelView')).toBe('sections');
+    expect(store.get('reviewPanelViewLastUsed')).toBe('tree');
+    expect(store.get('defaultDiffType')).toBe('since-base');
   });
 });

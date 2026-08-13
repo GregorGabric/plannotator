@@ -1666,11 +1666,11 @@ const ReviewApp: React.FC = () => {
         setCommitInfo(data.commitInfo ?? null);
         setBaseBehindRemote(data.baseBehindRemote === true);
         // First-run: offer the review-view chooser for a plain local git
-        // session (not workspace/PR/jj/p4), once. Genuinely new reviewers are
-        // initialized to Tree + All changes; the seen gate leaves returning
-        // reviewers' persisted and last-used views untouched. The user's
-        // explicit choice in the dialog then sticks. Applied to the live
-        // session on dismiss.
+        // session (not workspace/PR/jj/p4), once. An unseen reviewer's panel
+        // is initialized to Tree while inheriting the resolved diff default;
+        // the seen gate leaves returning reviewers' persisted and last-used
+        // views untouched. The user's explicit choice in the dialog then
+        // sticks. Applied to the live session on dismiss.
         //
         // Only when since-base is actually AVAILABLE (base ref resolves). On a
         // repo where getGitContext omits it (trunk / no origin/HEAD), forcing
