@@ -237,8 +237,16 @@ export function parseReviewAnalysisConfig(value: unknown): PlannotatorConfig["re
   return result;
 }
 
-const CONFIG_DIR = getPlannotatorDataDir();
-const CONFIG_PATH = join(CONFIG_DIR, "config.json");
+// Resolved per call, not at module scope: tests sandbox the data dir by
+// setting PLANNOTATOR_DATA_DIR at runtime, and a module-scope constant would
+// freeze whatever the env held at first import (bun runs every test file in
+// one process).
+function getConfigDir(): string {
+  return getPlannotatorDataDir();
+}
+function getConfigPath(): string {
+  return join(getConfigDir(), "config.json");
+}
 
 /**
  * Load config from ~/.plannotator/config.json.
@@ -246,8 +254,9 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json");
  */
 export function loadConfig(): PlannotatorConfig {
   try {
-    if (!existsSync(CONFIG_PATH)) return {};
-    const raw = readFileSync(CONFIG_PATH, "utf-8");
+    const configPath = getConfigPath();
+    if (!existsSync(configPath)) return {};
+    const raw = readFileSync(configPath, "utf-8");
     const parsed = JSON.parse(raw);
     return typeof parsed === "object" && parsed !== null ? parsed : {};
   } catch (e) {
@@ -281,8 +290,8 @@ export function saveConfig(partial: Partial<PlannotatorConfig>): void {
       reviewAnalysis: mergedReviewAnalysis,
       prompts: mergedPrompts,
     };
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    writeFileSync(CONFIG_PATH, JSON.stringify(merged, null, 2) + "\n", "utf-8");
+    mkdirSync(getConfigDir(), { recursive: true });
+    writeFileSync(getConfigPath(), JSON.stringify(merged, null, 2) + "\n", "utf-8");
   } catch (e) {
     process.stderr.write(`[plannotator] Warning: failed to write config.json: ${e}\n`);
   }

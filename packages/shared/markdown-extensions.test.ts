@@ -7,7 +7,16 @@ import {
 	isAnnotatableTextPath,
 	shouldStripFrontmatter,
 } from "./annotatable";
-import { normalizeMarkdownExtensions, resolveMarkdownExtensions } from "./markdown-extensions";
+import {
+	getAnnotatableTextRegex,
+	getExtraMarkdownExtensions,
+	normalizeMarkdownExtensions,
+	resetMarkdownExtensionsCache,
+	resolveMarkdownExtensions,
+} from "./markdown-extensions";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 
 describe("normalizeMarkdownExtensions", () => {
 	test("keeps well-formed dot-led extensions, lowercased and deduplicated", () => {
@@ -48,6 +57,20 @@ describe("normalizeMarkdownExtensions", () => {
 		expect(normalizeMarkdownExtensions([" .ENV "])).toEqual([]);
 		expect(isAnnotatableTextPath(".env", normalizeMarkdownExtensions([".env"]))).toBe(false);
 		expect(isAnnotatableTextPath("app/.env", [".livemd"])).toBe(false);
+	});
+
+	// The rationale covers the whole dotenv family, not just the exact name:
+	// `db.prod.env` and `.env.local` hold secrets exactly like `.env` does.
+	test("the dotenv family is denied as a family", () => {
+		expect(normalizeMarkdownExtensions([".prod.env"])).toEqual([]);
+		expect(normalizeMarkdownExtensions([".local.env"])).toEqual([]);
+		expect(normalizeMarkdownExtensions([".env.local"])).toEqual([]);
+		expect(normalizeMarkdownExtensions([".ENV.LOCAL", " .Prod.Env "])).toEqual([]);
+		// Non-dotenv names that merely contain "env" stay registerable.
+		expect(normalizeMarkdownExtensions([".envrc", ".environment"])).toEqual([
+			".envrc",
+			".environment",
+		]);
 	});
 
 	test("built-in extensions are dropped rather than duplicated into the regex", () => {
@@ -101,5 +124,41 @@ describe("configured extensions in the annotatable predicates", () => {
 	test("the supported-types hint names the configured extensions", () => {
 		expect(buildAnnotatableExtensionsHint(extra)).toContain(".livemd");
 		expect(buildAnnotatableExtensionsHint()).not.toContain(".livemd");
+	});
+});
+
+// The config.json -> memo -> predicate seam, end to end. This is the one
+// integration the explicit-list tests above cannot regress-guard: a break in
+// loadConfig plumbing or the memo would leave every configured extension
+// silently ignored at runtime.
+describe("config-file integration (sandboxed data dir)", () => {
+	test("memoized config read feeds the predicates, once per process", () => {
+		const prevDataDir = process.env.PLANNOTATOR_DATA_DIR;
+		const dataDir = mkdtempSync(join(tmpdir(), "plannotator-mdext-"));
+		try {
+			process.env.PLANNOTATOR_DATA_DIR = dataDir;
+			writeFileSync(
+				join(dataDir, "config.json"),
+				JSON.stringify({ markdownExtensions: [".livemd"] }),
+			);
+			resetMarkdownExtensionsCache();
+			expect(getExtraMarkdownExtensions()).toEqual([".livemd"]);
+			expect(getAnnotatableTextRegex().test("notebooks/tour.livemd")).toBe(true);
+
+			// Memoized: a mid-session config edit must not change the accepted
+			// set until the next process (or an explicit reset).
+			writeFileSync(
+				join(dataDir, "config.json"),
+				JSON.stringify({ markdownExtensions: [".qmd"] }),
+			);
+			expect(getExtraMarkdownExtensions()).toEqual([".livemd"]);
+			resetMarkdownExtensionsCache();
+			expect(getExtraMarkdownExtensions()).toEqual([".qmd"]);
+		} finally {
+			if (prevDataDir === undefined) delete process.env.PLANNOTATOR_DATA_DIR;
+			else process.env.PLANNOTATOR_DATA_DIR = prevDataDir;
+			resetMarkdownExtensionsCache();
+			rmSync(dataDir, { recursive: true, force: true });
+		}
 	});
 });

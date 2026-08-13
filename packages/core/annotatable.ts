@@ -58,6 +58,17 @@ export const ANNOTATABLE_DOC_REGEX = new RegExp(`${BUILTIN_DOC_PATTERN}$`, "i");
 /** Extensions a user may never register through config (see module comment). */
 export const DENIED_MARKDOWN_EXTENSIONS = [".env"] as const;
 
+/**
+ * The dotenv family is denylisted as a family, not a single name: `.env`
+ * itself, suffixed variants like `.prod.env`, and prefixed variants like
+ * `.env.local` all commonly hold secrets, and annotate history copies file
+ * contents into the data dir. (`.env.example` stays registerable only via
+ * the built-in list, where it is a deliberate exception.)
+ */
+function isDeniedMarkdownExtension(ext: string): boolean {
+	return ext.endsWith(".env") || ext.startsWith(".env.");
+}
+
 /** Shape a configured extension must have once trimmed and lowercased. */
 const CONFIGURABLE_EXTENSION_RE = /^\.[a-z0-9][a-z0-9._-]*$/;
 
@@ -81,8 +92,9 @@ function escapeRegExp(input: string): string {
  *  - starts with a dot and otherwise contains only `[a-z0-9._-]`, which
  *    rejects path separators, globs, whitespace, and dotless names;
  *  - is at most `MAX_CONFIGURABLE_EXTENSION_LENGTH` characters;
- *  - is not denylisted (`.env`, which annotate must never copy into the data
- *    dir — see the module comment);
+ *  - is not in the denylisted dotenv family (`.env`, `.prod.env`,
+ *    `.env.local`, ... — annotate must never copy secrets into the data dir;
+ *    see `isDeniedMarkdownExtension`);
  *  - is not already covered by a built-in extension.
  */
 export function normalizeMarkdownExtensions(value: unknown): string[] {
@@ -94,7 +106,7 @@ export function normalizeMarkdownExtensions(value: unknown): string[] {
 		const ext = entry.trim().toLowerCase();
 		if (ext.length > MAX_CONFIGURABLE_EXTENSION_LENGTH) continue;
 		if (!CONFIGURABLE_EXTENSION_RE.test(ext)) continue;
-		if ((DENIED_MARKDOWN_EXTENSIONS as readonly string[]).includes(ext)) continue;
+		if (isDeniedMarkdownExtension(ext)) continue;
 		// Dedupe against the built-ins: `sample` is a stand-in filename so the
 		// anchored built-in patterns match the extension the way they would on
 		// a real path.
