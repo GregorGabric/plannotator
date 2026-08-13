@@ -10,7 +10,7 @@ import type { ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/
 import type { AIChatEntry } from '../hooks/useAIChat';
 import { useDraggable } from '@plannotator/ui/hooks/useDraggable';
 import {
-  hasCoarsePointer,
+  hasPrimaryCoarsePointer,
   useVisibleViewportBounds,
 } from '@plannotator/ui/hooks/useViewportEnvironment';
 
@@ -79,7 +79,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   onViewAIResponse,
   aiHistoryMessages = [],
 }) => {
-  const coarsePointer = hasCoarsePointer();
+  const coarsePointer = hasPrimaryCoarsePointer();
   const visibleBounds = useVisibleViewportBounds(coarsePointer ? 16 : 0);
   const horizontalInset = coarsePointer ? Math.min(160, visibleBounds.width / 2) : 150;
   const suggestedCodeRef = useRef<HTMLTextAreaElement>(null);
@@ -206,7 +206,7 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
             value={commentText}
             onChange={(e) => setCommentText(e.target.value)}
             placeholder="Leave feedback..."
-            className="w-full min-h-[4.5rem] max-h-[calc(var(--pn-viewport-height,100dvh)-16rem)] px-3 py-2 bg-muted rounded-lg text-xs leading-6 resize-y border-0 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground"
+            className="w-full min-h-[4.5rem] max-h-[calc(var(--pn-viewport-height,100vh)-16rem)] px-3 py-2 bg-muted rounded-lg text-xs leading-6 resize-y border-0 focus:outline-none focus:ring-1 focus:ring-primary/50 placeholder:text-muted-foreground"
             rows={3}
             autoFocus={!coarsePointer}
             onKeyDown={(e) => {

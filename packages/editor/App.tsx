@@ -57,11 +57,8 @@ import {
   ScrollViewportProvider,
 } from '@plannotator/ui/hooks/useScrollViewport';
 import { useOverlayViewport } from '@plannotator/ui/hooks/useOverlayViewport';
-import { useIsMobile } from '@plannotator/ui/hooks/useIsMobile';
-import {
-  hasCoarsePointer,
-  useViewportEnvironment,
-} from '@plannotator/ui/hooks/useViewportEnvironment';
+import { useCompactTouchLayout, useIsMobile } from '@plannotator/ui/hooks/useIsMobile';
+import { useViewportEnvironment } from '@plannotator/ui/hooks/useViewportEnvironment';
 import {
   getPermissionModeSettings,
   needsPermissionModeSetup,
@@ -523,8 +520,7 @@ const App: React.FC = () => {
   });
   const [showLookAndFeelAnnouncement, setShowLookAndFeelAnnouncement] = useState(needsLookAndFeelAnnouncement);
   const isMobile = useIsMobile();
-  const isMobilePageScrollWidth = useIsMobile(1025);
-  const usesDocumentScroll = isMobilePageScrollWidth && hasCoarsePointer();
+  const usesDocumentScroll = useCompactTouchLayout();
 
   const viewerRef = useRef<ViewerHandle>(null);
   // Desktop uses the main document element as its native scroll viewport.
@@ -4255,6 +4251,7 @@ const App: React.FC = () => {
       <div
         data-print-region="root"
         data-pn-browser-canvas={browserCanvas}
+        data-pn-compact-touch-layout={usesDocumentScroll ? 'true' : undefined}
         data-pn-document-scroll={usesDocumentScroll ? 'true' : undefined}
         className={`pn-app-viewport flex flex-col ${usesDocumentScroll ? 'overflow-visible' : 'overflow-hidden'} ${browserCanvas === 'card' ? 'bg-card' : 'bg-background'}`}
       >

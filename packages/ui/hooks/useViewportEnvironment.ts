@@ -183,11 +183,11 @@ export function shouldUseExpandedComposer({
   return coarsePointer || bounds.width < 640 || bounds.height < 420;
 }
 
-export function hasCoarsePointer(targetWindow?: Window): boolean {
+/** Returns whether the device's primary pointing input is coarse. */
+export function hasPrimaryCoarsePointer(targetWindow?: Window): boolean {
   const resolvedWindow = targetWindow ?? (typeof window === 'undefined' ? undefined : window);
   if (!resolvedWindow?.matchMedia) return false;
-  return resolvedWindow.matchMedia('(any-pointer: coarse)').matches
-    || resolvedWindow.matchMedia('(pointer: coarse)').matches;
+  return resolvedWindow.matchMedia('(pointer: coarse)').matches;
 }
 
 function readViewportEnvironment(targetWindow: Window): ViewportEnvironment {

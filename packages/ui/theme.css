@@ -745,6 +745,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
 
 .pn-app-viewport[data-pn-document-scroll="true"] {
   height: auto;
+  min-height: 100vh;
   min-height: 100dvh;
 }
 
@@ -790,7 +791,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
   left: var(--pn-viewport-offset-left, 0px);
   box-sizing: border-box;
   width: var(--pn-viewport-width, 100vw);
-  height: var(--pn-viewport-height, 100dvh);
+  height: var(--pn-viewport-height, 100vh);
   padding-top: max(1rem, var(--pn-safe-top));
   padding-right: max(1rem, var(--pn-safe-right));
   padding-bottom: max(1rem, var(--pn-safe-bottom));
@@ -802,6 +803,7 @@ body:has([data-pn-document-scroll="true"]) > #root {
  * strand the footer below an ornamental desktop margin. */
 .pn-responsive-composer-dialog {
   width: 100%;
+  height: min(36rem, 85vh);
   height: min(36rem, 85dvh);
   max-width: 42rem;
   max-height: 100%;

@@ -10,7 +10,7 @@ import { useSkillReferenceAutocomplete } from '../hooks/useSkillReferenceAutocom
 import { HumanOnlySkillNotice, SkillReferenceMenu } from './SkillReferenceMenu';
 import type { SkillReferenceToken } from '../utils/skillReferences';
 import {
-  hasCoarsePointer,
+  hasPrimaryCoarsePointer,
   shouldUseExpandedComposer,
   useVisibleViewportBounds,
   type VisibleViewportBounds,
@@ -165,7 +165,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
   yieldState,
 }) => {
   const visibleBounds = useVisibleViewportBounds(16);
-  const coarsePointer = hasCoarsePointer();
+  const coarsePointer = hasPrimaryCoarsePointer();
   const prefersExpandedComposer = shouldUseExpandedComposer({
     bounds: visibleBounds,
     coarsePointer,
@@ -293,17 +293,20 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
     });
   }, []);
 
-  const handleClose = useCallback(() => {
-    if (draftKey) {
-      if (hasUnsavedCommentContent(text, allowImages ? images : [])) {
-        draftStore.set(draftKey, { text, images: allowImages ? images : [] });
-      } else {
-        draftStore.delete(draftKey);
+  const handleClose = useCallback(
+    (focusDisposition: 'restore-opener' | 'preserve-pointer-target' = 'restore-opener') => {
+      if (draftKey) {
+        if (hasUnsavedCommentContent(text, allowImages ? images : [])) {
+          draftStore.set(draftKey, { text, images: allowImages ? images : [] });
+        } else {
+          draftStore.delete(draftKey);
+        }
       }
-    }
-    onClose();
-    restoreOpeningFocus();
-  }, [allowImages, draftKey, images, onClose, restoreOpeningFocus, text]);
+      onClose();
+      if (focusDisposition === 'restore-opener') restoreOpeningFocus();
+    },
+    [allowImages, draftKey, images, onClose, restoreOpeningFocus, text],
+  );
 
   // Click-outside for popover mode
   useEffect(() => {
@@ -322,7 +325,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
       // Preserve the existing draft so the following Shift-click can extend
       // it instead of silently replacing it with a new one.
       if (shiftSelectionActive && e.shiftKey) return;
-      handleClose();
+      handleClose('preserve-pointer-target');
     };
 
     document.addEventListener('pointerdown', handlePointerDown, true);
@@ -512,7 +515,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
           type="button"
           aria-label="Dismiss comment"
           className="absolute inset-0 bg-background/80 backdrop-blur-sm"
-          onClick={handleClose}
+          onClick={() => handleClose()}
         />
 
         {/* Dialog card */}
@@ -561,7 +564,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
                 </button>
               )}
               <button
-                onClick={handleClose}
+                onClick={() => handleClose()}
                 className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
                 title="Close"
               >
@@ -706,7 +709,7 @@ export const CommentPopover: React.FC<CommentPopoverProps> = ({
             <ExpandIcon />
           </button>
           <button
-            onClick={handleClose}
+            onClick={() => handleClose()}
             className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title="Close"
           >

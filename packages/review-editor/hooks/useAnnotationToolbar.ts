@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { CodeAnnotation, SelectedLineRange, CodeAnnotationType, TokenAnnotationMeta, ConventionalLabel, ConventionalDecoration } from '@plannotator/ui/types';
 import { useDismissOnOutsideAndEscape } from '@plannotator/ui/hooks/useDismissOnOutsideAndEscape';
 import {
-  hasCoarsePointer,
+  hasPrimaryCoarsePointer,
   shouldUseExpandedComposer,
   useVisibleViewportBounds,
 } from '@plannotator/ui/hooks/useViewportEnvironment';
@@ -62,7 +62,7 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
   const visibleBounds = useVisibleViewportBounds(16);
   const expandedComposerRequired = shouldUseExpandedComposer({
     bounds: visibleBounds,
-    coarsePointer: hasCoarsePointer(),
+    coarsePointer: hasPrimaryCoarsePointer(),
   });
   const toolbarRef = useRef<HTMLDivElement>(null);
   const lastMousePosition = useRef<{ x: number; y: number }>({ x: 0, y: 0 });

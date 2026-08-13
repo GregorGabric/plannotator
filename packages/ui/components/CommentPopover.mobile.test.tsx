@@ -153,4 +153,51 @@ describe('CommentPopover mobile composition', () => {
     expect(document.querySelector<HTMLTextAreaElement>('[data-pn-mobile-editable]')?.value)
       .toBe('Keep this draft');
   });
+
+  test.skipIf(!hasDom)('keeps focus on a newly tapped outside target', async () => {
+    // SAFETY: The test double implements the MediaQueryList surface consumed by the component.
+    window.matchMedia = ((query: string): MediaQueryList => ({
+      ...coarseMatchMedia(query),
+      matches: false,
+    })) as typeof window.matchMedia;
+
+    function Harness() {
+      const triggerRef = useRef<HTMLButtonElement>(null);
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button ref={triggerRef} onClick={() => setOpen(true)}>Open</button>
+          <button>Next target</button>
+          {open && (
+            <CommentPopover
+              anchorEl={triggerRef.current ?? undefined}
+              anchorRect={new DOMRect(40, 40, 80, 24)}
+              contextText="selected text"
+              isGlobal={false}
+              onSubmit={() => {}}
+              onClose={() => setOpen(false)}
+            />
+          )}
+        </>
+      );
+    }
+
+    await mount(<Harness />);
+    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>('button'));
+    const trigger = buttons.find((button) => button.textContent === 'Open');
+    const nextTarget = buttons.find((button) => button.textContent === 'Next target');
+    expect(trigger).not.toBeUndefined();
+    expect(nextTarget).not.toBeUndefined();
+
+    await act(async () => trigger?.click());
+    await act(async () => {
+      nextTarget?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      nextTarget?.focus();
+      nextTarget?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => new Promise<void>(resolve => requestAnimationFrame(() => resolve())));
+
+    expect(document.querySelector('[data-comment-popover]')).toBeNull();
+    expect(document.activeElement).toBe(nextTarget);
+  });
 });
