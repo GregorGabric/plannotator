@@ -2,5 +2,8 @@
    scrolls inside the review shell). Everything else comes from the review
    stylesheet so the guide is styled exactly as in Plannotator. */
 html, body { margin: 0; min-height: 100%; }
-body { overflow-y: auto; }
+/* Do NOT give body an overflow: it would propagate to the viewport (body still
+   does not scroll itself), and the guide's viewport manager, walking up for an
+   overflow-y:auto ancestor, would then observe body instead of the window and
+   never see the real scroll position (#1158 contract). */
 #root { min-height: 100vh; }
