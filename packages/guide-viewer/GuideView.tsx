@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { CodeGuideData, GuideSection } from '@plannotator/shared/guide';
-import type { DiffFile } from '../../types';
-import { useReviewState } from '../../dock/ReviewStateContext';
-import { renderInlineMarkdown } from '../../utils/renderInlineMarkdown';
+import type { CodeGuideData, GuideSection } from '@plannotator/core/guide';
+import type { DiffFile } from './types';
+import { useGuideHost } from './host';
+import { renderInlineMarkdown } from './renderInlineMarkdown';
 import { GuideSectionCard } from './GuideSectionCard';
 import { GuideViewportProvider } from './GuideViewportManager';
 
@@ -65,8 +65,8 @@ export const GuideView: React.FC<GuideViewProps> = ({
   onFocusFile,
   onRegenerate,
 }) => {
-  const state = useReviewState();
-  const resolved = useMemo(() => resolveGuideSectionFiles(guide, state.files), [guide, state.files]);
+  const host = useGuideHost();
+  const resolved = useMemo(() => resolveGuideSectionFiles(guide, host.files), [guide, host.files]);
   const hasUnplaced = (guide.unplacedFiles?.length ?? 0) > 0;
   const cardTotal = guide.sections.length + (hasUnplaced ? 1 : 0);
   const reviewedCount = reviewed.filter(Boolean).length;
@@ -77,8 +77,8 @@ export const GuideView: React.FC<GuideViewProps> = ({
 
   const localRevealTokenRef = useRef(0);
   const [localRevealTarget, setLocalRevealTarget] = useState<{ filePath: string; token: number } | null>(null);
-  const externalRevealTarget = state.guideRevealFile
-    ? { filePath: state.guideRevealFile.path, token: state.guideRevealFile.token }
+  const externalRevealTarget = host.revealFile
+    ? { filePath: host.revealFile.path, token: host.revealFile.token }
     : null;
   const revealTarget = externalRevealTarget ?? localRevealTarget;
 
@@ -92,21 +92,21 @@ export const GuideView: React.FC<GuideViewProps> = ({
   const handleRequestReveal = useCallback(
     (filePath: string) => {
       onFocusFile(filePath);
-      if (state.onGuideRevealFile) {
-        state.onGuideRevealFile(filePath);
+      if (host.onRevealFile) {
+        host.onRevealFile(filePath);
       } else {
         localRevealTokenRef.current += 1;
         setLocalRevealTarget({ filePath, token: localRevealTokenRef.current });
       }
     },
-    [onFocusFile, state.onGuideRevealFile],
+    [onFocusFile, host.onRevealFile],
   );
 
   // Search results are global to the review, but an offscreen guide file has no
   // CodeView to receive the active match. Route each match change through the
   // same reveal channel as outline/sidebar jumps so its chapter opens, its shell
   // mounts, and the target viewer becomes active before line navigation runs.
-  const activeSearchMatch = state.allFilesActiveSearchMatch;
+  const activeSearchMatch = host.activeSearchMatch;
   useEffect(() => {
     if (!activeSearchMatch) return;
     handleRequestReveal(activeSearchMatch.filePath);

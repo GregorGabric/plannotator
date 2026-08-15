@@ -1,20 +1,19 @@
-import { afterEach, describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { GuideSection } from '@plannotator/shared/guide';
-import type { DiffFile } from '../../types';
-import { ReviewStateProvider, type ReviewState } from '../../dock/ReviewStateContext';
+import type { GuideSection } from '@plannotator/core/guide';
+import type { DiffFile } from './types';
+import { GuideHostProvider, type GuideHostValue } from './host';
 import { GUIDE_MAX_MOUNTED_CODE_VIEWS, GuideViewportProvider } from './GuideViewportManager';
 
 let codeViewProps: Record<string, unknown>[] = [];
-mock.module('../AllFilesCodeView', () => ({
-  AllFilesCodeView: (props: Record<string, unknown>) => {
-    codeViewProps.push(props);
-    const files = props.files as DiffFile[];
-    return <div data-testid="file-code-view" data-file={files[0]?.path} />;
-  },
-}));
-const { GuideSectionCard } = await import('./GuideSectionCard');
+/** Stand-in diff renderer: records the props the guide chain hands it. */
+function FakeDiffRenderer(props: Record<string, unknown>) {
+  codeViewProps.push(props);
+  const files = props.files as DiffFile[];
+  return <div data-testid="file-code-view" data-file={files[0]?.path} />;
+}
+import { GuideSectionCard } from './GuideSectionCard';
 
 const hasDom = typeof document !== 'undefined';
 
@@ -34,14 +33,26 @@ function makeFile(path = 'src/payments/localize.ts'): DiffFile {
   };
 }
 
-function makeState(overrides: Partial<ReviewState> = {}): ReviewState {
+type HostOverrides = {
+  files?: DiffFile[];
+  guideRevealFile?: { path: string; token: number } | null;
+  onGuideRevealFile?: (path: string) => void;
+  allFilesActiveSearchMatch?: { id: string; filePath: string } | null;
+  [passthrough: string]: unknown;
+};
+
+/** Build a GuideHost value: known host fields map onto the contract, anything else is forwarded to the renderer. */
+function makeState(overrides: HostOverrides = {}): GuideHostValue<Record<string, unknown>> {
+  const { files = [], guideRevealFile = null, onGuideRevealFile, allFilesActiveSearchMatch = null, ...passthrough } = overrides;
   return {
-    files: [],
-    guideRevealFile: null,
-    aiMessages: [],
-    onClickAIMarker: () => {},
-    ...overrides,
-  } as unknown as ReviewState;
+    files,
+    DiffRenderer: FakeDiffRenderer as unknown as GuideHostValue<Record<string, unknown>>['DiffRenderer'],
+    // Mirrors the in-app host, which also forwards the active match to the renderer.
+    getDiffRendererProps: () => ({ ...passthrough, activeSearchMatch: allFilesActiveSearchMatch }),
+    revealFile: guideRevealFile,
+    onRevealFile: onGuideRevealFile,
+    activeSearchMatch: allFilesActiveSearchMatch,
+  };
 }
 
 let root: Root | null = null;
@@ -59,12 +70,12 @@ afterEach(async () => {
 });
 
 function renderCard(
-  state: ReviewState,
+  state: GuideHostValue<Record<string, unknown>>,
   props: Partial<React.ComponentProps<typeof GuideSectionCard>> = {},
 ) {
   const file = makeFile();
   return (
-    <ReviewStateProvider value={state}>
+    <GuideHostProvider value={state}>
       <GuideViewportProvider>
         <GuideSectionCard
           section={section}
@@ -80,7 +91,7 @@ function renderCard(
           {...props}
         />
       </GuideViewportProvider>
-    </ReviewStateProvider>
+    </GuideHostProvider>
   );
 }
 

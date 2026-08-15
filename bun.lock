@@ -192,6 +192,25 @@
         "tailwindcss-animate": "^1.0.7",
       },
     },
+    "packages/guide-viewer": {
+      "name": "@plannotator/guide-viewer",
+      "version": "0.0.1",
+      "dependencies": {
+        "@plannotator/core": "workspace:*",
+        "lucide-react": "^1.14.0",
+      },
+      "devDependencies": {
+        "@types/react": "^19.2.0",
+        "@types/react-dom": "^19.2.0",
+        "react": "^19.2.3",
+        "react-dom": "^19.2.3",
+        "typescript": "~5.8.2",
+      },
+      "peerDependencies": {
+        "react": "^19.2.3",
+        "react-dom": "^19.2.3",
+      },
+    },
     "packages/review-editor": {
       "name": "@plannotator/review-editor",
       "version": "0.0.1",
@@ -200,6 +219,7 @@
         "@fontsource-variable/geist-mono": "5.2.7",
         "@fontsource-variable/inter": "^5.2.8",
         "@pierre/diffs": "1.3.2",
+        "@plannotator/guide-viewer": "workspace:*",
         "@plannotator/shared": "workspace:*",
         "@plannotator/ui": "workspace:*",
         "lucide-react": "^1.14.0",
@@ -856,6 +876,8 @@
     "@plannotator/core": ["@plannotator/core@workspace:packages/core"],
 
     "@plannotator/editor": ["@plannotator/editor@workspace:packages/editor"],
+
+    "@plannotator/guide-viewer": ["@plannotator/guide-viewer@workspace:packages/guide-viewer"],
 
     "@plannotator/hooks": ["@plannotator/hooks@workspace:apps/hook"],
 

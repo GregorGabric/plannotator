@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import type { GuideSection } from '@plannotator/shared/guide';
-import type { DiffFile } from '../../types';
-import { renderMarkdownProse } from '../../utils/renderMarkdownProse';
-import { useReviewState } from '../../dock/ReviewStateContext';
+import type { GuideSection } from '@plannotator/core/guide';
+import type { DiffFile } from './types';
+import { renderMarkdownProse } from './renderMarkdownProse';
+import { useGuideHost } from './host';
 import { GuideFileCard } from './GuideFileCard';
 
 function Checkbox({ checked }: { checked: boolean }) {
@@ -94,12 +94,12 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
   onRequestReveal,
 }) => {
   const [collapsedOverride, setCollapsedOverride] = useState<boolean | null>(null);
-  const state = useReviewState();
+  const host = useGuideHost();
   const cardRef = useRef<HTMLDivElement>(null);
   const position = `${String(index + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}`;
   const isCollapsed = showReviewed ? collapsedOverride ?? reviewed : collapsedOverride === true;
 
-  const filesByPath = useMemo(() => new Map(state.files.map((file) => [file.path, file])), [state.files]);
+  const filesByPath = useMemo(() => new Map(host.files.map((file) => [file.path, file])), [host.files]);
   const summaryByPath = useMemo(() => {
     const summaries = new Map<string, string>();
     for (const ref of section.diffs) {

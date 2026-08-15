@@ -160,7 +160,7 @@ import {
  * because Pierre's editor mutates the metadata in place. See
  * ../edit/useEditSession.ts and ../edit/pierreEditAdapter.ts.
  */
-interface AllFilesCodeViewProps {
+export interface AllFilesCodeViewProps {
   files: DiffFile[];
   diffStyle: 'split' | 'unified';
   diffOverflow?: 'scroll' | 'wrap';

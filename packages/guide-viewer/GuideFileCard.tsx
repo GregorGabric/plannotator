@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { DiffFile } from '../../types';
-import { useReviewState } from '../../dock/ReviewStateContext';
-import { renderInlineMarkdown } from '../../utils/renderInlineMarkdown';
-import { AllFilesCodeView } from '../AllFilesCodeView';
+import type { DiffFile } from './types';
+import { useGuideHost } from './host';
+import { renderInlineMarkdown } from './renderInlineMarkdown';
 import { useGuideFileWindow } from './GuideViewportManager';
 
 function estimateDiffHeight(patch: string): number {
@@ -30,7 +29,7 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
   revealTarget,
   onActivate,
 }) => {
-  const state = useReviewState();
+  const { DiffRenderer, getDiffRendererProps } = useGuideHost();
   const shellRef = useRef<HTMLDivElement | null>(null);
   const scrollPositionRef = useRef(0);
   const [collapsed, setCollapsed] = useState(false);
@@ -93,46 +92,9 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
         data-guide-code-view-mounted={mounted ? 'true' : 'false'}
       >
         {mounted ? (
-          <AllFilesCodeView
+          <DiffRenderer
+            {...getDiffRendererProps({ file, focused })}
             files={fileList}
-            diffStyle={state.diffStyle}
-            diffOverflow={state.diffOverflow}
-            diffIndicators={state.diffIndicators}
-            lineDiffType={state.lineDiffType}
-            disableLineNumbers={state.disableLineNumbers}
-            disableBackground={state.disableBackground}
-            expandUnchanged={state.expandUnchanged}
-            fontFamily={state.fontFamily}
-            fontSize={state.fontSize}
-            annotations={state.allAnnotations}
-            selectedAnnotationId={state.selectedAnnotationId}
-            scrollTargetAnnotation={state.scrollTargetAnnotation}
-            pendingSelection={focused ? state.pendingSelection : null}
-            reviewBase={state.reviewBase}
-            reviewSnapshotId={state.feedbackDiffContext?.snapshotId}
-            onLineSelection={state.onLineSelection}
-            onAddAnnotationForFile={state.onAddAnnotationForFile}
-            onEditAnnotation={state.onEditAnnotation}
-            onSelectAnnotation={state.onSelectAnnotation}
-            onDeleteAnnotation={state.onDeleteAnnotation}
-            onAddFileCommentForFile={state.onAddFileCommentForFile}
-            viewedFiles={state.viewedFiles}
-            onToggleViewed={state.onToggleViewed}
-            showViewedControls={state.showViewedControls}
-            stagedFiles={state.stagedFiles}
-            onStage={state.onStage}
-            canStageFiles={state.canStageFiles}
-            showStageControls={state.showStageControls}
-            canStagePath={state.canStagePath}
-            stagingFile={state.stagingFile}
-            stageError={state.stageError}
-            prUrl={state.prMetadata?.url}
-            prDiffScope={state.prDiffScope}
-            searchQuery={state.isSearchPending ? '' : state.debouncedSearchQuery}
-            searchMatches={state.searchMatches}
-            activeSearchMatchId={state.activeSearchMatchId}
-            activeSearchMatch={state.allFilesActiveSearchMatch}
-            onCodeNavRequest={state.onCodeNavRequest}
             fileScrollTarget={target}
             fileOrder="list"
             mountCollapsed={collapsed}
@@ -144,13 +106,6 @@ export const GuideFileCard: React.FC<GuideFileCardProps> = ({
               if (filePath === file.path) setCollapsed(nextCollapsed);
             }}
             isActive={focused}
-            aiAvailable={state.aiAvailable}
-            onAskAIForFile={state.onAskAIForFile}
-            isAILoading={state.isAILoading}
-            onViewAIResponse={state.onViewAIResponse}
-            aiMessages={state.aiMessages}
-            onClickAIMarker={state.onClickAIMarker}
-            getAIHistoryForFile={state.getAIHistoryForFile}
             allowScrollChaining
           />
         ) : (
