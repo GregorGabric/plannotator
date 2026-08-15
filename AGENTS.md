@@ -40,6 +40,7 @@ plannotator/
 │   │   ├── index.html
 │   │   ├── index.tsx
 │   │   └── vite.config.ts
+│   ├── guide-show/               # guide.show — portable Guided Review viewer (multi-file CDN build) + Cloudflare Worker (viewer/, worker/, build/)
 │   ├── vscode-extension/         # VS Code extension — opens plans in editor tabs
 │   │   ├── bin/                   # Router scripts (open-in-vscode, xdg-open)
 │   │   ├── src/                   # extension.ts, cookie-proxy.ts, ipc-server.ts, panel-manager.ts, editor-annotations.ts, vscode-theme.ts
@@ -89,6 +90,7 @@ plannotator/
 │   │   ├── storage.ts            # Plan saving, version history, archive listing (node:fs only)
 │   │   ├── draft.ts              # Annotation draft persistence (node:fs only)
 │   │   └── project.ts            # Pure string helpers (sanitizeTag, extractRepoName, extractDirName)
+│   ├── guide-viewer/             # @plannotator/guide-viewer — the Guided Review chain (GuideView → GuideSectionCard → GuideFileCard → GuideViewportManager) behind a narrow GuideHost context; used by review-editor (ReviewGuideHost + AllFilesCodeView) and by the guide.show viewer (readOnly). Also home of diffParser, DiffFile, and the two markdown renderers.
 │   ├── editor/                   # Plan review app
 │   │   ├── App.tsx               # Main plan review app
 │   │   └── shortcuts.ts          # planReviewSurface + annotateSurface — composes plan-review scopes into per-surface registries
@@ -142,6 +144,7 @@ claude --plugin-dir ./apps/hook
 | `PLANNOTATOR_ORIGIN` | Explicit agent-origin override at the top of the detection chain. Valid values: `claude-code`, `amp`, `droid`, `opencode`, `codex`, `copilot-cli`, `gemini-cli`, `kiro-cli`, `pi`. Invalid values silently fall through to env-based detection. Unset by default. |
 | `PLANNOTATOR_JINA` | Set to `0` / `false` to disable Jina Reader for URL annotation, or `1` / `true` to enable. Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "jina": false }`) or per-invocation via `--no-jina`. |
 | `PLANNOTATOR_ANNOTATE_HISTORY` | Set to `0` / `false` to disable ALL annotate-session writes to the data dir: per-file version history (no copies of annotated files are written; the annotate version diff is unavailable) AND the durable submitted-feedback records (#678) that single-local-file annotate sessions otherwise write to `history/{project}/{slug}/submissions/` before deleting the draft on submit. Disabling it keeps annotate sessions fully stateless but also gives up that submit crash-recovery record. URL and annotate-last sessions never write either kind of data regardless of this flag. Folder sessions write no submitted-feedback records, but they do participate in per-file version history: the first time a session serves a file through /api/doc it snapshots that file (lazily, memoized per resolved path for the life of the server), which is what powers the per-file version diff when a folder file is reopened later; setting this flag to 0 disables those folder snapshots too. Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "annotateHistory": false }`); the env var takes precedence. |
+| `PLANNOTATOR_GUIDE_VIEWER_URL` | Base URL of the portable Guided Review viewer that exported guides pin (default `https://guide.show/v1/`). Must be `https:` (or `http:` on localhost for local viewer builds — `bun run --cwd apps/guide-show serve:local`); anything else is ignored. Read by the export endpoints of both servers and by `plannotator guide export` (which also accepts `--viewer-url`). |
 | `PLANNOTATOR_GUIDE_HISTORY` | Set to `0` / `false` to disable persisting successful Guided Reviews (no guide copies are written to the data dir; the "Previous guides" list is then never populated, though already-saved guides remain readable and listed). Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "guideHistory": false }`); the env var takes precedence. |
 | `PLANNOTATOR_CURSOR_SANDBOX` | Set to `0` / `false` / `disabled` to stop passing `--sandbox enabled` when launching Cursor's `agent` CLI for review jobs — the flag pair is omitted entirely, deferring to the user's own Cursor Agent sandbox configuration. For systems where Cursor's sandbox cannot start (NixOS, AppArmor-restricted Linux). Default: enabled (`--sandbox enabled` is passed). Can also be set via `~/.plannotator/config.json` (`{ "cursorSandbox": false }`); the env var takes precedence. Note: opting out means the review job's write protection relies on `--mode ask` plus the user's own Cursor configuration. |
 | `PLANNOTATOR_TODO_PROVIDER` | Set to `off` / `0` / `false` / `disabled` to stop mirroring the approved plan checklist into an editable todo provider during execution. Default: enabled, which syncs only when a provider is detected (currently pi-todos: detected when its todo directory exists — `<cwd>/.pi/todos` by default, or wherever `PI_TODO_PATH` redirects it when set). The repo-implied `<cwd>/.pi/todos` must realpath to a location inside the project or the provider reads as absent and never writes, so a symlink committed into a hostile repo cannot redirect todo writes out of it; an explicitly set `PI_TODO_PATH` is the user's own choice and is honored verbatim, including outside the project. The mirror is additive — the progress widget is unaffected either way — and sync is one-way, so provider-side edits never feed back into plan execution. Can also be set via `~/.plannotator/config.json` (`{ "todoProvider": "off" }`); the env var takes precedence. |
@@ -412,6 +415,7 @@ During normal plan review, an Archive sidebar tab provides the same browsing via
 | `/api/tour/:jobId/checklist` | PUT | Persist checklist item state for a Code Tour |
 | `/api/guide/:jobId` | GET | Fetch Guided Review result (ordered sections with overviews + file refs) for a completed guide job, or a persisted guide via the `saved:{id}` pseudo job id |
 | `/api/guide/:jobId/reviewed` | PUT | Persist per-section reviewed state for a guide (live job ids write through to the job's autosaved file; `saved:{id}` ids persist directly) |
+| `/api/guide/:jobId/export` | GET | Download a guide as one portable HTML file (`Content-Disposition: attachment`): live job ids resolve from the session's launch-time review (store fallback), `saved:{id}` from the store. 404 when the guide's diff was not retained (pre-portable envelopes). No size gate. `/api/guide/:jobId/export-info` returns `{ bytes, filename, languages }` for the same resolution. |
 | `/api/guides` | GET | List persisted guides for the current repo: `[{ id, label, title, savedAt, progress: { reviewed, total }, moved }]` — `moved` flags a stored head sha that differs from the head currently under review |
 | `/api/guides/:id` | DELETE | Delete a persisted guide |
 | `/api/guide/:jobId/output` | GET | Fetch a failed guide job's captured raw output for manual repair (404 if none captured) |
@@ -491,6 +495,14 @@ When a user denies a plan and Claude resubmits, the UI shows what changed betwee
 **Annotation hook** (`packages/ui/hooks/useAnnotationHighlighter.ts`): Annotation infrastructure used by `Viewer.tsx`. Manages web-highlighter lifecycle, toolbar/popover state, annotation creation, text-based restoration, and scroll-to-selected. The diff view uses its own block-level hover system instead.
 
 **Sidebar** (`packages/ui/hooks/useSidebar.ts`): Shared left sidebar with three tabs — Table of Contents, Version Browser, and Archive. The "Auto-open Sidebar" setting controls whether it opens on load (TOC tab only). In archive mode, the sidebar opens to the Archive tab automatically.
+
+## Portable Guided Reviews
+
+Decision record: `adr/decisions/007-portable-guided-reviews-20260815.md`; spec: `adr/implementation/portable-guided-reviews.md`.
+
+A guide exports as ONE small HTML file (size ≈ the diff, never the app) that pins a specific viewer build on `guide.show` (`viewer.<hash>.js/.css` + SRI). Format lives in `@plannotator/core/guide-format` (versioned strict snapshot, `createGuideHtml`, fixtures + a compatibility test that must keep parsing every shipped fixture); the pinned build is the generated `@plannotator/core/guide-viewer-manifest` (regenerate with `bun run --cwd apps/guide-show build:viewer && bun run --cwd apps/guide-show sync:manifest`; CI fails if stale).
+
+Invariants: the diff a guide describes is captured when the guide job LAUNCHES (`buildCommand`'s `launchReview`, carried server-side like `changedFilesSnapshot` — never on the SSE-broadcast `AgentJobInfo`) and stored beside the saved guide as `{id}.patch` (patch written before the envelope that references it; deleted together). Exports never read the on-screen diff. `/v1/` on guide.show is add-only (content-hashed, never overwritten or deleted) so exported files keep opening; the viewer is the same guide chain (`@plannotator/guide-viewer`) over `AllFilesCodeView` in `readOnly` mode — no drift by construction. Read-only hosts stub the annotation composer/popovers at build time (`apps/guide-show/build/read-only-stubs-plugin.ts`); do not add app-only surfaces to the guide chain without going through the `GuideHost` contract.
 
 ## Data Types
 

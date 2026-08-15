@@ -13,6 +13,7 @@ import { GuideGenerating } from './GuideGenerating';
 import { GuideSectionSkeleton } from '@plannotator/guide-viewer/GuideSkeleton';
 import { GuideView } from '@plannotator/guide-viewer/GuideView';
 import { ReviewGuideHost } from './ReviewGuideHost';
+import { GuideExportButton } from './GuideExportButton';
 
 interface GuideScreenProps {
   /** Latest completed guide job id (or the demo guide id in standalone mode).
@@ -382,6 +383,7 @@ function ActiveGuide({
           focusedFile={focusedFile}
           onFocusFile={setFocusedFile}
           onRegenerate={guideLaunch.canLaunch && !regenerating ? handleRegenerate : undefined}
+          headerActions={<GuideExportButton jobId={jobId} />}
         />
       </ReviewGuideHost>
     </div>

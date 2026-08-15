@@ -85,6 +85,7 @@ describe("CLI subcommand help", () => {
       "copilot-last",
       "setup-goal",
       "archive",
+      "guide",
       "sessions",
       "uninstall",
       "improve-context",

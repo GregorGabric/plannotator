@@ -61,6 +61,10 @@
  *    - Removes recognized installer-owned components across supported hosts
  *    - Preserves local data by default; `--purge` removes known local data
  *
+ * 14. Guide tools (`plannotator guide list|export`):
+ *    - List saved Guided Reviews; export one (or a snapshot JSON) as a portable
+ *      HTML file whose viewer loads from guide.show
+ *
  * Global flags:
  *   --help             - Show top-level usage information
  *   --version, -v      - Print version and exit
@@ -79,6 +83,7 @@ import {
   startReviewServer,
   handleReviewServerReady,
 } from "@plannotator/server/review";
+import { runGuideCli } from "@plannotator/server/guide-cli";
 import {
   startAnnotateServer,
   handleAnnotateServerReady,
@@ -1513,6 +1518,15 @@ if (args[0] === "sessions") {
 
   emitAnnotateOutcome(result);
   process.exit(0);
+
+} else if (args[0] === "guide") {
+  // ============================================
+  // GUIDE TOOLS: list saved guides, export portable HTML
+  // ============================================
+  const result = runGuideCli(args.slice(1));
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  process.exit(result.code);
 
 } else if (args[0] === "archive") {
   // ============================================

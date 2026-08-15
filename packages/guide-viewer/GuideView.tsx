@@ -18,6 +18,8 @@ interface GuideViewProps {
   onRegenerate?: () => void;
   /** Extra provenance line under the counts (portable exports: repo, PR link, changeset). */
   sourceLine?: React.ReactNode;
+  /** Host-provided controls rendered top-right of the header (in-app: the export button). */
+  headerActions?: React.ReactNode;
 }
 
 export interface ResolvedGuideSections {
@@ -67,6 +69,7 @@ export const GuideView: React.FC<GuideViewProps> = ({
   onFocusFile,
   onRegenerate,
   sourceLine,
+  headerActions,
 }) => {
   const host = useGuideHost();
   const resolved = useMemo(() => resolveGuideSectionFiles(guide, host.files), [guide, host.files]);
@@ -129,6 +132,7 @@ export const GuideView: React.FC<GuideViewProps> = ({
 
   return (
     <GuideViewportProvider className="w-full px-10 py-8">
+      {headerActions && <div className="float-right ml-6 flex items-center gap-2">{headerActions}</div>}
       <div className="max-w-[72ch]">
         <h1 className="text-[22px] font-semibold tracking-tight text-foreground [text-wrap:balance]">{guide.title}</h1>
         {guide.intent && (

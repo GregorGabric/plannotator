@@ -182,6 +182,12 @@ A Guided Review turns the changeset into an ordered, chaptered walkthrough: an a
 
 Open it with the **Guide** button in the review header (or `Mod+Shift+G`), pick an agent and model, and generate. Sections track a per-section "reviewed" state so you can work through a large change in order. Guides run on Claude or Codex natively, and on Cursor, OpenCode, Pi, or GitHub Copilot CLI when those binaries are installed.
 
+### Portable guides
+
+**Download portable guide** (top-right of a guide) saves the guide as one small HTML file you can send to anyone: it contains the guide, the exact diff it was generated against, and where the change came from (repo, branch, PR link, generating agent). The file renders identically to the in-app guide — same chapters, same diff viewer, syntax highlighting, light/dark — by loading the viewer from `guide.show`, so its size is roughly the size of the diff, never the app. It opens straight from disk. Without internet the file still shows the guide text and file list.
+
+The same export is available from the command line — `plannotator guide list` shows saved guides, `plannotator guide export --id <id>` writes the HTML — and `plannotator guide export --snapshot <file.json>` wraps a guide document authored elsewhere (see [portable guide format](/docs/reference/portable-guides/)). Guides generated before this feature have no retained diff and are not exportable.
+
 ## How review agents prompt the CLI
 
 The review agents (Claude, Codex, Code Tour, Guided Review) shell out to external CLIs — Claude and Codex natively, plus Cursor, OpenCode, Pi, and GitHub Copilot CLI as additional engines for review and guide jobs. Plannotator controls the user message and output schema; the CLI's own harness owns the system prompt. See the [Prompts reference](/docs/reference/prompts/) for the full breakdown of what each provider sends, how the pieces join, and which knobs you can tune per job.
@@ -244,6 +250,7 @@ Runtime keys use Plannotator's runtime identifiers. For code review, the current
 | `/api/agents/capabilities` | GET | Check available agent providers |
 | `/api/agents/jobs` | GET/POST/DELETE | Manage agent jobs (review, Code Tour, Guided Review) |
 | `/api/guide/:jobId` | GET | Fetch a completed Guided Review (sections, summaries, file refs) |
+| `/api/guide/:jobId/export` | GET | Download a guide (live id or `saved:{id}`) as one portable HTML file; `/export-info` returns its size and languages |
 | `/api/guide/:jobId/reviewed` | PUT | Persist per-section reviewed state |
 | `/api/code-nav/resolve` | POST | Find symbol definitions/references for code navigation |
 | `/api/code-nav/file` | GET | Read a working-tree file for code-nav preview |

@@ -82,7 +82,8 @@
     "./annotate-decision": "./annotate-decision.ts",
     "./archive-mode": "./archive-mode.ts",
     "./guide-format": "./guide-format.ts",
-    "./guide-viewer-manifest": "./guide-viewer-manifest.ts"
+    "./guide-viewer-manifest": "./guide-viewer-manifest.ts",
+    "./guide-format-fixtures": "./guide-format-fixtures.ts"
   },
   "dependencies": {
     "@joplin/turndown-plugin-gfm": "^1.0.64",

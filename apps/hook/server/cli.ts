@@ -1,3 +1,5 @@
+import { GUIDE_CLI_USAGE } from "@plannotator/server/guide-cli";
+
 const HELP_FLAGS = new Set(["--help", "-h"]);
 
 export interface ParsedStrictAnnotateOptions {
@@ -146,6 +148,8 @@ export function formatTopLevelHelp(): string {
     "  plannotator setup-goal <interview|facts> <bundle.json | -> [--json]",
     "  plannotator last",
     "  plannotator archive",
+    "  plannotator guide list",
+    "  plannotator guide export --id <savedGuideId> | --snapshot <snapshot.json> [--out <file.html>]",
     "  plannotator sessions",
     "  plannotator uninstall [--purge] [--yes] [--dry-run]",
     "  plannotator improve-context",
@@ -246,6 +250,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "",
     "Open a read-only browser for saved plan decisions in ~/.plannotator/plans/.",
   ].join("\n"),
+  guide: GUIDE_CLI_USAGE,
   "improve-context": [
     "Usage:",
     "  plannotator improve-context",
