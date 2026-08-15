@@ -1,3 +1,4 @@
+/// <reference types="bun-types" />
 /**
  * Local stand-in for guide.show: serves dist/viewer under /v1/ with the same
  * headers the Worker sends (immutable cache, CORS for file:// documents).

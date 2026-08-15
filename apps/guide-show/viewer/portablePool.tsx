@@ -5,7 +5,6 @@ import type { WorkerInitializationRenderOptions, WorkerPoolOptions } from '@pier
 // relative-base CDN build). NOT `?worker&inline`: inlining would put ~200 KB
 // of base64 back into the entry, and NOT a bare `?worker`: Vite would emit
 // `new Worker("<absolute cdn url>")`, which browsers reject cross-origin.
-// @ts-expect-error vite ?worker&url virtual module (no ambient types here)
 import workerUrl from '@pierre/diffs/worker/worker.js?worker&url';
 
 /**
