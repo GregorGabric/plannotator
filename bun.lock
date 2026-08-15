@@ -20,6 +20,27 @@
         "bun-types": "^1.3.11",
       },
     },
+    "apps/guide-show": {
+      "name": "@plannotator/guide-show",
+      "version": "0.0.1",
+      "dependencies": {
+        "@pierre/diffs": "1.3.2",
+        "@plannotator/core": "workspace:*",
+        "@plannotator/guide-viewer": "workspace:*",
+        "@plannotator/review-editor": "workspace:*",
+        "@plannotator/ui": "workspace:*",
+        "react": "^19.2.3",
+        "react-dom": "^19.2.3",
+      },
+      "devDependencies": {
+        "@tailwindcss/vite": "^4.1.18",
+        "@types/react": "^19.2.0",
+        "@types/react-dom": "^19.2.0",
+        "@vitejs/plugin-react": "^5.0.0",
+        "typescript": "~5.8.2",
+        "vite": "^6.2.0",
+      },
+    },
     "apps/hook": {
       "name": "@plannotator/hooks",
       "version": "0.0.1",
@@ -876,6 +897,8 @@
     "@plannotator/core": ["@plannotator/core@workspace:packages/core"],
 
     "@plannotator/editor": ["@plannotator/editor@workspace:packages/editor"],
+
+    "@plannotator/guide-show": ["@plannotator/guide-show@workspace:apps/guide-show"],
 
     "@plannotator/guide-viewer": ["@plannotator/guide-viewer@workspace:packages/guide-viewer"],
 

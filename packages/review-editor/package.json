@@ -6,7 +6,8 @@
     ".": "./App.tsx",
     "./styles": "./index.css",
     "./shortcuts": "./shortcuts.ts",
-    "./worker-pool": "./workerPool.tsx"
+    "./worker-pool": "./workerPool.tsx",
+    "./components/*": "./components/*.tsx"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

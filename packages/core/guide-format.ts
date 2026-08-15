@@ -651,14 +651,17 @@ ${unplaced}
 }
 
 const FALLBACK_STYLE = `
+html{color-scheme:light dark}
+body.pgr-fallback-body{margin:0;background:#f5f7f6}
 .pgr-fallback{max-width:72ch;margin:2rem auto;padding:0 1.25rem;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2421}
 .pgr-fallback h1{font-size:1.75rem;line-height:1.2;margin:0 0 .5rem}
 .pgr-fallback h2{font-size:1.15rem;margin:1.75rem 0 .5rem}
-.pgr-fallback .meta{color:#6b7a74;font-size:.9rem;margin:.25rem 0}
+.pgr-fallback .meta{color:#5b6a64;font-size:.9rem;margin:.25rem 0}
 .pgr-fallback .prose{white-space:pre-wrap;font:inherit;margin:.5rem 0}
 .pgr-fallback code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}
 .pgr-fallback ul{padding-left:1.25rem}
-@media (prefers-color-scheme:dark){.pgr-fallback{color:#dbe4df}.pgr-fallback .meta{color:#7f8f88}}
+.pgr-fallback a{color:#2b7f6c}
+@media (prefers-color-scheme:dark){body.pgr-fallback-body{background:#121815}.pgr-fallback{color:#dbe4df}.pgr-fallback .meta{color:#93a39c}.pgr-fallback a{color:#63c8b0}}
 `.trim();
 
 /**
@@ -706,7 +709,7 @@ export function createGuideHtml(snapshot: GuideSnapshotV1, options: GuideHtmlOpt
 ${preloads}
 <style>${FALLBACK_STYLE}</style>
 </head>
-<body>
+<body class="pgr-fallback-body">
 <div id="root">${renderGuideFallbackHtml(snapshot)}</div>
 <script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">${serialized}</script>
 <script type="module" src="${escapeHtmlAttribute(jsUrl)}"${integrityAttr(options.viewer.jsIntegrity)} crossorigin="anonymous"></script>

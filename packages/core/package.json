@@ -27,9 +27,13 @@
     "./workspace-status-types": "./workspace-status-types.ts",
     "./ai-context": "./ai-context.ts",
     "./types": "./types.ts",
-    ".": "./index.ts"
+    ".": "./index.ts",
+    "./guide-format-fixtures": "./guide-format-fixtures.ts"
   },
-  "files": ["**/*.ts", "!**/*.test.ts"],
+  "files": [
+    "**/*.ts",
+    "!**/*.test.ts"
+  ],
   "dependencies": {},
   "devDependencies": {
     "typescript": "~5.8.2"
