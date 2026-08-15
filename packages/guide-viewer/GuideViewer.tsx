@@ -23,6 +23,8 @@ export interface GuideViewerProps<P extends object> {
   getDiffRendererProps: (context: GuideDiffRendererContext) => P;
   /** Optional line under the guide title naming what the guide is of (repo, PR link, engine). */
   sourceLine?: React.ReactNode;
+  /** Host-provided controls rendered top-right of the guide header (e.g. a theme toggle). */
+  headerActions?: React.ReactNode;
   className?: string;
 }
 
@@ -40,7 +42,7 @@ export function guideEngineLabel(engine: string | undefined): string | undefined
   return labels[engine] ?? engine;
 }
 
-export function GuideViewer<P extends object>({ snapshot, DiffRenderer, getDiffRendererProps, sourceLine, className }: GuideViewerProps<P>) {
+export function GuideViewer<P extends object>({ snapshot, DiffRenderer, getDiffRendererProps, sourceLine, headerActions, className }: GuideViewerProps<P>) {
   const files = useMemo<DiffFile[]>(() => parseDiffToFiles(snapshot.review.rawPatch), [snapshot.review.rawPatch]);
   const guide = useMemo<CodeGuideData>(
     () => ({
@@ -74,6 +76,7 @@ export function GuideViewer<P extends object>({ snapshot, DiffRenderer, getDiffR
           focusedFile={focusedFile}
           onFocusFile={setFocusedFile}
           sourceLine={sourceLine}
+          headerActions={headerActions}
         />
       </div>
     </GuideHostProvider>

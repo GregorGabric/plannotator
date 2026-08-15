@@ -3,9 +3,11 @@
  * embedded in the exported HTML (`#plannotator-guided-review`).
  *
  * Boot order is load-bearing:
- *   1. install an in-memory settings backend BEFORE anything reads a setting
- *      (configStore seeds defaults on first read; on `file://` cookies would
- *      either fail or leak into the reader's other pages),
+ *   1. install a settings backend BEFORE anything reads a setting (configStore
+ *      seeds defaults on first read). localStorage when the browser allows it,
+ *      so the reader's light/dark choice survives a reload; memory otherwise.
+ *      Never cookies: on `file://` they either fail or leak into the reader's
+ *      other pages,
  *   2. read + parse the snapshot,
  *   3. try to prepare a worker (fetch → blob); fall back to main thread,
  *   4. render the same guide chain the review app renders.
@@ -21,18 +23,32 @@ import { createRoot } from 'react-dom/client';
 // renderers into a bundle that never uses them.
 import { setStorageBackend } from '@plannotator/ui/utils/storage';
 import { ThemeProvider } from '@plannotator/ui/components/ThemeProvider';
+import { ModeToggle } from '@plannotator/ui/components/ModeToggle';
 import { TooltipProvider } from '@plannotator/ui/components/Tooltip';
 import { readEmbeddedGuideSnapshot, type GuideSnapshot } from '@plannotator/core/guide-format';
 import { GuideSectionSkeleton, GuideViewer } from '@plannotator/guide-viewer';
 import { ReadOnlyDiffRenderer, getReadOnlyDiffRendererProps } from './ReadOnlyDiffRenderer';
 import { PortableWorkerPool, preparePortableWorkerFactory } from './portablePool';
 
-// 1. Settings live in memory for the life of the page.
+// 1. Settings: localStorage if usable (private mode / disabled storage throw
+//    on access), else memory for the life of the page. Keys are namespaced so
+//    a hosted guides.show page never collides with anything else on the origin.
 const memory = new Map<string, string>();
+const PREFIX = 'pgr:';
+const local = (() => {
+  try {
+    const probe = `${PREFIX}probe`;
+    localStorage.setItem(probe, '1');
+    localStorage.removeItem(probe);
+    return localStorage;
+  } catch {
+    return null;
+  }
+})();
 setStorageBackend({
-  getItem: (key) => memory.get(key) ?? null,
-  setItem: (key, value) => void memory.set(key, value),
-  removeItem: (key) => void memory.delete(key),
+  getItem: (key) => (local ? local.getItem(PREFIX + key) : memory.get(key) ?? null),
+  setItem: (key, value) => { if (local) local.setItem(PREFIX + key, value); else memory.set(key, value); },
+  removeItem: (key) => { if (local) local.removeItem(PREFIX + key); else memory.delete(key); },
 });
 
 function SourceLine({ snapshot }: { snapshot: GuideSnapshot }) {
@@ -74,6 +90,7 @@ function App({ snapshot, workerFactory }: { snapshot: GuideSnapshot; workerFacto
       DiffRenderer={ReadOnlyDiffRenderer}
       getDiffRendererProps={getReadOnlyDiffRendererProps}
       sourceLine={<SourceLine snapshot={snapshot} />}
+      headerActions={<ModeToggle />}
       className="min-h-screen bg-background text-foreground"
     />
   );
@@ -92,7 +109,6 @@ async function boot() {
     parsed = { ok: true, value: FIXTURE_V1_PR };
   }
 
-  const prefersLight = typeof matchMedia === 'function' && matchMedia('(prefers-color-scheme: light)').matches;
   const palette = parsed?.ok ? parsed.value.theme?.palette : undefined;
   // The exported document paints a plain fallback ground until we mount; from
   // here on the theme owns the body background.
@@ -100,7 +116,10 @@ async function boot() {
   const root = createRoot(rootEl);
   const shell = (children: React.ReactNode) => (
     <React.StrictMode>
-      <ThemeProvider defaultTheme={prefersLight ? 'light' : 'dark'} defaultColorTheme={palette ?? 'plannotator'}>
+      {/* `system` follows the OS live (ThemeProvider watches prefers-color-scheme);
+          a stored choice from the header toggle wins over it (readThemePairCookies
+          via the storage backend above). */}
+      <ThemeProvider defaultTheme="system" defaultColorTheme={palette ?? 'plannotator'}>
         <TooltipProvider delayDuration={200} skipDelayDuration={100}>{children}</TooltipProvider>
       </ThemeProvider>
     </React.StrictMode>
