@@ -6,6 +6,7 @@ import type { DiffFile } from '../types';
 let codeViewMounts = 0;
 let codeViewUnmounts = 0;
 let scrollTargets: Array<Record<string, unknown>> = [];
+let lastCodeViewProps: Record<string, unknown> | null = null;
 
 // Captured BEFORE the mocks below replace the specifiers, so this file can put
 // the real modules back when it is done. `mock.module` is process global and
@@ -60,6 +61,7 @@ mock.module('@pierre/diffs/react', () => ({
     ref: React.ForwardedRef<unknown>,
   ) {
     const itemsRef = useRef(new Map((props.initialItems ?? []).map((item) => [item.id, item])));
+    lastCodeViewProps = props as unknown as Record<string, unknown>;
     useEffect(() => {
       codeViewMounts += 1;
       return () => {
@@ -156,6 +158,7 @@ afterEach(async () => {
   codeViewMounts = 0;
   codeViewUnmounts = 0;
   scrollTargets = [];
+  lastCodeViewProps = null;
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -221,4 +224,89 @@ describe('AllFilesCodeView guide mount state', () => {
     ]);
   });
 
+});
+
+describe('AllFilesCodeView readOnly (portable guide host)', () => {
+  // The portable Guided Review viewer renders this component with no server
+  // and no review state behind it (decision record D2/D4). These guard the
+  // three things read-only must switch off without changing what the diff
+  // LOOKS like: selection affordances, the window keydown handler, and the
+  // /api/file-content augmentation fetch.
+  async function mount(overrides: Partial<React.ComponentProps<typeof AllFilesCodeView>>) {
+    host = document.createElement('div');
+    host.style.height = '400px';
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await render(overrides);
+  }
+
+  test.skipIf(!hasDom)('turns off line and gutter selection', async () => {
+    await mount({ readOnly: true });
+    const options = lastCodeViewProps?.options as Record<string, unknown>;
+    expect(options.enableLineSelection).toBe(false);
+    expect(options.enableGutterUtility).toBe(false);
+  });
+
+  test.skipIf(!hasDom)('keeps selection on by default', async () => {
+    await mount({});
+    const options = lastCodeViewProps?.options as Record<string, unknown>;
+    expect(options.enableLineSelection).toBe(true);
+    expect(options.enableGutterUtility).toBe(true);
+  });
+
+  test.skipIf(!hasDom)('never fetches file content when an item mounts', async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Promise.resolve(new Response(JSON.stringify({ oldContent: 'a', newContent: 'b' }), { status: 200 }));
+    }) as typeof fetch;
+    try {
+      await mount({ readOnly: true, isActive: true });
+      const options = lastCodeViewProps?.options as { onPostRender?: (...args: unknown[]) => void };
+      const item = { id: 'target.ts', type: 'diff' };
+      await act(async () => {
+        options.onPostRender?.(document.createElement('div'), {}, 'mount', { item });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(calls.filter((url) => url.includes('/api/file-content'))).toHaveLength(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.skipIf(!hasDom)('control: a live host does fetch file content on item mount', async () => {
+    const originalFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return Promise.resolve(new Response(JSON.stringify({ oldContent: null, newContent: null }), { status: 200 }));
+    }) as typeof fetch;
+    try {
+      await mount({ isActive: true });
+      const options = lastCodeViewProps?.options as { onPostRender?: (...args: unknown[]) => void };
+      await act(async () => {
+        options.onPostRender?.(document.createElement('div'), {}, 'mount', { item: { id: 'target.ts', type: 'diff' } });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+      expect(calls.filter((url) => url.includes('/api/file-content'))).toHaveLength(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test.skipIf(!hasDom)('does not install the window keydown handler', async () => {
+    const originalAdd = window.addEventListener;
+    const keydownAdds: number[] = [];
+    window.addEventListener = ((type: string, ...rest: unknown[]) => {
+      if (type === 'keydown') keydownAdds.push(1);
+      return (originalAdd as unknown as (...a: unknown[]) => unknown).call(window, type, ...rest);
+    }) as typeof window.addEventListener;
+    try {
+      await mount({ readOnly: true, isActive: true });
+      expect(keydownAdds).toHaveLength(0);
+    } finally {
+      window.addEventListener = originalAdd;
+    }
+  });
 });

@@ -282,6 +282,21 @@ export interface AllFilesCodeViewProps {
   /** Let wheel/touch gestures continue into a containing page when this nested
    * viewer reaches either vertical boundary. Guided Review file cards opt in. */
   allowScrollChaining?: boolean;
+  /**
+   * Portable / read-only host (the exported Guided Review viewer): no line or
+   * gutter selection, no annotation toolbar or comment popovers, no global
+   * keyboard shortcuts, no /api/file-content augmentation, no open-in
+   * affordance. Everything the diff LOOKS like is unchanged — this only turns
+   * off surfaces that require the review server or mutate review state.
+   * See adr/decisions/007-portable-guided-reviews-20260815.md (D2, D4).
+   */
+  readOnly?: boolean;
+  /**
+   * The `[ ] z c v a x` window keydown handler. Defaults to `!readOnly`; a
+   * host embedding this view in a larger page can turn it off independently
+   * of read-only rendering (the handler is global to the window).
+   */
+  enableKeyboardShortcuts?: boolean;
   /** EXPERIMENTAL flag-gated edit-to-suggestion mode. Only the plain all-files
    * dock panel passes this — Guided Review surfaces deliberately do NOT (the
    * GuideViewportManager evicts CodeViews beyond ~8 mounted, which would
@@ -530,6 +545,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   onFileCollapsedChange,
   leadingContent,
   isActive = true,
+  readOnly = false,
+  enableKeyboardShortcuts,
   aiAvailable = false,
   onAskAIForFile,
   isAILoading = false,
@@ -1115,6 +1132,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   itemIdToFileRef.current = itemIdToFile;
   const fileSetKeyRef = useRef(fileSetKey);
   fileSetKeyRef.current = fileSetKey;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   // --- Edit-to-suggestion sessions (EXPERIMENTAL, flag-gated) -----------------
   // One file at a time; the editor chunk lazy-loads on first entry; the item's
@@ -1221,6 +1240,14 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     if (file == null) return;
 
     const controller = new AbortController();
+
+    // Read-only hosts have no review server: leave the raw-patch context in
+    // place and mark the item done so it never re-fires (no dead requests,
+    // no console noise from a CSP that blocks connect-src).
+    if (readOnlyRef.current) {
+      augmentState.set(itemId, { status: 'done', controller, generation });
+      return;
+    }
     augmentState.set(itemId, { status: 'pending', controller, generation });
 
     // A resolution stage is stale when its fetch was aborted (unmount / diff
@@ -2028,8 +2055,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollTargetAnnotation, filePathToItemId]);
 
+  const shortcutsEnabled = enableKeyboardShortcuts ?? !readOnly;
   useEffect(() => {
-    if (!isActive) return;
+    if (!isActive || !shortcutsEnabled) return;
     const handler = (e: KeyboardEvent) => {
       // composedPath()[0] pierces shadow DOM: window-level e.target retargets
       // to the shadow HOST (e.g. <diffs-container>), which would hide a
@@ -2120,6 +2148,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     return () => window.removeEventListener('keydown', handler);
   }, [
     isActive,
+    shortcutsEnabled,
     orderedItemIds,
     filePathToItemId,
     itemIdToFilePath,
@@ -2158,6 +2187,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       <div className="flex flex-col">
         <FileHeader
         compactTouchLayout={compactTouchLayout}
+        readOnly={readOnly}
         filePath={filePath}
         patch={file.patch}
         status={file.status}
@@ -2285,8 +2315,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       disableLineNumbers,
       disableBackground,
       expandUnchanged,
-      enableLineSelection: true,
-      enableGutterUtility: true,
+      enableLineSelection: !readOnly,
+      enableGutterUtility: !readOnly,
       hunkSeparators: 'line-info',
       stickyHeaders: true,
       // Flush files together (no inter-file gap) — file boundaries already read
@@ -2354,6 +2384,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       disableLineNumbers,
       disableBackground,
       expandUnchanged,
+      readOnly,
       customLineHeight,
       compactTouchLayout,
       leadingHeight,
@@ -2429,6 +2460,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
           scrollEl,
         )}
 
+      {!readOnly && (
       <ToolbarHost
         ref={toolbarHostRef}
         patch={activePatch}
@@ -2443,8 +2475,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         onViewAIResponse={onViewAIResponse}
         aiHistoryMessages={aiHistoryForActiveFile}
       />
+      )}
 
-      {fileCommentAnchor && onAddFileCommentForFile && (
+      {!readOnly && fileCommentAnchor && onAddFileCommentForFile && (
         <CommentPopover
           key={`file:${prUrl ?? ''}:${prDiffScope ?? ''}:${fileCommentAnchor.filePath}`}
           anchorEl={fileCommentAnchor.el}
@@ -2464,7 +2497,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
           time, so this stays valid even if the editor selection has since
           collapsed or the session has ended (pristine coordinates are
           session-invariant). */}
-      {selectionAnnotationRequest && onAddEditorCommentForFile && (
+      {!readOnly && selectionAnnotationRequest && onAddEditorCommentForFile && (
         <CommentPopover
           key={`edit-selection:${selectionAnnotationRequest.filePath}:${selectionAnnotationRequest.lineStart}-${selectionAnnotationRequest.lineEnd}`}
           anchorRect={selectionAnnotationRequest.anchorRect}

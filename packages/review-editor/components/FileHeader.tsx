@@ -6,6 +6,8 @@ import { useReviewStateOptional } from '../dock/ReviewStateContext';
 import type { DiffFileStatus } from '../types';
 
 interface FileHeaderProps {
+  /** Read-only host: no open-in affordance (it probes the review server). */
+  readOnly?: boolean;
   filePath: string;
   patch: string;
   /** Change type — added/deleted/renamed get an icon; modified is undecorated. */
@@ -127,6 +129,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
   isEditing = false,
   editDisabledReason,
   compactTouchLayout,
+  readOnly = false,
 }) => {
   const [headerWidth, setHeaderWidth] = useState<number>(0);
   const state = useReviewStateOptional();
@@ -329,7 +332,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
             PR has no checkout or a committed GitButler layer is selected. */}
         {/* Icon-only in the header (the picked app's name shows in the dropdown),
             matching the plan/annotate side. */}
-        <OpenInAppButton
+        {!readOnly && <OpenInAppButton
           filePath={filePath}
           base={state?.agentCwd ?? null}
           diffText={patch}
@@ -338,7 +341,7 @@ export const FileHeader: React.FC<FileHeaderProps> = ({
             !(state?.prMetadata && !state?.agentCwd) &&
             status !== 'deleted'
           }
-        />
+        />}
       </div>}
     </div>
   );

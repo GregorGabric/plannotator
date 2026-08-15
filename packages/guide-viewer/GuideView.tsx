@@ -16,6 +16,8 @@ interface GuideViewProps {
   onFocusFile: (filePath: string) => void;
   /** Launch a fresh guide when a persisted guide no longer matches this branch. */
   onRegenerate?: () => void;
+  /** Extra provenance line under the counts (portable exports: repo, PR link, changeset). */
+  sourceLine?: React.ReactNode;
 }
 
 export interface ResolvedGuideSections {
@@ -64,6 +66,7 @@ export const GuideView: React.FC<GuideViewProps> = ({
   focusedFile,
   onFocusFile,
   onRegenerate,
+  sourceLine,
 }) => {
   const host = useGuideHost();
   const resolved = useMemo(() => resolveGuideSectionFiles(guide, host.files), [guide, host.files]);
@@ -146,6 +149,9 @@ export const GuideView: React.FC<GuideViewProps> = ({
             </span>
           )}
         </p>
+        {sourceLine && (
+          <p className="mt-1.5 font-mono text-[11px] text-muted-foreground/60">{sourceLine}</p>
+        )}
         {guide.moved && (
           <p className="mt-1.5 font-mono text-[11px] text-muted-foreground/50">
             Generated on a different version of this branch
