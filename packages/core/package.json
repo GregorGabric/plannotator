@@ -4,6 +4,9 @@
   "type": "module",
   "exports": {
     "./agents": "./agents.ts",
+    "./diff-paths": "./diff-paths.ts",
+    "./guide": "./guide.ts",
+    "./guide-format": "./guide-format.ts",
     "./annotatable": "./annotatable.ts",
     "./agent-jobs": "./agent-jobs.ts",
     "./agent-terminal": "./agent-terminal.ts",

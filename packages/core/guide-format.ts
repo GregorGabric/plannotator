@@ -1,0 +1,743 @@
+/**
+ * Portable Guided Review format — the versioned snapshot document plus the
+ * pure `(snapshot) → HTML` renderer every producer shares (Plannotator UI,
+ * `plannotator guide export`, future agent skills).
+ *
+ * Browser-safe and dependency-free: this module is consumed by the review UI,
+ * the CDN viewer, both servers, and the CLI. It must never import `node:*`.
+ *
+ * Decision record: adr/decisions/007-portable-guided-reviews-20260815.md (D1, D5, D9).
+ */
+
+import { parseDiffFilePathLines, parseDiffGitHeader, parseDiffMetadataPathLines } from "./diff-paths";
+import type { CodeGuideOutput, GuideDiffRef, GuideSection } from "./guide";
+
+/** Discriminator for a portable guided-review snapshot. */
+export const GUIDE_SNAPSHOT_KIND = "plannotator-guided-review" as const;
+
+/** Current snapshot schema version. Bump only for breaking changes; add optional fields freely. */
+export const GUIDE_SNAPSHOT_VERSION = 1 as const;
+
+/** DOM id of the inert `<script type="application/json">` carrying the snapshot inside an exported HTML file. */
+export const GUIDE_SNAPSHOT_SCRIPT_ID = "plannotator-guided-review";
+
+/** `<meta name>` marker on exported documents. */
+export const GUIDE_EXPORT_META_NAME = "plannotator-guided-review";
+
+/** Structural sanity caps — these bound parsing work, they are NOT size limits (D1: no caps on diff size). */
+export const MAX_GUIDE_SECTIONS = 100;
+export const MAX_GUIDE_DIFF_REFS = 50_000;
+
+/** What kind of changeset the guide describes. Rendered in the viewer header so a reader knows what they are looking at. */
+export type GuideSourceKind = "local" | "pr" | "workspace" | "commit";
+
+/** The exact review the guide was generated against — the diff panes are drawn from `rawPatch` and nothing else. */
+export interface GuideSnapshotReview {
+  readonly rawPatch: string;
+  /** Human label, e.g. "main..HEAD" or "PR #123". */
+  readonly gitRef: string;
+  /** Plannotator diff type id, e.g. "since-base", "merge-base", "commit:<sha>", "workspace-current". */
+  readonly diffType?: string;
+  /** Base ref the diff was computed against, when the diff type has one. */
+  readonly base?: string;
+}
+
+/** Pull/merge request identity, when the guide is of a PR. */
+export interface GuideSnapshotPullRequest {
+  readonly url: string;
+  readonly number?: number;
+  readonly title?: string;
+  readonly platform?: "github" | "gitlab";
+}
+
+/** Where the changeset came from. Every field but `kind` is optional so any producer can be honest about what it knows. */
+export interface GuideSnapshotSource {
+  readonly kind: GuideSourceKind;
+  /** e.g. "owner/repo" or a directory name. */
+  readonly repo?: string;
+  readonly branch?: string;
+  readonly headSha?: string;
+  readonly pr?: GuideSnapshotPullRequest;
+  /** For `kind: "commit"` — the commit the guide describes. */
+  readonly commitSha?: string;
+}
+
+/** Provenance of the guide text itself. */
+export interface GuideSnapshotGenerator {
+  readonly engine?: string;
+  readonly model?: string;
+  readonly generatedAt?: string;
+  /** Reviewer-supplied instructions that shaped this guide, kept for provenance (D5). */
+  readonly customInstructions?: string;
+}
+
+/** Presentation hint recorded by the exporter; the viewer may honor it, the reader may override it. */
+export interface GuideSnapshotTheme {
+  readonly palette?: string;
+}
+
+/** The guide plus the reader's checkbox state. Never carries persistence flags (`saved`/`moved`). */
+export type GuideSnapshotGuide = CodeGuideOutput & { readonly reviewed: readonly boolean[] };
+
+/** Versioned data contract shared by downloaded files, the CDN viewer, and future hosted guides. */
+export interface GuideSnapshotV1 {
+  readonly kind: typeof GUIDE_SNAPSHOT_KIND;
+  readonly version: typeof GUIDE_SNAPSHOT_VERSION;
+  readonly exportedAt: string;
+  readonly guide: GuideSnapshotGuide;
+  readonly review: GuideSnapshotReview;
+  readonly source: GuideSnapshotSource;
+  readonly generator?: GuideSnapshotGenerator;
+  readonly theme?: GuideSnapshotTheme;
+}
+
+export type GuideSnapshot = GuideSnapshotV1;
+
+/** Stable parse failure for malformed or unsupported snapshot data. */
+export interface GuideSnapshotParseError {
+  readonly _tag: "GuideSnapshotParseError";
+  readonly message: string;
+  /** JSON-path-ish location, e.g. `$.guide.sections[2].diffs[0].file`. */
+  readonly path: string;
+}
+
+export type GuideSnapshotParseResult =
+  | { readonly ok: true; readonly value: GuideSnapshotV1 }
+  | { readonly ok: false; readonly error: GuideSnapshotParseError };
+
+type Parsed<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly error: GuideSnapshotParseError };
+
+// ---------------------------------------------------------------------------
+// Parsing — strict, total, unknown fields rejected at every level.
+// ---------------------------------------------------------------------------
+
+function fail(path: string, message: string): Parsed<never> {
+  return { ok: false, error: { _tag: "GuideSnapshotParseError", path, message } };
+}
+
+/**
+ * Type guard for the failure branch. `packages/core` compiles without
+ * strictNullChecks, where `if (!x.ok)` does not narrow a discriminated union;
+ * a user-defined guard does.
+ */
+function isFail<T>(x: Parsed<T>): x is { readonly ok: false; readonly error: GuideSnapshotParseError } {
+  return !x.ok;
+}
+
+function asRecord(input: unknown, path: string): Parsed<Record<string, unknown>> {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return fail(path, "Expected an object");
+  }
+  // SAFETY: object/null/array checks above establish a string-keyed object.
+  return { ok: true, value: input as Record<string, unknown> };
+}
+
+function strict(
+  record: Record<string, unknown>,
+  allowed: readonly string[],
+  path: string,
+): Parsed<Record<string, unknown>> {
+  const allowedSet = new Set(allowed);
+  const unknown = Object.keys(record).filter((key) => !allowedSet.has(key));
+  if (unknown.length > 0) {
+    return fail(path, `Unknown field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
+  }
+  return { ok: true, value: record };
+}
+
+function str(input: unknown, path: string, opts?: { readonly nonEmpty?: boolean }): Parsed<string> {
+  if (typeof input !== "string") return fail(path, "Expected a string");
+  if (opts?.nonEmpty && input.trim().length === 0) return fail(path, "Expected a non-empty string");
+  return { ok: true, value: input };
+}
+
+function optStr(record: Record<string, unknown>, key: string, path: string): Parsed<string | undefined> {
+  const input = record[key];
+  if (input === undefined) return { ok: true, value: undefined };
+  return str(input, `${path}.${key}`);
+}
+
+function optNum(record: Record<string, unknown>, key: string, path: string): Parsed<number | undefined> {
+  const input = record[key];
+  if (input === undefined) return { ok: true, value: undefined };
+  if (typeof input !== "number" || !Number.isFinite(input)) return fail(`${path}.${key}`, "Expected a number");
+  return { ok: true, value: input };
+}
+
+function parseDiffRef(input: unknown, path: string): Parsed<GuideDiffRef> {
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["file", "summary"], path);
+  if (isFail(s)) return s;
+  const file = str(s.value.file, `${path}.file`, { nonEmpty: true });
+  if (isFail(file)) return file;
+  const summary = optStr(s.value, "summary", path);
+  if (isFail(summary)) return summary;
+  return {
+    ok: true,
+    value: summary.value === undefined ? { file: file.value } : { file: file.value, summary: summary.value },
+  };
+}
+
+function parseSection(input: unknown, path: string): Parsed<GuideSection> {
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["title", "overview", "diffs"], path);
+  if (isFail(s)) return s;
+  const title = str(s.value.title, `${path}.title`, { nonEmpty: true });
+  if (isFail(title)) return title;
+  const overview = str(s.value.overview, `${path}.overview`);
+  if (isFail(overview)) return overview;
+  if (!Array.isArray(s.value.diffs)) return fail(`${path}.diffs`, "Expected an array");
+  if (s.value.diffs.length > MAX_GUIDE_DIFF_REFS) {
+    return fail(`${path}.diffs`, `Section exceeds the ${MAX_GUIDE_DIFF_REFS}-file-reference limit`);
+  }
+  const diffs: GuideDiffRef[] = [];
+  for (let i = 0; i < s.value.diffs.length; i++) {
+    const ref = parseDiffRef(s.value.diffs[i], `${path}.diffs[${i}]`);
+    if (isFail(ref)) return ref;
+    diffs.push(ref.value);
+  }
+  return { ok: true, value: { title: title.value, overview: overview.value, diffs } };
+}
+
+function parseGuide(input: unknown): Parsed<GuideSnapshotGuide> {
+  const path = "$.guide";
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["title", "intent", "sections", "unplacedFiles", "reviewed"], path);
+  if (isFail(s)) return s;
+  const title = str(s.value.title, `${path}.title`, { nonEmpty: true });
+  if (isFail(title)) return title;
+  const intent = str(s.value.intent, `${path}.intent`);
+  if (isFail(intent)) return intent;
+  if (!Array.isArray(s.value.sections)) return fail(`${path}.sections`, "Expected an array");
+  if (s.value.sections.length === 0) return fail(`${path}.sections`, "Expected at least one section");
+  if (s.value.sections.length > MAX_GUIDE_SECTIONS) {
+    return fail(`${path}.sections`, `Guide exceeds the ${MAX_GUIDE_SECTIONS}-section limit`);
+  }
+  const sections: GuideSection[] = [];
+  let refCount = 0;
+  for (let i = 0; i < s.value.sections.length; i++) {
+    const section = parseSection(s.value.sections[i], `${path}.sections[${i}]`);
+    if (isFail(section)) return section;
+    refCount += section.value.diffs.length;
+    if (refCount > MAX_GUIDE_DIFF_REFS) {
+      return fail(`${path}.sections`, `Guide exceeds the ${MAX_GUIDE_DIFF_REFS}-file-reference limit`);
+    }
+    sections.push(section.value);
+  }
+
+  let unplacedFiles: string[] | undefined;
+  if (s.value.unplacedFiles !== undefined) {
+    if (!Array.isArray(s.value.unplacedFiles)) return fail(`${path}.unplacedFiles`, "Expected an array");
+    if (refCount + s.value.unplacedFiles.length > MAX_GUIDE_DIFF_REFS) {
+      return fail(`${path}.unplacedFiles`, `Guide exceeds the ${MAX_GUIDE_DIFF_REFS}-file-reference limit`);
+    }
+    unplacedFiles = [];
+    for (let i = 0; i < s.value.unplacedFiles.length; i++) {
+      const file = str(s.value.unplacedFiles[i], `${path}.unplacedFiles[${i}]`, { nonEmpty: true });
+      if (isFail(file)) return file;
+      unplacedFiles.push(file.value);
+    }
+  }
+
+  if (!Array.isArray(s.value.reviewed)) return fail(`${path}.reviewed`, "Expected an array");
+  if (s.value.reviewed.length > MAX_GUIDE_SECTIONS) {
+    return fail(`${path}.reviewed`, `Reviewed state exceeds the ${MAX_GUIDE_SECTIONS}-section limit`);
+  }
+  // Normalize to sections.length: pad with false, drop extras.
+  const reviewed = new Array<boolean>(sections.length).fill(false);
+  for (let i = 0; i < s.value.reviewed.length; i++) {
+    const value = s.value.reviewed[i];
+    if (typeof value !== "boolean") return fail(`${path}.reviewed[${i}]`, "Expected a boolean");
+    if (i < sections.length) reviewed[i] = value;
+  }
+
+  return {
+    ok: true,
+    value: {
+      title: title.value,
+      intent: intent.value,
+      sections,
+      ...(unplacedFiles !== undefined && { unplacedFiles }),
+      reviewed,
+    },
+  };
+}
+
+function parseReview(input: unknown): Parsed<GuideSnapshotReview> {
+  const path = "$.review";
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["rawPatch", "gitRef", "diffType", "base"], path);
+  if (isFail(s)) return s;
+  const rawPatch = str(s.value.rawPatch, `${path}.rawPatch`);
+  if (isFail(rawPatch)) return rawPatch;
+  const gitRef = str(s.value.gitRef, `${path}.gitRef`);
+  if (isFail(gitRef)) return gitRef;
+  const diffType = optStr(s.value, "diffType", path);
+  if (isFail(diffType)) return diffType;
+  const base = optStr(s.value, "base", path);
+  if (isFail(base)) return base;
+  return {
+    ok: true,
+    value: {
+      rawPatch: rawPatch.value,
+      gitRef: gitRef.value,
+      ...(diffType.value !== undefined && { diffType: diffType.value }),
+      ...(base.value !== undefined && { base: base.value }),
+    },
+  };
+}
+
+const SOURCE_KINDS: readonly GuideSourceKind[] = ["local", "pr", "workspace", "commit"];
+
+function parsePullRequest(input: unknown, path: string): Parsed<GuideSnapshotPullRequest | undefined> {
+  if (input === undefined) return { ok: true, value: undefined };
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["url", "number", "title", "platform"], path);
+  if (isFail(s)) return s;
+  const url = str(s.value.url, `${path}.url`, { nonEmpty: true });
+  if (isFail(url)) return url;
+  const number = optNum(s.value, "number", path);
+  if (isFail(number)) return number;
+  const title = optStr(s.value, "title", path);
+  if (isFail(title)) return title;
+  const rawPlatform = s.value.platform;
+  if (rawPlatform !== undefined && rawPlatform !== "github" && rawPlatform !== "gitlab") {
+    return fail(`${path}.platform`, "Expected github or gitlab");
+  }
+  const platform = rawPlatform as "github" | "gitlab" | undefined;
+  return {
+    ok: true,
+    value: {
+      url: url.value,
+      ...(number.value !== undefined && { number: number.value }),
+      ...(title.value !== undefined && { title: title.value }),
+      ...(platform !== undefined && { platform }),
+    },
+  };
+}
+
+function parseSource(input: unknown): Parsed<GuideSnapshotSource> {
+  const path = "$.source";
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["kind", "repo", "branch", "headSha", "pr", "commitSha"], path);
+  if (isFail(s)) return s;
+  const kind = s.value.kind;
+  if (typeof kind !== "string" || !SOURCE_KINDS.includes(kind as GuideSourceKind)) {
+    return fail(`${path}.kind`, `Expected one of ${SOURCE_KINDS.join(", ")}`);
+  }
+  const repo = optStr(s.value, "repo", path);
+  if (isFail(repo)) return repo;
+  const branch = optStr(s.value, "branch", path);
+  if (isFail(branch)) return branch;
+  const headSha = optStr(s.value, "headSha", path);
+  if (isFail(headSha)) return headSha;
+  const pr = parsePullRequest(s.value.pr, `${path}.pr`);
+  if (isFail(pr)) return pr;
+  const commitSha = optStr(s.value, "commitSha", path);
+  if (isFail(commitSha)) return commitSha;
+  return {
+    ok: true,
+    value: {
+      kind: kind as GuideSourceKind,
+      ...(repo.value !== undefined && { repo: repo.value }),
+      ...(branch.value !== undefined && { branch: branch.value }),
+      ...(headSha.value !== undefined && { headSha: headSha.value }),
+      ...(pr.value !== undefined && { pr: pr.value }),
+      ...(commitSha.value !== undefined && { commitSha: commitSha.value }),
+    },
+  };
+}
+
+function parseGenerator(input: unknown): Parsed<GuideSnapshotGenerator | undefined> {
+  if (input === undefined) return { ok: true, value: undefined };
+  const path = "$.generator";
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["engine", "model", "generatedAt", "customInstructions"], path);
+  if (isFail(s)) return s;
+  const out: { -readonly [K in keyof GuideSnapshotGenerator]: GuideSnapshotGenerator[K] } = {};
+  for (const key of ["engine", "model", "generatedAt", "customInstructions"] as const) {
+    const v = optStr(s.value, key, path);
+    if (isFail(v)) return v;
+    if (v.value !== undefined) out[key] = v.value;
+  }
+  return { ok: true, value: out };
+}
+
+function parseTheme(input: unknown): Parsed<GuideSnapshotTheme | undefined> {
+  if (input === undefined) return { ok: true, value: undefined };
+  const path = "$.theme";
+  const object = asRecord(input, path);
+  if (isFail(object)) return object;
+  const s = strict(object.value, ["palette"], path);
+  if (isFail(s)) return s;
+  const palette = optStr(s.value, "palette", path);
+  if (isFail(palette)) return palette;
+  return { ok: true, value: palette.value === undefined ? {} : { palette: palette.value } };
+}
+
+/** Parse an unknown value into a v1 snapshot. Never throws. */
+export function parseGuideSnapshot(input: unknown): GuideSnapshotParseResult {
+  const object = asRecord(input, "$");
+  if (isFail(object)) return object;
+  const s = strict(
+    object.value,
+    ["kind", "version", "exportedAt", "guide", "review", "source", "generator", "theme"],
+    "$",
+  );
+  if (isFail(s)) return s;
+  if (s.value.kind !== GUIDE_SNAPSHOT_KIND) return fail("$.kind", `Expected ${GUIDE_SNAPSHOT_KIND}`);
+  if (s.value.version !== GUIDE_SNAPSHOT_VERSION) {
+    return fail("$.version", `Unsupported snapshot version: ${String(s.value.version)}`);
+  }
+  const exportedAt = str(s.value.exportedAt, "$.exportedAt", { nonEmpty: true });
+  if (isFail(exportedAt)) return exportedAt;
+  if (!Number.isFinite(Date.parse(exportedAt.value))) return fail("$.exportedAt", "Expected an ISO-compatible timestamp");
+  const guide = parseGuide(s.value.guide);
+  if (isFail(guide)) return guide;
+  const review = parseReview(s.value.review);
+  if (isFail(review)) return review;
+  const source = parseSource(s.value.source);
+  if (isFail(source)) return source;
+  const generator = parseGenerator(s.value.generator);
+  if (isFail(generator)) return generator;
+  const theme = parseTheme(s.value.theme);
+  if (isFail(theme)) return theme;
+  return {
+    ok: true,
+    value: {
+      kind: GUIDE_SNAPSHOT_KIND,
+      version: GUIDE_SNAPSHOT_VERSION,
+      exportedAt: exportedAt.value,
+      guide: guide.value,
+      review: review.value,
+      source: source.value,
+      ...(generator.value !== undefined && { generator: generator.value }),
+      ...(theme.value !== undefined && { theme: theme.value }),
+    },
+  };
+}
+
+/** Parse serialized JSON into a v1 snapshot. Never throws. */
+export function parseGuideSnapshotJson(text: string): GuideSnapshotParseResult {
+  let input: unknown;
+  try {
+    input = JSON.parse(text);
+  } catch {
+    return fail("$", "Snapshot is not valid JSON");
+  }
+  return parseGuideSnapshot(input);
+}
+
+// ---------------------------------------------------------------------------
+// Patch inspection — file list and language detection (best-effort hints).
+// ---------------------------------------------------------------------------
+
+export interface GuidePatchFile {
+  readonly path: string;
+  readonly patch: string;
+}
+
+function splitDiffChunks(rawPatch: string): string[] {
+  const matches = [...rawPatch.matchAll(/^diff --git /gm)];
+  return matches.map((match, index) => {
+    const start = match.index ?? 0;
+    const end = matches[index + 1]?.index ?? rawPatch.length;
+    return rawPatch.slice(start, end).replace(/\n+$/, "");
+  });
+}
+
+/** Split a unified diff into per-file chunks with their resolved (post-image) path. */
+export function listGuidePatchFiles(rawPatch: string): GuidePatchFile[] {
+  const files: GuidePatchFile[] = [];
+  for (const patch of splitDiffChunks(rawPatch)) {
+    const lines = patch.split("\n");
+    const filePaths = parseDiffFilePathLines(lines);
+    const metadataPaths = parseDiffMetadataPathLines(lines);
+    const headerPaths = parseDiffGitHeader(lines[0] ?? "");
+    const oldPath = filePaths.oldPath ?? metadataPaths.oldPath ?? headerPaths.oldPath;
+    const newPath = filePaths.newPath ?? metadataPaths.newPath ?? headerPaths.newPath;
+    const path = newPath ?? oldPath;
+    if (!path) continue;
+    files.push({ path, patch });
+  }
+  return files;
+}
+
+/**
+ * Extension → Shiki grammar id. A superset of what the review UI recognizes.
+ * This only drives `<link rel="modulepreload">` hints in exported HTML; the
+ * viewer still lazy-loads any grammar the preload list missed, so gaps here
+ * cost latency, never correctness.
+ */
+const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
+  ts: "typescript", mts: "typescript", cts: "typescript", tsx: "tsx",
+  js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "jsx",
+  json: "json", jsonc: "jsonc", json5: "json5",
+  py: "python", pyi: "python", rb: "ruby", rs: "rust", go: "go", java: "java", kt: "kotlin", kts: "kotlin",
+  swift: "swift", cs: "csharp", fs: "fsharp", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp",
+  c: "c", h: "c", m: "objective-c", mm: "objective-cpp",
+  css: "css", scss: "scss", less: "less", html: "html", htm: "html", vue: "vue", svelte: "svelte", astro: "astro",
+  xml: "xml", svg: "xml", md: "markdown", mdx: "mdx", yaml: "yaml", yml: "yaml", toml: "toml", ini: "ini",
+  sh: "shellscript", bash: "shellscript", zsh: "shellscript", fish: "fish", ps1: "powershell",
+  sql: "sql", graphql: "graphql", gql: "graphql", proto: "proto", lua: "lua", php: "php", dart: "dart",
+  ex: "elixir", exs: "elixir", erl: "erlang", hs: "haskell", scala: "scala", clj: "clojure", r: "r",
+  pl: "perl", tf: "terraform", hcl: "hcl", zig: "zig", nix: "nix", ml: "ocaml", mli: "ocaml",
+  dockerfile: "docker", makefile: "makefile", cmake: "cmake", tex: "latex", diff: "diff", patch: "diff",
+};
+
+const BASENAME_LANGUAGES: Readonly<Record<string, string>> = {
+  dockerfile: "docker",
+  makefile: "makefile",
+  cmakelists: "cmake",
+};
+
+/** Shiki grammar id for a path, or undefined when the viewer should render plain text. */
+export function guideLanguageForPath(path: string): string | undefined {
+  const base = path.split("/").pop() ?? path;
+  const lowerBase = base.toLowerCase();
+  const byBasename = BASENAME_LANGUAGES[lowerBase.replace(/\.[^.]*$/, "")] ?? BASENAME_LANGUAGES[lowerBase];
+  if (byBasename) return byBasename;
+  const dot = lowerBase.lastIndexOf(".");
+  if (dot < 0) return undefined;
+  return EXTENSION_LANGUAGES[lowerBase.slice(dot + 1)];
+}
+
+/** Sorted, deduplicated grammar ids the viewer will need for this patch (preload hint). */
+export function detectGuideLanguages(rawPatch: string): string[] {
+  const langs = new Set<string>();
+  for (const file of listGuidePatchFiles(rawPatch)) {
+    const lang = guideLanguageForPath(file.path);
+    if (lang) langs.add(lang);
+  }
+  return [...langs].sort();
+}
+
+// ---------------------------------------------------------------------------
+// HTML rendering — the one place an exported document is built.
+// ---------------------------------------------------------------------------
+
+/** Where the viewer lives. Produced by the CDN build (manifest) and pinned into every export. */
+export interface GuideViewerAssets {
+  /** Absolute base, e.g. "https://guide.show/v1/". Must be https (http allowed for localhost only). */
+  readonly baseUrl: string;
+  /** Path relative to `baseUrl`, e.g. "viewer.8f3a2c.js". */
+  readonly js: string;
+  /** Path relative to `baseUrl`, e.g. "viewer.8f3a2c.css". */
+  readonly css: string;
+  /** Subresource integrity for `js`/`css` (sha384-…). Strongly recommended; omitted only for local dev. */
+  readonly jsIntegrity?: string;
+  readonly cssIntegrity?: string;
+  /** Grammar chunks by Shiki id, relative to `baseUrl`, e.g. { typescript: "langs/typescript.ab12.js" }. */
+  readonly langs?: Readonly<Record<string, string>>;
+}
+
+export interface GuideHtmlOptions {
+  readonly viewer: GuideViewerAssets;
+}
+
+function escapeHtmlText(input: string): string {
+  return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+function escapeHtmlAttribute(input: string): string {
+  return escapeHtmlText(input).replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+}
+
+/**
+ * Make JSON safe to inline inside `<script type="application/json">`: a patch
+ * line containing `</script>` (or `<!--`, or U+2028/9) must not terminate or
+ * corrupt the element. Escaped as JSON unicode escapes, so `JSON.parse` of the
+ * element's text yields the original bytes.
+ */
+export function escapeJsonForHtmlScript(json: string): string {
+  return json
+    .replaceAll("&", "\\u0026")
+    .replaceAll("<", "\\u003c")
+    .replaceAll(">", "\\u003e")
+    .replaceAll("\u2028", "\\u2028")
+    .replaceAll("\u2029", "\\u2029");
+}
+
+/** Validate and normalize a viewer base URL. Returns null when it must not be embedded. */
+export function normalizeGuideViewerBaseUrl(input: string): URL | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(input);
+  } catch {
+    return null;
+  }
+  const isLocalhost = parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLocalhost)) return null;
+  parsed.username = "";
+  parsed.password = "";
+  parsed.search = "";
+  parsed.hash = "";
+  if (!parsed.pathname.endsWith("/")) parsed.pathname += "/";
+  return parsed;
+}
+
+function describeSource(snapshot: GuideSnapshotV1): string {
+  const s = snapshot.source;
+  const parts: string[] = [];
+  switch (s.kind) {
+    case "pr":
+      parts.push(s.pr?.number !== undefined ? `Pull request #${s.pr.number}` : "Pull request");
+      if (s.pr?.title) parts.push(`— ${s.pr.title}`);
+      break;
+    case "commit":
+      parts.push(`Commit ${s.commitSha ? s.commitSha.slice(0, 12) : ""}`.trim());
+      break;
+    case "workspace":
+      parts.push("Multi-repository workspace changes");
+      break;
+    default:
+      parts.push("Local changes");
+  }
+  if (s.repo) parts.push(`in ${s.repo}`);
+  if (s.branch) parts.push(`(${s.branch})`);
+  return parts.join(" ");
+}
+
+/**
+ * The no-JavaScript body: title, intent, every chapter's overview and file
+ * list. Readable when guide.show is unreachable; replaced by the viewer once
+ * it mounts. Deliberately simple (decision record, D6 note).
+ */
+export function renderGuideFallbackHtml(snapshot: GuideSnapshotV1): string {
+  const g = snapshot.guide;
+  const sections = g.sections
+    .map((section, index) => {
+      const files = section.diffs
+        .map(
+          (ref) =>
+            `<li><code>${escapeHtmlText(ref.file)}</code>${ref.summary ? ` — ${escapeHtmlText(ref.summary)}` : ""}</li>`,
+        )
+        .join("");
+      return `<section>
+<h2>${index + 1}. ${escapeHtmlText(section.title)}</h2>
+<pre class="prose">${escapeHtmlText(section.overview)}</pre>
+${files ? `<ul>${files}</ul>` : ""}
+</section>`;
+    })
+    .join("\n");
+  const unplaced = g.unplacedFiles?.length
+    ? `<section><h2>Everything else</h2><ul>${g.unplacedFiles.map((f) => `<li><code>${escapeHtmlText(f)}</code></li>`).join("")}</ul></section>`
+    : "";
+  const gen = snapshot.generator;
+  const genLine = gen?.engine ? `Generated by ${escapeHtmlText(gen.engine)}${gen.model ? ` (${escapeHtmlText(gen.model)})` : ""}` : "";
+  const prLink = snapshot.source.pr?.url
+    ? ` · <a href="${escapeHtmlAttribute(snapshot.source.pr.url)}" rel="noopener">${escapeHtmlText(snapshot.source.pr.url)}</a>`
+    : "";
+  return `<article class="pgr-fallback">
+<header>
+<h1>${escapeHtmlText(g.title)}</h1>
+<p class="meta">${escapeHtmlText(describeSource(snapshot))} · ${escapeHtmlText(snapshot.review.gitRef)}${prLink}</p>
+${genLine ? `<p class="meta">${genLine}</p>` : ""}
+<pre class="prose">${escapeHtmlText(g.intent)}</pre>
+</header>
+${sections}
+${unplaced}
+<footer class="meta">This is the plain-text version of a Plannotator Guided Review. Connect to the internet to load the full diff viewer.</footer>
+</article>`;
+}
+
+const FALLBACK_STYLE = `
+.pgr-fallback{max-width:72ch;margin:2rem auto;padding:0 1.25rem;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2421}
+.pgr-fallback h1{font-size:1.75rem;line-height:1.2;margin:0 0 .5rem}
+.pgr-fallback h2{font-size:1.15rem;margin:1.75rem 0 .5rem}
+.pgr-fallback .meta{color:#6b7a74;font-size:.9rem;margin:.25rem 0}
+.pgr-fallback .prose{white-space:pre-wrap;font:inherit;margin:.5rem 0}
+.pgr-fallback code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em}
+.pgr-fallback ul{padding-left:1.25rem}
+@media (prefers-color-scheme:dark){.pgr-fallback{color:#dbe4df}.pgr-fallback .meta{color:#7f8f88}}
+`.trim();
+
+/**
+ * Render a portable Guided Review document. Size ≈ the snapshot; the renderer
+ * is referenced from `options.viewer`, never embedded (D1).
+ * Throws only when `viewer.baseUrl` is not an https URL (or http localhost).
+ */
+export function createGuideHtml(snapshot: GuideSnapshotV1, options: GuideHtmlOptions): string {
+  const base = normalizeGuideViewerBaseUrl(options.viewer.baseUrl);
+  if (!base) throw new Error(`Refusing to embed a non-https viewer base URL: ${options.viewer.baseUrl}`);
+  const origin = base.origin;
+  const jsUrl = new URL(options.viewer.js, base).href;
+  const cssUrl = new URL(options.viewer.css, base).href;
+  const integrityAttr = (value?: string) => (value ? ` integrity="${escapeHtmlAttribute(value)}"` : "");
+  const langs = options.viewer.langs ?? {};
+  const preloads = detectGuideLanguages(snapshot.review.rawPatch)
+    .map((lang) => langs[lang])
+    .filter((path): path is string => typeof path === "string")
+    .map((path) => `<link rel="modulepreload" href="${escapeHtmlAttribute(new URL(path, base).href)}" crossorigin="anonymous">`)
+    .join("\n");
+  const serialized = escapeJsonForHtmlScript(JSON.stringify(snapshot));
+  const csp = [
+    "default-src 'none'",
+    `script-src ${origin} 'wasm-unsafe-eval' blob:`,
+    `style-src ${origin} 'unsafe-inline'`,
+    `font-src ${origin}`,
+    "img-src data: blob:",
+    `connect-src ${origin}`,
+    "worker-src blob:",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-src 'none'",
+  ].join("; ");
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="${GUIDE_EXPORT_META_NAME}" content="v${GUIDE_SNAPSHOT_VERSION}">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
+<title>${escapeHtmlText(snapshot.guide.title)} · Guided Review</title>
+<link rel="stylesheet" href="${escapeHtmlAttribute(cssUrl)}"${integrityAttr(options.viewer.cssIntegrity)} crossorigin="anonymous">
+${preloads}
+<style>${FALLBACK_STYLE}</style>
+</head>
+<body>
+<div id="root">${renderGuideFallbackHtml(snapshot)}</div>
+<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">${serialized}</script>
+<script type="module" src="${escapeHtmlAttribute(jsUrl)}"${integrityAttr(options.viewer.jsIntegrity)} crossorigin="anonymous"></script>
+</body>
+</html>
+`;
+}
+
+/** Read the snapshot back out of an exported document's DOM (viewer boot). */
+export function readEmbeddedGuideSnapshot(doc: {
+  getElementById(id: string): { textContent: string | null } | null;
+}): GuideSnapshotParseResult | null {
+  const el = doc.getElementById(GUIDE_SNAPSHOT_SCRIPT_ID);
+  if (!el) return null;
+  return parseGuideSnapshotJson(el.textContent ?? "");
+}
+
+/** UTF-8 byte length of the exported document. */
+export function estimateGuideHtmlBytes(snapshot: GuideSnapshotV1, options: GuideHtmlOptions): number {
+  return new TextEncoder().encode(createGuideHtml(snapshot, options)).byteLength;
+}
+
+/** Bounded, filesystem-safe filename derived from the guide title. */
+export function guideExportFilename(title: string): string {
+  const slug = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80)
+    .replace(/-+$/g, "");
+  return `guided-review-${slug || "export"}.html`;
+}
