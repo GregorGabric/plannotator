@@ -28,7 +28,8 @@
     "./ai-context": "./ai-context.ts",
     "./types": "./types.ts",
     ".": "./index.ts",
-    "./guide-format-fixtures": "./guide-format-fixtures.ts"
+    "./guide-format-fixtures": "./guide-format-fixtures.ts",
+    "./guide-viewer-manifest": "./guide-viewer-manifest.ts"
   },
   "files": [
     "**/*.ts",

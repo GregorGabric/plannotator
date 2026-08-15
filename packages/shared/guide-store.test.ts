@@ -15,8 +15,14 @@ import {
   makeGuideId,
   saveGuide,
   updateGuideReviewed,
+  buildSavedGuideSnapshot,
+  findSavedGuideById,
+  listAllSavedGuides,
+  loadGuidePatch,
+  saveGuidePatch,
   type SavedGuideEnvelope,
 } from "./guide-store";
+import type { GuideLaunchReview } from "@plannotator/core/guide-format";
 
 const REPO_KEY = "github.com__acme__widgets";
 
@@ -403,5 +409,85 @@ describe("createGuideStoreSession", () => {
     const entries = listGuides(REPO_KEY);
     expect(entries.length).toBe(1);
     expect(entries[0].envelope.guide.intent).toBe("Updated intent");
+  });
+});
+
+describe("portable export: the launch review persisted beside the guide", () => {
+  const PATCH = "diff --git a/src/locale.ts b/src/locale.ts\n--- a/src/locale.ts\n+++ b/src/locale.ts\n@@ -1 +1 @@\n-a\n+b\n";
+  const LAUNCH_REVIEW: GuideLaunchReview = {
+    rawPatch: PATCH,
+    gitRef: "origin/main..HEAD",
+    diffType: "since-base",
+    base: "origin/main",
+    source: { kind: "local", repo: "acme/widgets", branch: "feature/locales", headSha: "abc1234" },
+    customInstructions: "Keep it short.",
+  };
+  const session = () =>
+    createGuideStoreSession({
+      runGit: async (args) => (args[0] === "remote" ? "git@github.com:acme/widgets.git\n" : args[0] === "rev-parse" ? "abc1234\n" : null),
+      getGitCwd: () => "/repo",
+      getPRInfo: () => null,
+      getBranchLabel: () => "feature/locales",
+      getFallbackDir: () => "/repo",
+      writesEnabled: () => true,
+    });
+
+  test("saveForJob writes {id}.patch beside the envelope and the envelope references it", async () => {
+    const s = session();
+    await s.saveForJob({ id: "job-1", engine: "claude", model: "sonnet", generatedAt: 5000 }, { ...GUIDE, reviewed: [true, false] }, undefined, LAUNCH_REVIEW);
+    const [entry] = listGuides(REPO_KEY);
+    expect(entry.envelope.review).toEqual({
+      gitRef: "origin/main..HEAD",
+      diffType: "since-base",
+      base: "origin/main",
+      source: LAUNCH_REVIEW.source,
+      patchFile: `${entry.id}.patch`,
+    });
+    expect(entry.envelope.customInstructions).toBe("Keep it short.");
+    expect(entry.envelope.generatedAt).toBe(5000);
+    expect(readdirSync(join(dataDir, "guides", REPO_KEY)).sort()).toEqual([`${entry.id}.json`, `${entry.id}.patch`]);
+    expect(loadGuidePatch(REPO_KEY, entry.envelope)).toBe(PATCH);
+
+    // Snapshot for export: guide + retained diff + provenance, reviewed state included.
+    const snapshot = await s.getSavedGuideSnapshot(entry.id);
+    expect(snapshot?.review.rawPatch).toBe(PATCH);
+    expect(snapshot?.guide.reviewed).toEqual([true, false]);
+    expect(snapshot?.generator).toEqual({ engine: "claude", model: "sonnet", generatedAt: new Date(5000).toISOString(), customInstructions: "Keep it short." });
+    expect(await s.getJobGuideSnapshot("job-1")).toEqual(snapshot);
+    expect(await s.getJobGuideSnapshot("job-unknown")).toBeNull();
+  });
+
+  test("a guide saved without a launch review is not exportable", async () => {
+    const s = session();
+    await s.saveForJob({ id: "job-1" }, { ...GUIDE });
+    const [entry] = listGuides(REPO_KEY);
+    expect(entry.envelope.review).toBeUndefined();
+    expect(buildSavedGuideSnapshot(REPO_KEY, entry.envelope)).toBeNull();
+    expect(await s.getSavedGuideSnapshot(entry.id)).toBeNull();
+  });
+
+  test("an envelope whose patch file went missing is not exportable, and delete removes both files", () => {
+    saveGuidePatch(REPO_KEY, "1000-x", PATCH);
+    saveGuide(REPO_KEY, "1000-x", envelope({ review: { gitRef: "r", source: { kind: "local" }, patchFile: "1000-x.patch" } }));
+    expect(buildSavedGuideSnapshot(REPO_KEY, loadGuide(REPO_KEY, "1000-x")!)).not.toBeNull();
+    rmSync(join(dataDir, "guides", REPO_KEY, "1000-x.patch"));
+    expect(buildSavedGuideSnapshot(REPO_KEY, loadGuide(REPO_KEY, "1000-x")!)).toBeNull();
+    saveGuidePatch(REPO_KEY, "1000-x", PATCH);
+    expect(deleteGuide(REPO_KEY, "1000-x")).toBe(true);
+    expect(readdirSync(join(dataDir, "guides", REPO_KEY))).toEqual([]);
+  });
+
+  test("a patchFile that is not a plain sibling name is ignored on load", () => {
+    saveGuide(REPO_KEY, "1000-x", envelope({ review: { gitRef: "r", source: { kind: "local" }, patchFile: "../../etc/passwd" } }));
+    expect(loadGuide(REPO_KEY, "1000-x")!.review).toBeUndefined();
+  });
+
+  test("findSavedGuideById and listAllSavedGuides span every repo shelf (CLI has no session)", () => {
+    saveGuide("github.com__a__one", "1000-one", envelope({ title: "One" }));
+    saveGuide("github.com__b__two", "2000-two", envelope({ title: "Two", savedAt: 2000 }));
+    expect(findSavedGuideById("2000-two")?.repoKey).toBe("github.com__b__two");
+    expect(findSavedGuideById("3000-none")).toBeNull();
+    expect(findSavedGuideById("../escape")).toBeNull();
+    expect(listAllSavedGuides().map((g) => g.id)).toEqual(["2000-two", "1000-one"]);
   });
 });

@@ -93,6 +93,69 @@ export interface GuideSnapshotV1 {
 
 export type GuideSnapshot = GuideSnapshotV1;
 
+/**
+ * What a producer captures when a guide job LAUNCHES: the exact review the
+ * guide will describe. Stored beside the saved guide and turned into a
+ * snapshot at export time (decision record D6). Never read at export time
+ * from live session state — the on-screen diff may have moved since.
+ */
+export interface GuideLaunchReview {
+  readonly rawPatch: string;
+  readonly gitRef: string;
+  readonly diffType?: string;
+  readonly base?: string;
+  readonly source: GuideSnapshotSource;
+  /** Reviewer-supplied instructions the guide was generated with (provenance). */
+  readonly customInstructions?: string;
+}
+
+export interface BuildGuideSnapshotInput {
+  readonly guide: CodeGuideOutput;
+  readonly reviewed: readonly boolean[];
+  readonly review: GuideLaunchReview;
+  readonly generator?: GuideSnapshotGenerator;
+  readonly theme?: GuideSnapshotTheme;
+  /** Injected for deterministic tests; defaults to now. */
+  readonly exportedAt?: string;
+}
+
+/** Assemble a v1 snapshot from producer-side pieces. Pure; strips persistence-only guide flags. */
+export function buildGuideSnapshot(input: BuildGuideSnapshotInput): GuideSnapshotV1 {
+  const { guide } = input;
+  const reviewed = new Array<boolean>(guide.sections.length).fill(false);
+  input.reviewed.forEach((v, i) => { if (i < reviewed.length) reviewed[i] = v === true; });
+  const generatorInput: GuideSnapshotGenerator = {
+    ...input.generator,
+    ...(input.generator?.customInstructions === undefined && input.review.customInstructions
+      ? { customInstructions: input.review.customInstructions }
+      : {}),
+  };
+  const generator = Object.fromEntries(
+    Object.entries(generatorInput).filter(([, v]) => typeof v === "string" && v.length > 0),
+  ) as GuideSnapshotGenerator;
+  return {
+    kind: GUIDE_SNAPSHOT_KIND,
+    version: GUIDE_SNAPSHOT_VERSION,
+    exportedAt: input.exportedAt ?? new Date().toISOString(),
+    guide: {
+      title: guide.title,
+      intent: guide.intent,
+      sections: guide.sections,
+      ...(guide.unplacedFiles !== undefined && { unplacedFiles: guide.unplacedFiles }),
+      reviewed,
+    },
+    review: {
+      rawPatch: input.review.rawPatch,
+      gitRef: input.review.gitRef,
+      ...(input.review.diffType !== undefined && { diffType: input.review.diffType }),
+      ...(input.review.base !== undefined && { base: input.review.base }),
+    },
+    source: input.review.source,
+    ...(Object.keys(generator).length > 0 && { generator }),
+    ...(input.theme?.palette && { theme: { palette: input.theme.palette } }),
+  };
+}
+
 /** Stable parse failure for malformed or unsupported snapshot data. */
 export interface GuideSnapshotParseError {
   readonly _tag: "GuideSnapshotParseError";
@@ -543,6 +606,25 @@ export interface GuideViewerAssets {
 export interface GuideHtmlOptions {
   readonly viewer: GuideViewerAssets;
 }
+
+/**
+ * The viewer build a producer pins into exports. Producers embed the
+ * generated `guide-viewer-manifest` module (checked in, kept in sync with the
+ * viewer build) and may override the base URL for local development or
+ * self-hosting via `PLANNOTATOR_GUIDE_VIEWER_URL` (https, or http localhost).
+ */
+export function resolveGuideViewerAssets(
+  manifest: Omit<GuideViewerAssets, "baseUrl">,
+  options?: { readonly baseUrl?: string; readonly defaultBaseUrl?: string },
+): GuideViewerAssets {
+  const candidate = options?.baseUrl?.trim();
+  const fallback = options?.defaultBaseUrl ?? DEFAULT_GUIDE_VIEWER_BASE_URL;
+  const base = (candidate && normalizeGuideViewerBaseUrl(candidate)?.href) || fallback;
+  return { ...manifest, baseUrl: base };
+}
+
+/** Where published viewer builds live (decision record D7/D8). */
+export const DEFAULT_GUIDE_VIEWER_BASE_URL = "https://guide.show/v1/";
 
 function escapeHtmlText(input: string): string {
   return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");

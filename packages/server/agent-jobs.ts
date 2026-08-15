@@ -28,6 +28,7 @@ import {
   AGENT_HEARTBEAT_INTERVAL_MS,
 } from "@plannotator/shared/agent-jobs";
 import { resolveGuideLaunchInstructions } from "@plannotator/shared/guide-instructions-store";
+import type { GuideLaunchReview } from "@plannotator/shared/guide-format";
 
 export type { AgentJobInfo, AgentJobEvent, AgentCapabilities } from "@plannotator/shared/agent-jobs";
 
@@ -138,12 +139,17 @@ export interface AgentJobHandlerOptions {
      *  AgentJobInfo so guide persistence labels the envelope with the context
      *  the guide was generated against (see AgentJobInfo.guideContext). */
     guideContext?: AgentJobInfo["guideContext"];
+    /** Launch-time review (patch + labels + source) the guide describes (guide
+     *  provider only). Kept server-side like changedFilesSnapshot — NEVER on
+     *  AgentJobInfo, which is broadcast over SSE — and handed to
+     *  onJobComplete for persistence beside the guide (portable export). */
+    launchReview?: GuideLaunchReview;
   } | null>;
   /**
    * Called after a job process exits with exit code 0.
    * Use for result ingestion (e.g., reading an output file and pushing annotations).
    */
-  onJobComplete?: (job: AgentJobInfo, meta: { outputPath?: string; stdout?: string; cwd?: string; changedFilesSnapshot?: string[] }) => void | Promise<void>;
+  onJobComplete?: (job: AgentJobInfo, meta: { outputPath?: string; stdout?: string; cwd?: string; changedFilesSnapshot?: string[]; launchReview?: GuideLaunchReview }) => void | Promise<void>;
 }
 
 
@@ -179,6 +185,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
   const jobs = new Map<string, { info: AgentJobInfo; proc: ReturnType<typeof Bun.spawn> | null }>();
   const jobOutputPaths = new Map<string, string>();
   const jobChangedFilesSnapshots = new Map<string, string[]>();
+  const jobLaunchReviews = new Map<string, GuideLaunchReview>();
   const subscribers = new Set<ReadableStreamDefaultController>();
   const encoder = new TextEncoder();
   let version = 0;
@@ -248,7 +255,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
     command: string[],
     label: string,
     outputPath?: string,
-    spawnOptions?: { captureStdout?: boolean; stdinPrompt?: string; cwd?: string; prompt?: string; engine?: string; model?: string; effort?: string; reasoningEffort?: string; fastMode?: boolean; thinking?: string; prUrl?: string; diffScope?: string; diffContext?: AgentJobInfo["diffContext"]; reviewProfileId?: string; reviewProfileLabel?: string; changedFilesSnapshot?: string[]; guideContext?: AgentJobInfo["guideContext"] },
+    spawnOptions?: { captureStdout?: boolean; stdinPrompt?: string; cwd?: string; prompt?: string; engine?: string; model?: string; effort?: string; reasoningEffort?: string; fastMode?: boolean; thinking?: string; prUrl?: string; diffScope?: string; diffContext?: AgentJobInfo["diffContext"]; reviewProfileId?: string; reviewProfileLabel?: string; changedFilesSnapshot?: string[]; guideContext?: AgentJobInfo["guideContext"]; launchReview?: GuideLaunchReview },
   ): AgentJobInfo {
     const source = jobSource(id);
 
@@ -309,6 +316,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
       if (outputPath) jobOutputPaths.set(id, outputPath);
       if (spawnOptions?.cwd) jobOutputPaths.set(`${id}:cwd`, spawnOptions.cwd);
       if (spawnOptions?.changedFilesSnapshot) jobChangedFilesSnapshots.set(id, spawnOptions.changedFilesSnapshot);
+      if (spawnOptions?.launchReview) jobLaunchReviews.set(id, spawnOptions.launchReview);
       broadcast({ type: "job:started", job: { ...info } });
 
       // Drain stderr: capture tail for error reporting + broadcast live log deltas
@@ -422,6 +430,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
         const outputPath = jobOutputPaths.get(id);
         const jobCwd = jobOutputPaths.get(`${id}:cwd`);
         const changedFilesSnapshot = jobChangedFilesSnapshots.get(id);
+        const launchReview = jobLaunchReviews.get(id);
         if (exitCode === 0 && options.onJobComplete) {
           try {
             await options.onJobComplete(entry.info, {
@@ -429,6 +438,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
               stdout: captureStdout ? stdoutBuf : undefined,
               cwd: jobCwd,
               changedFilesSnapshot,
+              launchReview,
             });
           } catch (err) {
             // Claude/Codex REVIEW jobs stay fail-open by design: annotations
@@ -455,6 +465,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
         jobOutputPaths.delete(id);
         jobOutputPaths.delete(`${id}:cwd`);
         jobChangedFilesSnapshots.delete(id);
+        jobLaunchReviews.delete(id);
         broadcast({ type: "job:completed", job: { ...entry.info } });
       }).catch(() => {
         // Guard against unhandled rejection from unexpected runtime errors
@@ -491,6 +502,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
     jobOutputPaths.delete(id);
     jobOutputPaths.delete(`${id}:cwd`);
     jobChangedFilesSnapshots.delete(id);
+    jobLaunchReviews.delete(id);
     broadcast({ type: "job:completed", job: { ...entry.info } });
     return true;
   }
@@ -676,6 +688,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
           let jobReviewProfileLabel: string | undefined;
           let jobChangedFilesSnapshot: string[] | undefined;
           let jobGuideContext: AgentJobInfo["guideContext"] | undefined;
+          let jobLaunchReview: GuideLaunchReview | undefined;
           const jobId = crypto.randomUUID();
           if (options.buildCommand) {
             // Thread config from POST body to buildCommand
@@ -717,6 +730,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
               jobReviewProfileLabel = built.reviewProfileLabel;
               jobChangedFilesSnapshot = built.changedFilesSnapshot;
               jobGuideContext = built.guideContext;
+              jobLaunchReview = built.launchReview;
             }
           }
 
@@ -745,6 +759,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
             reviewProfileLabel: jobReviewProfileLabel,
             changedFilesSnapshot: jobChangedFilesSnapshot,
             guideContext: jobGuideContext,
+            launchReview: jobLaunchReview,
           });
           return Response.json({ job }, { status: 201 });
         } catch (err) {

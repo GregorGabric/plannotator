@@ -88,6 +88,17 @@ import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "./tour/tour-review";
 import { createGuideSession, GUIDE_EMPTY_OUTPUT_ERROR } from "./guide/guide-review";
 import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX } from "@plannotator/shared/guide-store";
 import {
+  buildGuideSnapshot,
+  createGuideHtml,
+  detectGuideLanguages,
+  guideExportFilename,
+  resolveGuideViewerAssets,
+  type GuideLaunchReview,
+  type GuideSnapshot,
+  type GuideSnapshotSource,
+} from "@plannotator/shared/guide-format";
+import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
+import {
   MARKER_ENGINES,
   composeMarkerReviewPrompt,
   buildMarkerCommand,
@@ -265,6 +276,41 @@ export async function startReviewServer(
     getFallbackDir: () => workspace?.root ?? options.agentCwd ?? process.cwd(),
     writesEnabled: () => resolveGuideHistory(loadConfig()),
   });
+
+  /** Job fields the store persists for export provenance (engine/model already on the job). */
+  const guideSaveJob = (job: AgentJobInfo) => ({
+    id: job.id,
+    engine: job.engine,
+    model: job.model,
+    generatedAt: job.endedAt ?? Date.now(),
+  });
+
+  /**
+   * Snapshot for exporting a guide: `saved:{id}` → the store; a live job →
+   * this session's launch review + guide (the persisted copy is the fallback,
+   * e.g. when the in-memory review was evicted).
+   */
+  async function resolveGuideSnapshotForExport(jobId: string): Promise<GuideSnapshot | null> {
+    if (jobId.startsWith(SAVED_GUIDE_ID_PREFIX)) {
+      return guideStore.getSavedGuideSnapshot(jobId.slice(SAVED_GUIDE_ID_PREFIX.length));
+    }
+    const live = guide.getGuide(jobId);
+    const launchReview = guide.getLaunchReview(jobId);
+    if (live && launchReview) {
+      const job = agentJobs.getJob(jobId);
+      return buildGuideSnapshot({
+        guide: live,
+        reviewed: live.reviewed,
+        review: launchReview,
+        generator: {
+          engine: job?.engine,
+          model: job?.model,
+          generatedAt: job?.endedAt ? new Date(job.endedAt).toISOString() : undefined,
+        },
+      });
+    }
+    return guideStore.getJobGuideSnapshot(jobId);
+  }
 
   // Mutable state for diff switching
   let currentPatch = options.rawPatch;
@@ -1184,6 +1230,41 @@ export async function startReviewServer(
         // same as changedFilesSnapshot above.
         const guideContext = (repairOf ? agentJobs.getJob(repairOf)?.guideContext : undefined)
           ?? await guideStore.captureLaunchContext();
+        // The review this guide describes, for portable export (decision
+        // record D6): captured from the SAME launch-time snapshot as the
+        // patch the model is given, never re-read at export time. Repairs
+        // reuse the FAILED job's own review, like changedFilesSnapshot.
+        const commitSha = parseCommitDiffType(String(worktreeParts?.subType ?? launchDiffType))?.sha;
+        const launchSource: GuideSnapshotSource = workspacePrompt
+          ? { kind: "workspace", ...(repoInfo?.display && { repo: repoInfo.display }) }
+          : launchMetadata
+            ? {
+                kind: "pr",
+                repo: getDisplayRepo(launchMetadata),
+                branch: launchMetadata.headBranch,
+                headSha: launchMetadata.headSha,
+                pr: {
+                  url: launchMetadata.url,
+                  number: launchMetadata.platform === "github" ? launchMetadata.number : launchMetadata.iid,
+                  title: launchMetadata.title,
+                  platform: launchMetadata.platform,
+                },
+              }
+            : {
+                kind: commitSha ? "commit" : "local",
+                ...(repoInfo?.display && { repo: repoInfo.display }),
+                ...(gitContext?.currentBranch && { branch: gitContext.currentBranch }),
+                ...(guideContext.headSha && { headSha: guideContext.headSha }),
+                ...(commitSha && { commitSha }),
+              };
+        const launchReview: GuideLaunchReview = (repairOf ? guide.getLaunchReview(repairOf) : null) ?? {
+          rawPatch: launchPatch,
+          gitRef: launchGitRef,
+          diffType: String(launchDiffType),
+          ...(launchBase && { base: launchBase }),
+          source: launchSource,
+          ...(typeof config?.instructions === "string" && config.instructions.trim() && { customInstructions: config.instructions }),
+        };
         return {
           ...built,
           prUrl: launchPrUrl,
@@ -1193,6 +1274,7 @@ export async function startReviewServer(
           reviewProfileLabel: reviewProfile.label,
           changedFilesSnapshot,
           guideContext,
+          launchReview,
         };
       }
 
@@ -1433,16 +1515,17 @@ export async function startReviewServer(
         // current patch only if the snapshot is missing (defensive; should
         // not happen in practice — see agent-jobs.ts's changedFilesSnapshot).
         const changedFiles = meta.changedFilesSnapshot ?? listPatchFiles(currentPatch).map((f) => f.path);
-        const { summary, error } = await guide.onJobComplete({ job, meta, changedFiles });
+        const { summary, error } = await guide.onJobComplete({ job, meta, changedFiles, launchReview: meta.launchReview });
         if (summary) {
           job.summary = summary;
           // Autosave (#1112): only guides that passed validateGuideOutput ever
           // reach guideResults, so a getGuide hit here IS the validation gate.
           // Failed/invalid guides never write. The job's launch-time context
           // snapshot labels the envelope — never the live session state, which
-          // may have PR/diff-switched while the job ran.
+          // may have PR/diff-switched while the job ran. The launch-time review
+          // (the diff the guide describes) is stored beside it for export.
           const validated = guide.getGuide(job.id);
-          if (validated) await guideStore.saveForJob(job, validated, job.guideContext);
+          if (validated) await guideStore.saveForJob(guideSaveJob(job), validated, job.guideContext, meta.launchReview);
         } else {
           // Same fail-closed precedent as Tour: an exit-0 job with empty,
           // malformed, or fully-invalidated output must not look like a
@@ -1604,6 +1687,37 @@ export async function startReviewServer(
             }
           }
 
+          // API: Portable export of a guide (decision record D1/D9). Resolves
+          // `saved:{id}` from the store and live ids from this session's
+          // launch review (persisted copy as fallback). No size gate: the file
+          // is as big as the diff, and that is the user's call.
+          const guideExportMatch = url.pathname.match(/^\/api\/guide\/([^/]+)\/(export|export-info)$/);
+          if (guideExportMatch && req.method === "GET") {
+            const jobId = decodeURIComponent(guideExportMatch[1]);
+            const snapshot = await resolveGuideSnapshotForExport(jobId);
+            if (!snapshot) {
+              return Response.json({ error: "This guide cannot be exported: its diff was not retained." }, { status: 404 });
+            }
+            const viewer = resolveGuideViewerAssets(GUIDE_VIEWER_MANIFEST, { baseUrl: process.env.PLANNOTATOR_GUIDE_VIEWER_URL });
+            const html = createGuideHtml(snapshot, { viewer });
+            const filename = guideExportFilename(snapshot.guide.title);
+            if (guideExportMatch[2] === "export-info") {
+              return Response.json({
+                bytes: new TextEncoder().encode(html).byteLength,
+                filename,
+                languages: detectGuideLanguages(snapshot.review.rawPatch),
+              });
+            }
+            return new Response(html, {
+              status: 200,
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+                "Content-Disposition": `attachment; filename="${filename}"`,
+                "Cache-Control": "no-store",
+              },
+            });
+          }
+
           // API: List saved guides for the current repo (#1112)
           if (url.pathname === "/api/guides" && req.method === "GET") {
             return Response.json(await guideStore.listSaved());
@@ -1654,7 +1768,7 @@ export async function startReviewServer(
               // gate as an automatic one — persist it too (#1112), labeled
               // with the job's own launch-time context snapshot.
               const repaired = guide.getGuide(jobId);
-              if (repaired) await guideStore.saveForJob(existingJob, repaired, existingJob.guideContext);
+              if (repaired) await guideStore.saveForJob(guideSaveJob(existingJob), repaired, existingJob.guideContext, guide.getLaunchReview(jobId) ?? undefined);
               return Response.json({ ok: true, sections, files });
             } catch {
               return Response.json({ error: "Invalid JSON" }, { status: 400 });

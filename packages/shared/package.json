@@ -80,7 +80,9 @@
     "./commit-avatars": "./commit-avatars.ts",
     "./annotate-client-lease": "./annotate-client-lease.ts",
     "./annotate-decision": "./annotate-decision.ts",
-    "./archive-mode": "./archive-mode.ts"
+    "./archive-mode": "./archive-mode.ts",
+    "./guide-format": "./guide-format.ts",
+    "./guide-viewer-manifest": "./guide-viewer-manifest.ts"
   },
   "dependencies": {
     "@joplin/turndown-plugin-gfm": "^1.0.64",

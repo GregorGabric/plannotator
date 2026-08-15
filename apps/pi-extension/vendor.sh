@@ -8,7 +8,7 @@ rm -rf generated
 mkdir -p generated generated/ai/providers
 
 # Modules that MOVED to @plannotator/core — vendor the real impl from core.
-for f in feedback-templates project favicon code-file annotatable external-annotation agent-jobs agent-terminal source-save open-in-apps diff-paths guide guide-format; do
+for f in feedback-templates project favicon code-file annotatable external-annotation agent-jobs agent-terminal source-save open-in-apps diff-paths guide guide-format guide-viewer-manifest; do
   src="../../packages/core/$f.ts"
   printf '// @generated — DO NOT EDIT. Source: packages/core/%s.ts\n' "$f" | cat - "$src" > "generated/$f.ts"
 done
@@ -31,7 +31,12 @@ done
 # Everything else in the original flat list stays sourced from packages/shared.
 for f in prompts review-core cli-pagination jj-core gitbutler-core vcs-core review-args draft annotate-history pr-types pr-context-live pr-artifact-document pr-provider pr-stack pr-github pr-gitlab checklist integrations-common repo reference-common markdown-extensions resolve-file file-browser-watch-core annotate-reference-roots-node worktree worktree-pool html-to-markdown html-diff html-assets html-assets-node url-to-markdown tour annotate-args annotate-target at-reference review-workspace-node review-workspace pfm-reminder improvement-hooks code-nav data-dir semantic-diff-types semantic-diff call-flow-types call-flow-languages call-flow-pack-locks call-flow-install-lock call-flow call-flow-install single-flight source-save-node review-profiles guide-store guide-instructions-store commit-avatars commit-history port-range annotate-client-lease annotate-decision archive-mode tailscale; do
   src="../../packages/shared/$f.ts"
-  printf '// @generated — DO NOT EDIT. Source: packages/shared/%s.ts\n' "$f" | cat - "$src" > "generated/$f.ts"
+  # Shared modules that import browser-safe siblings from @plannotator/core
+  # (e.g. guide-store → core/guide-format): generated/ is flat and vendors the
+  # same core module names, so the bare specifier maps to a flat relative path.
+  printf '// @generated — DO NOT EDIT. Source: packages/shared/%s.ts\n' "$f" | cat - "$src" \
+    | sed "s|from ['\"]@plannotator/core/\\([^'\"]*\\)['\"]|from './\\1.ts'|g" \
+    > "generated/$f.ts"
 done
 
 # call-flow.ts imports the repository-owned npm manifest and lock that are
@@ -84,6 +89,7 @@ for f in guide-review; do
     | sed 's|from "\.\./marker-review"|from "./marker-review.ts"|' \
     | sed 's|from "\.\./config"|from "./config.ts"|' \
     | sed 's|from "@plannotator/shared/guide"|from "./guide.ts"|' \
+    | sed 's|from "@plannotator/shared/guide-format"|from "./guide-format.ts"|' \
     | sed 's|from "@plannotator/shared/data-dir"|from "./data-dir.ts"|' \
     > "generated/$f.ts"
 done

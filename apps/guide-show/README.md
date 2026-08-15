@@ -8,7 +8,7 @@ Decision record: `adr/decisions/007-portable-guided-reviews-20260815.md`; spec: 
 - `viewer/` — the browser entry that turns an exported guide (`<script id="plannotator-guided-review">`) into the same guide UI Plannotator renders: `@plannotator/guide-viewer` over `AllFilesCodeView` in `readOnly` mode. Multi-file Vite build (`vite.viewer.config.ts`): `viewer.<hash>.js/.css`, one chunk per Shiki grammar, the highlight worker as a file, fonts as files.
 - `worker/` — the Cloudflare Worker: serves `/v1/*` from the `guide-show-viewer` R2 bucket (immutable, CORS `*` so `file://` documents can load it), the landing page from static assets, and reserves `/g/*` + `/api/*` for the future platform.
 - `build/` — `manifest-plugin` (emits `manifest.json`: entry paths + SRI + grammar chunk map), `read-only-stubs-plugin` (keeps annotation UI out of the bundle), `deploy-viewer` (add-only R2 upload), `check-budgets`, `sync-manifest`, `export-sample`, `serve-local`.
-- `viewer-manifest.json` — checked in; what Plannotator embeds so exports pin the viewer this release publishes. Regenerate with `bun run build:viewer && bun run sync:manifest`; CI fails if stale.
+- `packages/core/guide-viewer-manifest.ts` (generated here by `sync-manifest`) — checked in; what Plannotator embeds so exports pin the viewer this release publishes. Regenerate with `bun run build:viewer && bun run sync:manifest`; CI fails if stale.
 - `site/` — landing page.
 
 ## Local loop

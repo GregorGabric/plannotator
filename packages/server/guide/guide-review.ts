@@ -24,6 +24,7 @@ import type {
   GuideDiffRef,
   GuideSection,
 } from "@plannotator/shared/guide";
+import type { GuideLaunchReview } from "@plannotator/shared/guide-format";
 
 export type { CodeGuideOutput, GuideDiffRef, GuideSection };
 
@@ -954,6 +955,10 @@ export interface GuideSessionOnJobCompleteOptions {
    * switch never invalidates an otherwise-valid guide. Only falls back to
    * the current patch when a snapshot wasn't available (defensive). */
   changedFiles: string[];
+  /** The review this guide describes, captured at LAUNCH (decision record D6).
+   *  Recorded whether or not the output validates, so a later repair or
+   *  export sees the same diff the model was given. */
+  launchReview?: GuideLaunchReview;
 }
 
 export interface GuideSession {
@@ -971,6 +976,12 @@ export interface GuideSession {
    *  section placement against, not whatever patch happens to be on screen
    *  when the reviewer gets around to fixing the JSON. */
   launchChangedFiles: Map<string, string[]>;
+  /** Launch-time review per job id (patch + labels + source). In-memory
+   *  source of truth for exporting a live guide this session; the persisted
+   *  copy (guide-store) is authoritative for `saved:` ids and after restart.
+   *  Bounded to the most recent MAX_LAUNCH_REVIEWS jobs — each entry holds a
+   *  full patch. */
+  launchReviews: Map<string, GuideLaunchReview>;
   buildCommand(opts: GuideSessionBuildCommandOptions): Promise<GuideSessionBuildCommandResult>;
   onJobComplete(opts: GuideSessionOnJobCompleteOptions): Promise<{
     summary: GuideSessionJobSummary | null;
@@ -988,6 +999,9 @@ export interface GuideSession {
    *  the FAILED job's own recorded set, rather than from whatever diff is on
    *  screen at repair time (see the repairOf branch in buildAgentJob). */
   getLaunchChangedFiles(jobId: string): string[] | null;
+  /** Launch-time review recorded for a job id, or null. Repairs reuse the
+   *  FAILED job's review the same way they reuse its changed-file set. */
+  getLaunchReview(jobId: string): GuideLaunchReview | null;
   /** Manually submit corrected guide JSON (mechanical repair -> parse ->
    *  validateGuideOutput) for a job whose automatic output failed. Success
    *  stores under the SAME job id the reviewed state is already keyed to.
@@ -1003,6 +1017,9 @@ export interface GuideSession {
  *  growing the map unbounded; a manual repair attempt on a >200KB guide
  *  output is unlikely to succeed anyway. */
 const MAX_FAILED_PAYLOAD_CHARS = 200_000;
+
+/** Launch reviews retained per session (each holds a full patch). Oldest evicted first. */
+const MAX_LAUNCH_REVIEWS = 20;
 
 /**
  * Shared validation core for guide output: sanitize the raw sections /
@@ -1170,12 +1187,14 @@ export function createGuideSession(): GuideSession {
   const guideReviewed = new Map<string, boolean[]>();
   const failedPayloads = new Map<string, string>();
   const launchChangedFiles = new Map<string, string[]>();
+  const launchReviews = new Map<string, GuideLaunchReview>();
 
   return {
     guideResults,
     guideReviewed,
     failedPayloads,
     launchChangedFiles,
+    launchReviews,
 
     async buildCommand({ cwd, patch, diffType, options, prMetadata, changedFiles, config, repair }) {
       const engine = (typeof config?.engine === "string" ? config.engine : "claude") as "claude" | "codex" | MarkerEngineId;
@@ -1254,12 +1273,23 @@ export function createGuideSession(): GuideSession {
       return { command, stdinPrompt, prompt, cwd, label: "Guided Review", captureStdout: true, engine: "claude", model, effort };
     },
 
-    async onJobComplete({ job, meta, changedFiles }) {
+    async onJobComplete({ job, meta, changedFiles, launchReview }) {
       // Record the changed-file set this attempt validated against — BEFORE
       // parsing, so both the success and failure paths capture it. A later
       // manual repair (submitManualOutput) reuses this exact set instead of
       // whatever patch happens to be on screen at repair time.
       launchChangedFiles.set(job.id, changedFiles);
+      if (launchReview) {
+        // Same discipline for the review itself; bounded because each entry
+        // carries a full patch.
+        launchReviews.delete(job.id);
+        launchReviews.set(job.id, launchReview);
+        while (launchReviews.size > MAX_LAUNCH_REVIEWS) {
+          const oldest = launchReviews.keys().next().value;
+          if (oldest === undefined) break;
+          launchReviews.delete(oldest);
+        }
+      }
 
       let output: CodeGuideOutput | null = null;
       // Best-effort raw candidate for failed-payload capture — populated
@@ -1344,6 +1374,10 @@ export function createGuideSession(): GuideSession {
 
     getLaunchChangedFiles(jobId) {
       return launchChangedFiles.get(jobId) ?? null;
+    },
+
+    getLaunchReview(jobId) {
+      return launchReviews.get(jobId) ?? null;
     },
 
     submitManualOutput(jobId, payloadText, fallbackChangedFiles) {

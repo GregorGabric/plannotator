@@ -26,8 +26,10 @@ import {
   listGuides,
   loadGuide,
   saveGuide,
+  saveGuidePatch,
   type SavedGuideEnvelope,
 } from "@plannotator/shared/guide-store";
+import { GUIDE_SNAPSHOT_SCRIPT_ID, parseGuideSnapshotJson } from "@plannotator/shared/guide-format";
 import { startReviewServer as startBunReviewServer } from "./review";
 import { startReviewServer as startPiReviewServer } from "../../apps/pi-extension/server";
 
@@ -177,6 +179,72 @@ for (const serverCase of serverCases) {
         expect(delAgain.status).toBe(404);
         const listAfter = await (await fetch(`${server.url}/api/guides`)).json() as unknown[];
         expect(listAfter).toEqual([]);
+      } finally {
+        server.stop();
+      }
+    });
+
+    test("exports a saved guide as portable HTML pinned to the viewer, and refuses one whose diff was not retained", async () => {
+      useTempDataDir();
+      const patch = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n";
+      // A guide saved WITH its launch review (patch beside the envelope).
+      saveGuidePatch(repoKey, "1000-exportable", patch);
+      saveGuide(repoKey, "1000-exportable", envelope({
+        engine: "claude",
+        model: "sonnet",
+        generatedAt: 1234,
+        customInstructions: "Focus on auth.",
+        review: {
+          gitRef: "origin/main..HEAD",
+          diffType: "since-base",
+          base: "origin/main",
+          source: { kind: "local", repo: "acme/demo", branch: "feature/x" },
+          patchFile: "1000-exportable.patch",
+        },
+      }));
+      // A pre-portable guide: no review block, no patch → not exportable.
+      saveGuide(repoKey, "1000-legacy", envelope({ title: "Legacy" }));
+
+      const server = await serverCase.start();
+      try {
+        const info = await fetch(`${server.url}/api/guide/saved:1000-exportable/export-info`);
+        expect(info.status).toBe(200);
+        const infoBody = await info.json() as { bytes: number; filename: string; languages: string[] };
+        expect(infoBody.filename).toBe("guided-review-persisted-guide.html");
+        expect(infoBody.languages).toEqual(["typescript"]);
+        expect(infoBody.bytes).toBeGreaterThan(1000);
+
+        const res = await fetch(`${server.url}/api/guide/saved:1000-exportable/export`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("content-type")).toContain("text/html");
+        expect(res.headers.get("content-disposition")).toContain('filename="guided-review-persisted-guide.html"');
+        const html = await res.text();
+        // Pins the viewer this build ships (script + integrity) — never inlines it.
+        expect(html).toMatch(/<script type="module" src="https:\/\/guide\.show\/v1\/viewer\.[A-Za-z0-9_-]+\.js" integrity="sha384-/);
+        expect(html.length).toBeLessThan(20_000);
+        // The embedded snapshot is exactly the saved guide + the retained diff + provenance.
+        const embedded = new RegExp(`<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">([\\s\\S]*?)</script>`).exec(html)![1];
+        const parsed = parseGuideSnapshotJson(embedded);
+        expect(parsed.ok).toBe(true);
+        if (parsed.ok) {
+          expect(parsed.value.review.rawPatch).toBe(patch);
+          expect(parsed.value.review.gitRef).toBe("origin/main..HEAD");
+          expect(parsed.value.source).toEqual({ kind: "local", repo: "acme/demo", branch: "feature/x" });
+          expect(parsed.value.generator).toEqual({
+            engine: "claude",
+            model: "sonnet",
+            generatedAt: new Date(1234).toISOString(),
+            customInstructions: "Focus on auth.",
+          });
+          expect(parsed.value.guide.sections.length).toBe(2);
+        }
+
+        // Legacy envelope → 404 with the honest reason; unknown ids → 404.
+        const legacy = await fetch(`${server.url}/api/guide/saved:1000-legacy/export`);
+        expect(legacy.status).toBe(404);
+        expect(((await legacy.json()) as { error: string }).error).toContain("not retained");
+        expect((await fetch(`${server.url}/api/guide/saved:2000-nope/export-info`)).status).toBe(404);
+        expect((await fetch(`${server.url}/api/guide/live-unknown/export`)).status).toBe(404);
       } finally {
         server.stop();
       }

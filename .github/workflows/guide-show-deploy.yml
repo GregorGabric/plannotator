@@ -60,7 +60,7 @@ jobs:
 
       - name: Smoke the published viewer entry
         run: |
-          JS=$(node -e "console.log(require('./apps/guide-show/viewer-manifest.json').js)")
+          JS=$(bun -e "import { GUIDE_VIEWER_MANIFEST } from './packages/core/guide-viewer-manifest.ts'; console.log(GUIDE_VIEWER_MANIFEST.js)")
           curl -fsSI "https://guide.show/v1/$JS" | tee /tmp/headers.txt
           grep -qi 'cache-control: public, max-age=31536000, immutable' /tmp/headers.txt
           grep -qi 'access-control-allow-origin: \*' /tmp/headers.txt

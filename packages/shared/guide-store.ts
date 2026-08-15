@@ -4,7 +4,8 @@
  * Persists successful Guided Reviews to disk so they survive server restarts
  * (issue #1112). Files live at:
  *
- *   ${PLANNOTATOR_DATA_DIR}/guides/{repo-key}/{id}.json
+ *   ${PLANNOTATOR_DATA_DIR}/guides/{repo-key}/{id}.json      (envelope)
+ *   ${PLANNOTATOR_DATA_DIR}/guides/{repo-key}/{id}.patch     (the diff the guide describes; portable export)
  *
  * repo-key is a sanitized `host__owner__repo` derived from the repository's
  * origin remote (or the PR url in PR mode), so a PR review and a local review
@@ -26,6 +27,12 @@ import { getPlannotatorDataDir } from "./data-dir";
 import { parseRemoteUrl, parseRemoteHost } from "./repo";
 import { parsePRUrl } from "./pr-types";
 import type { CodeGuideOutput, SavedGuideListEntry } from "./guide";
+import {
+  buildGuideSnapshot,
+  type GuideLaunchReview,
+  type GuideSnapshot,
+  type GuideSnapshotSource,
+} from "@plannotator/core/guide-format";
 
 export type { SavedGuideListEntry };
 
@@ -49,8 +56,29 @@ export interface SavedGuideEnvelope {
   headSha?: string;
   /** PR/MR url when the guide was generated in PR mode. */
   prUrl?: string;
+  /** Epoch ms when generation finished (export provenance). */
+  generatedAt?: number;
+  /** Reviewer-supplied instructions that shaped the guide (export provenance). */
+  customInstructions?: string;
+  /**
+   * The review the guide was generated against — everything a portable export
+   * needs besides the guide itself. The patch bytes live in the sibling
+   * `{id}.patch` file (they can be large); this block carries the labels.
+   * Absent on envelopes written before portable exports existed, in which
+   * case the guide is not exportable ("diff not retained").
+   */
+  review?: SavedGuideReview;
   guide: CodeGuideOutput;
   reviewed: boolean[];
+}
+
+export interface SavedGuideReview {
+  gitRef: string;
+  diffType?: string;
+  base?: string;
+  source: GuideSnapshotSource;
+  /** Sibling file name holding the raw patch, e.g. "{id}.patch". */
+  patchFile: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +166,10 @@ function guidePath(repoKey: string, id: string): string {
   return join(guidesDir(repoKey), `${id}.json`);
 }
 
+function guidePatchPath(repoKey: string, id: string): string {
+  return join(guidesDir(repoKey), `${id}.patch`);
+}
+
 function coerceReviewed(value: unknown, sectionCount: number): boolean[] {
   const out = new Array<boolean>(sectionCount).fill(false);
   if (Array.isArray(value)) {
@@ -171,8 +203,30 @@ function parseEnvelope(raw: string): SavedGuideEnvelope | null {
     ...(typeof obj.model === "string" ? { model: obj.model } : {}),
     ...(typeof obj.headSha === "string" && obj.headSha ? { headSha: obj.headSha } : {}),
     ...(typeof obj.prUrl === "string" && obj.prUrl ? { prUrl: obj.prUrl } : {}),
+    ...(typeof obj.generatedAt === "number" ? { generatedAt: obj.generatedAt } : {}),
+    ...(typeof obj.customInstructions === "string" && obj.customInstructions ? { customInstructions: obj.customInstructions } : {}),
+    ...(parseSavedReview(obj.review) ? { review: parseSavedReview(obj.review)! } : {}),
     guide: guide as unknown as CodeGuideOutput,
     reviewed: coerceReviewed(obj.reviewed, sectionCount),
+  };
+}
+
+const SOURCE_KINDS = new Set(["local", "pr", "workspace", "commit"]);
+
+function parseSavedReview(value: unknown): SavedGuideReview | null {
+  if (!value || typeof value !== "object") return null;
+  const r = value as Record<string, unknown>;
+  const source = r.source as Record<string, unknown> | undefined;
+  if (typeof r.gitRef !== "string" || typeof r.patchFile !== "string") return null;
+  if (!source || typeof source !== "object" || typeof source.kind !== "string" || !SOURCE_KINDS.has(source.kind)) return null;
+  // Guard the sibling file reference: a plain file name in this directory, nothing else.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.patch$/.test(r.patchFile) || r.patchFile.includes("..")) return null;
+  return {
+    gitRef: r.gitRef,
+    ...(typeof r.diffType === "string" ? { diffType: r.diffType } : {}),
+    ...(typeof r.base === "string" ? { base: r.base } : {}),
+    source: source as unknown as GuideSnapshotSource,
+    patchFile: r.patchFile,
   };
 }
 
@@ -193,6 +247,100 @@ export function saveGuide(repoKey: string, id: string, envelope: SavedGuideEnvel
     console.error(`[guide-store] Failed to save guide ${id}: ${e}`);
     return false;
   }
+}
+
+/**
+ * Atomically write the patch a guide describes beside its envelope. Returns
+ * false (never throws) on failure. Callers write the patch BEFORE the envelope
+ * that references it, so an envelope never points at a missing file.
+ */
+export function saveGuidePatch(repoKey: string, id: string, rawPatch: string): boolean {
+  if (!isValidGuideId(id)) return false;
+  try {
+    mkdirSync(guidesDir(repoKey), { recursive: true });
+    const finalPath = guidePatchPath(repoKey, id);
+    const tmpPath = `${finalPath}.tmp`;
+    writeFileSync(tmpPath, rawPatch, "utf-8");
+    renameSync(tmpPath, finalPath);
+    return true;
+  } catch (e) {
+    console.error(`[guide-store] Failed to save guide patch ${id}: ${e}`);
+    return false;
+  }
+}
+
+/** Read the patch referenced by an envelope. Missing → null. */
+export function loadGuidePatch(repoKey: string, envelope: SavedGuideEnvelope): string | null {
+  if (!envelope.review) return null;
+  try {
+    const filePath = join(guidesDir(repoKey), envelope.review.patchFile);
+    if (!existsSync(filePath)) return null;
+    return readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Turn a saved guide (+ its patch) into a portable snapshot. Null when the
+ * guide predates portable exports (no review block / no patch on disk).
+ */
+export function buildSavedGuideSnapshot(repoKey: string, envelope: SavedGuideEnvelope): GuideSnapshot | null {
+  const rawPatch = loadGuidePatch(repoKey, envelope);
+  if (rawPatch === null || !envelope.review) return null;
+  return buildGuideSnapshot({
+    guide: envelope.guide,
+    reviewed: envelope.reviewed,
+    review: {
+      rawPatch,
+      gitRef: envelope.review.gitRef,
+      diffType: envelope.review.diffType,
+      base: envelope.review.base,
+      source: envelope.review.source,
+    },
+    generator: {
+      engine: envelope.engine,
+      model: envelope.model,
+      generatedAt: envelope.generatedAt ? new Date(envelope.generatedAt).toISOString() : undefined,
+      customInstructions: envelope.customInstructions,
+    },
+  });
+}
+
+/**
+ * Locate a saved guide by id across every repo shelf — for the CLI, which has
+ * no session and therefore no repo key. Ids embed a timestamp + slug, so
+ * collisions across shelves are practically impossible; the first match wins.
+ */
+export function findSavedGuideById(id: string): { repoKey: string; envelope: SavedGuideEnvelope } | null {
+  if (!isValidGuideId(id)) return null;
+  let repoKeys: string[];
+  try {
+    repoKeys = readdirSync(join(getPlannotatorDataDir(), "guides"));
+  } catch {
+    return null;
+  }
+  for (const repoKey of repoKeys) {
+    const envelope = loadGuide(repoKey, id);
+    if (envelope) return { repoKey, envelope };
+  }
+  return null;
+}
+
+/** Every saved guide across every repo shelf, newest first — for the CLI list. */
+export function listAllSavedGuides(): Array<{ repoKey: string; id: string; envelope: SavedGuideEnvelope }> {
+  let repoKeys: string[];
+  try {
+    repoKeys = readdirSync(join(getPlannotatorDataDir(), "guides"));
+  } catch {
+    return [];
+  }
+  const out: Array<{ repoKey: string; id: string; envelope: SavedGuideEnvelope }> = [];
+  for (const repoKey of repoKeys) {
+    for (const { id, envelope } of listGuides(repoKey)) out.push({ repoKey, id, envelope });
+  }
+  out.sort((a, b) => b.envelope.savedAt - a.envelope.savedAt);
+  return out;
 }
 
 /** Load one saved guide. Missing/corrupt/invalid → null. */
@@ -244,6 +392,8 @@ export function deleteGuide(repoKey: string, id: string): boolean {
     const filePath = guidePath(repoKey, id);
     if (!existsSync(filePath)) return false;
     unlinkSync(filePath);
+    // Best-effort: the patch is worthless without its envelope.
+    try { const patchPath = guidePatchPath(repoKey, id); if (existsSync(patchPath)) unlinkSync(patchPath); } catch {}
     return true;
   } catch {
     return false;
@@ -297,9 +447,11 @@ export interface GuideStoreSession {
    *  job's launch-time context snapshot; falls back to the live getters only
    *  when no snapshot exists (defensive). Never throws. */
   saveForJob(
-    job: { id: string; engine?: string; model?: string },
+    job: { id: string; engine?: string; model?: string; generatedAt?: number },
     data: CodeGuideOutput & { reviewed?: boolean[] },
     launchContext?: GuideLaunchContext,
+    /** The review the guide describes, captured at launch (decision record D6). Stored beside the envelope; enables export. */
+    launchReview?: GuideLaunchReview,
   ): Promise<void>;
   /** True when this live job id has already been autosaved this session. */
   isJobSaved(jobId: string): boolean;
@@ -315,6 +467,10 @@ export interface GuideStoreSession {
   listSaved(): Promise<SavedGuideListEntry[]>;
   /** DELETE /api/guides/:id. */
   deleteSaved(id: string): Promise<boolean>;
+  /** Portable snapshot for a saved guide, or null when its diff was not retained. */
+  getSavedGuideSnapshot(id: string): Promise<GuideSnapshot | null>;
+  /** Portable snapshot for a live job that was autosaved this session, else null. */
+  getJobGuideSnapshot(jobId: string): Promise<GuideSnapshot | null>;
 }
 
 export function createGuideStoreSession(options: GuideStoreSessionOptions): GuideStoreSession {
@@ -377,7 +533,7 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
       };
     },
 
-    async saveForJob(job, data, launchContext) {
+    async saveForJob(job, data, launchContext, launchReview) {
       try {
         if (!writesEnabled()) return;
         const { reviewed, ...guide } = data;
@@ -395,6 +551,9 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
           ?? (pr?.url ? deriveGuideRepoKeyFromPRUrl(pr.url) : null)
           ?? (await resolveRepoKey());
         const id = existingId?.id ?? makeGuideId(guide.title);
+        // Patch first, then the envelope that references it — never the reverse.
+        const patchFile = `${id}.patch`;
+        const patchSaved = launchReview ? saveGuidePatch(repoKey, id, launchReview.rawPatch) : false;
         const envelope: SavedGuideEnvelope = {
           version: 1,
           savedAt: Date.now(),
@@ -404,6 +563,19 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
           ...(job.model ? { model: job.model } : {}),
           ...(pr?.headSha ? { headSha: pr.headSha } : headSha ? { headSha } : {}),
           ...(pr?.url ? { prUrl: pr.url } : {}),
+          ...(job.generatedAt ? { generatedAt: job.generatedAt } : {}),
+          ...(launchReview?.customInstructions ? { customInstructions: launchReview.customInstructions } : {}),
+          ...(patchSaved && launchReview
+            ? {
+                review: {
+                  gitRef: launchReview.gitRef,
+                  ...(launchReview.diffType !== undefined ? { diffType: launchReview.diffType } : {}),
+                  ...(launchReview.base !== undefined ? { base: launchReview.base } : {}),
+                  source: launchReview.source,
+                  patchFile,
+                },
+              }
+            : {}),
           guide: guide as CodeGuideOutput,
           reviewed: coerceReviewed(reviewed, guide.sections.length),
         };
@@ -462,6 +634,19 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
 
     async deleteSaved(id) {
       return deleteGuide(await resolveRepoKey(), id);
+    },
+
+    async getSavedGuideSnapshot(id) {
+      const repoKey = await resolveRepoKey();
+      const envelope = loadGuide(repoKey, id);
+      return envelope ? buildSavedGuideSnapshot(repoKey, envelope) : null;
+    },
+
+    async getJobGuideSnapshot(jobId) {
+      const saved = savedIdByJob.get(jobId);
+      if (!saved) return null;
+      const envelope = loadGuide(saved.repoKey, saved.id);
+      return envelope ? buildSavedGuideSnapshot(saved.repoKey, envelope) : null;
     },
   };
 }

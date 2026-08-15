@@ -382,3 +382,39 @@ describe("createGuideSession marker completion", () => {
     expect(session.getGuide(jobId)?.sections[0].title).toBe("Recovered");
   });
 });
+
+describe("createGuideSession launch review memo (portable export)", () => {
+  const review = (n: number) => ({
+    rawPatch: `diff --git a/f${n}.ts b/f${n}.ts\n`,
+    gitRef: "HEAD",
+    source: { kind: "local" as const },
+  });
+
+  it("records the launch review on the failure path too, so a repair or export sees the same diff", async () => {
+    const session = createGuideSession();
+    await session.onJobComplete({
+      job: { id: "failed-1", engine: "pi", prompt: composeGuideMarkerPrompt("x", PI_FIXTURE_NONCE) },
+      meta: { stdout: "not json" },
+      changedFiles: FILES,
+      launchReview: review(1),
+    });
+    expect(session.getGuide("failed-1")).toBeNull();
+    expect(session.getLaunchReview("failed-1")).toEqual(review(1));
+    expect(session.getLaunchReview("never")).toBeNull();
+  });
+
+  it("keeps only the most recent launch reviews (each carries a full patch)", async () => {
+    const session = createGuideSession();
+    for (let i = 0; i < 25; i++) {
+      await session.onJobComplete({
+        job: { id: `job-${i}`, engine: "pi", prompt: composeGuideMarkerPrompt("x", PI_FIXTURE_NONCE) },
+        meta: { stdout: "not json" },
+        changedFiles: FILES,
+        launchReview: review(i),
+      });
+    }
+    expect(session.launchReviews.size).toBe(20);
+    expect(session.getLaunchReview("job-0")).toBeNull();
+    expect(session.getLaunchReview("job-24")).toEqual(review(24));
+  });
+});
