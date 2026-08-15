@@ -78,7 +78,7 @@ describe("plannotator guide", () => {
     expect(res.stdout).toBe(`${out}\n`);
     expect(existsSync(out)).toBe(true);
     const html = readFileSync(out, "utf-8");
-    expect(html).toMatch(/src="https:\/\/guide\.show\/v1\/viewer\.[A-Za-z0-9_-]+\.js" integrity="sha384-/);
+    expect(html).toMatch(/src="https:\/\/guides\.show\/v1\/viewer\.[A-Za-z0-9_-]+\.js" integrity="sha384-/);
     const snap = embeddedSnapshot(html);
     expect(snap.review.rawPatch).toBe(PATCH);
     expect(snap.generator?.engine).toBe("claude");

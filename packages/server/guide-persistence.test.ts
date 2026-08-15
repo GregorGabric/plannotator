@@ -220,7 +220,7 @@ for (const serverCase of serverCases) {
         expect(res.headers.get("content-disposition")).toContain('filename="guided-review-persisted-guide.html"');
         const html = await res.text();
         // Pins the viewer this build ships (script + integrity) — never inlines it.
-        expect(html).toMatch(/<script type="module" src="https:\/\/guide\.show\/v1\/viewer\.[A-Za-z0-9_-]+\.js" integrity="sha384-/);
+        expect(html).toMatch(/<script type="module" src="https:\/\/guides\.show\/v1\/viewer\.[A-Za-z0-9_-]+\.js" integrity="sha384-/);
         expect(html.length).toBeLessThan(20_000);
         // The embedded snapshot is exactly the saved guide + the retained diff + provenance.
         const embedded = new RegExp(`<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">([\\s\\S]*?)</script>`).exec(html)![1];
