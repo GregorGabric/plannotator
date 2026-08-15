@@ -91,10 +91,8 @@ export const FIXTURE_V1_WORKSPACE: GuideSnapshotV1 = {
     reviewed: [false, false],
   },
   review: {
-    rawPatch: FIXTURE_PATCH_TS_JSON.replaceAll("a/src/auth.ts", "a/api/src/auth.ts")
-      .replaceAll("b/src/auth.ts", "b/api/src/auth.ts")
-      .replaceAll("a/package.json", "a/web/package.json")
-      .replaceAll("b/package.json", "b/web/package.json"),
+    // Folder-prefixed paths, as multi-repo workspace reviews emit them.
+    rawPatch: FIXTURE_PATCH_TS_JSON.replaceAll("/src/auth.ts", "/api/src/auth.ts").replaceAll("/package.json", "/web/package.json"),
     gitRef: "api | web",
     diffType: "workspace-current",
   },

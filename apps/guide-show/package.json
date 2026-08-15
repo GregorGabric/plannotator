@@ -7,7 +7,15 @@
   "scripts": {
     "dev": "vite --config vite.viewer.config.ts",
     "build:viewer": "vite build --config vite.viewer.config.ts",
-    "check:budgets": "bun run build/check-budgets.ts"
+    "check:budgets": "bun run build/check-budgets.ts",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy",
+    "deploy:viewer": "bun run build/deploy-viewer.ts",
+    "export:samples": "bun run build/export-sample.ts",
+    "serve:local": "bun run build/serve-local.ts",
+    "test": "bun test worker",
+    "sync:manifest": "bun run build/sync-manifest.ts",
+    "check:manifest": "bun run build/sync-manifest.ts --check"
   },
   "dependencies": {
     "@pierre/diffs": "1.3.2",
@@ -24,6 +32,8 @@
     "@types/react-dom": "^19.2.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "@cloudflare/workers-types": "^4.20241218.0",
+    "wrangler": "^4.30.0"
   }
 }

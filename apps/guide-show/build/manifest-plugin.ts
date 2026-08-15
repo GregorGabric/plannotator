@@ -18,7 +18,6 @@ export interface ViewerManifest {
   worker?: string;
   langs: Record<string, string>;
   themes: Record<string, string>;
-  builtAt: string;
 }
 
 const sri = (source: string | Uint8Array) => `sha384-${createHash('sha384').update(source).digest('base64')}`;
@@ -53,7 +52,8 @@ export function viewerManifestPlugin(opts: { version: number }): Plugin {
         }
       }
       if (!js || !css) throw new Error(`viewer manifest: missing entry (js=${js}, css=${css})`);
-      const manifest: ViewerManifest = { version: opts.version, js, css, jsIntegrity, cssIntegrity, worker, langs, themes, builtAt: new Date().toISOString() };
+      // Deterministic on purpose (no timestamps): the checked-in copy must equal a fresh build's output.
+      const manifest: ViewerManifest = { version: opts.version, js, css, jsIntegrity, cssIntegrity, worker, langs, themes };
       writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     },
   };

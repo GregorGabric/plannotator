@@ -2,7 +2,11 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "isolatedModules": true,
@@ -10,8 +14,21 @@
     "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": ["vite/client"]
+    "types": [
+      "vite/client",
+      "@cloudflare/workers-types"
+    ]
   },
-  "include": ["viewer/**/*.ts", "viewer/**/*.tsx", "build/**/*.ts", "vite.viewer.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "viewer/**/*.ts",
+    "viewer/**/*.tsx",
+    "build/**/*.ts",
+    "worker/**/*.ts",
+    "vite.viewer.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/*.test.ts"
+  ]
 }
