@@ -39,7 +39,7 @@ A Cloudflare Worker with static assets serves immutable viewer files under `guid
 Every file under `/v1/` is content-hashed and never overwritten or deleted, so an exported HTML keeps working indefinitely; the HTML pins the exact viewer build (hash + `integrity`). Syntax grammars are shipped as one small file per language and the exporter lists the languages the diff actually contains, so the viewer fetches only those. Fonts are the real ones (Inter + Geist Mono latin subsets, ~78 KB, cached) with system fallback. Base Plannotator theme with light/dark now, extensible to other palettes. Highlighting runs main-thread when the file is opened from disk (browsers block workers on `file://`) and in a worker when served from an origin — same bundle, one runtime switch.
 
 ### D9 — The export is a pure function with three callers
-`(snapshot) → HTML` lives once, in the format package. Callers: (1) Plannotator UI Share menu → "Download portable guide"; (2) `plannotator guide export` CLI subcommand; (3) later, an agent skill that produces the guide JSON itself and wraps it via the CLI so people without the Plannotator app get a guide. Only (1) and (2) are built now; (3) must not require redesign.
+`(snapshot) → HTML` lives once, in the format package. Callers: (1) Plannotator UI Share menu → "Download portable guide"; (2) `plannotator guide export` CLI subcommand; (3) later, an agent skill that produces the guide JSON itself and wraps it via the CLI so people without the Plannotator app get a guide. (1) and (2) shipped first; (3) followed as the `plannotator-guide` extra skill over `plannotator guide export --guide guide.json --patch guide.patch` — the CLI validates and wraps, the agent only writes the guide. No redesign was needed.
 
 ### D10 — Viewer releases ride Plannotator releases
 New viewer builds are uploaded to guides.show by a GitHub Actions workflow on tagged Plannotator releases, gated by the format compatibility test. Because assets are pinned (D8), a bad deploy cannot break existing exports.
@@ -48,7 +48,7 @@ New viewer builds are uploaded to guides.show by a GitHub Actions workflow on ta
 No upload/`/g/<id>` route is built. The Share menu shows only "Download portable guide" — no disabled placeholders. The menu is expected to grow "Create share link" once guides.show can host.
 
 ### D12 — Not now (explicit)
-Annotations in exports; PR comment threads; share links; palettes beyond the base theme; the standalone agent generator; any embed component API for the commercial platform (the platform, if it needs guides, serves the same HTML page).
+Annotations in exports; PR comment threads; share links; palettes beyond the base theme; any embed component API for the commercial platform (the platform, if it needs guides, serves the same HTML page).
 
 ## Consequences
 

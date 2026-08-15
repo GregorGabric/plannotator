@@ -53,7 +53,8 @@ plannotator/
 │       └── extra/                 # EXTRA skills — NOT default-installed (except Kiro); add via `npx skills add backnotprop/plannotator/apps/skills/extra --global`
 │           ├── plannotator-compound/        # Research analysis agent (map-reduce over denied plans)
 │           ├── plannotator-setup-goal/      # Goal package scaffolder for /goal workflows
-│           └── plannotator-visual-explainer/ # Visual HTML generator (plans, diagrams, PR explainers) with Plannotator theming
+│           ├── plannotator-visual-explainer/ # Visual HTML generator (plans, diagrams, PR explainers) with Plannotator theming
+│           └── plannotator-guide/           # Agent-authored Guided Review → portable HTML via `plannotator guide export --guide … --patch …`
 ├── packages/
 │   ├── server/                   # Shared server implementation
 │   │   ├── index.ts              # startPlannotatorServer(), handleServerReady()
@@ -503,6 +504,8 @@ Decision record: `adr/decisions/007-portable-guided-reviews-20260815.md`; spec: 
 A guide exports as ONE small HTML file (size ≈ the diff, never the app) that pins a specific viewer build on `guides.show` (`viewer.<hash>.js/.css` + SRI). Format lives in `@plannotator/core/guide-format` (versioned strict snapshot, `createGuideHtml`, fixtures + a compatibility test that must keep parsing every shipped fixture); the pinned build is the generated `@plannotator/core/guide-viewer-manifest` (regenerate with `bun run --cwd apps/guides-show build:viewer && bun run --cwd apps/guides-show sync:manifest`; CI fails if stale).
 
 Invariants: the diff a guide describes is captured when the guide job LAUNCHES (`buildCommand`'s `launchReview`, carried server-side like `changedFilesSnapshot` — never on the SSE-broadcast `AgentJobInfo`) and stored beside the saved guide as `{id}.patch` (patch written before the envelope that references it; deleted together). Exports never read the on-screen diff. `/v1/` on guides.show is add-only (content-hashed, never overwritten or deleted) so exported files keep opening; the viewer is the same guide chain (`@plannotator/guide-viewer`) over `AllFilesCodeView` in `readOnly` mode — no drift by construction. Read-only hosts stub the annotation composer/popovers at build time (`apps/guides-show/build/read-only-stubs-plugin.ts`); do not add app-only surfaces to the guide chain without going through the `GuideHost` contract.
+
+Three producers share the one pure export (`createGuideHtml`): the in-app **Download portable guide** button, `plannotator guide export --id <saved>`, and the agent path `plannotator guide export --guide guide.json --patch guide.patch` (`packages/server/guide/guide-cli.ts`, `buildAuthoredGuideSnapshot`) used by the `plannotator-guide` extra skill. The authored form takes the same `{ title, intent, sections, unplacedFiles? }` shape the in-app generator emits plus optional `review { gitRef, base }`, `source`, `generator`; it is STRICT where the in-app validator is lenient (a file not in the patch, or placed twice, is an error listing the patch's files — exit 1 — rather than a silently dropped chapter), fills `source` from git in cwd (`origin` → owner/repo, branch, head sha) unless the guide supplies one, and round-trips the built snapshot through the strict format parser so a bad `source`/`generator` fails at export time. `--patch -` reads stdin. `apps/skills/extra/plannotator-guide/SKILL.test.ts` keeps the skill's worked example valid against the CLI.
 
 ## Data Types
 

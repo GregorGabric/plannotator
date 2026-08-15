@@ -167,7 +167,8 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 
 ### 6.3 CLI (`apps/hook/server/index.ts`) — D9
 - `plannotator guide export --id <savedGuideId> [--out <file>]` — reads `${DATA_DIR}/guides/**/{id}.json` + `.patch`.
-- `plannotator guide export --snapshot <snapshot.json> [--out <file>]` — the pure form (future skill path: agent writes the snapshot, CLI wraps it).
+- `plannotator guide export --snapshot <snapshot.json> [--out <file>]` — the pure form (a complete snapshot document, wrapped as-is).
+- `plannotator guide export --guide <guide.json> --patch <diff.patch | -> [--out <file>]` — the agent form (D9 caller 3, built after all: the `plannotator-guide` extra skill). The agent writes only the guide (`title/intent/sections[/unplacedFiles]` + optional `review{gitRef,base}`/`source`/`generator`) and hands over the `git diff`; the CLI validates strictly against the patch (unknown or duplicate files are errors that list the patch's files), infers `source` from git in cwd, builds the snapshot, and round-trips it through the strict parser before writing HTML.
 - `plannotator guide list` — id, label, title, savedAt, hasPatch (small, helps `--id`).
 - Exit codes: 0 ok, 1 not found / invalid snapshot, 2 usage.
 
@@ -197,7 +198,7 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 | D6 launch-time diff | integration test: launch guide → switch diff → export → snapshot patch equals launch patch; repair reuses it |
 | D7 standalone Cloudflare | `apps/guides-show` imports nothing from `apps/paste-service`; separate wrangler + workflow |
 | D8 immutable/pinned, per-need assets | deploy script refuses overwrite; HTML carries hash+integrity; only detected languages preloaded; fonts served as files |
-| D9 pure export, three callers | `toPortableHtml` has no I/O; UI + CLI both call it; `--snapshot` form works with a hand-written snapshot |
+| D9 pure export, three callers | `toPortableHtml` has no I/O; UI + CLI both call it; `--snapshot` form works with a hand-written snapshot; `--guide/--patch` form (skill) validates an authored guide against its patch — `guide-cli.test.ts`, `apps/skills/extra/plannotator-guide/SKILL.test.ts` |
 | D10 release-gated deploy | workflow triggers only on tags; `compat.test.ts` in the job |
 | D11/D12 scope | Share menu single item; no `/g` handler; no embed docs |
 

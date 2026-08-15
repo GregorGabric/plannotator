@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,5 +125,82 @@ describe("plannotator guide", () => {
     expect(bad.code).toBe(1);
     expect(bad.stderr).toContain("Invalid guide snapshot ($)");
     expect(runGuideCli(["export", "--snapshot", "missing.json"], {}, workDir).code).toBe(1);
+  });
+
+  const TWO_FILE_PATCH =
+    "diff --git a/src/auth.ts b/src/auth.ts\n--- a/src/auth.ts\n+++ b/src/auth.ts\n@@ -1 +1 @@\n-old\n+new\n" +
+    "diff --git a/package.json b/package.json\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{}\n+{ }\n";
+  const AUTHORED = {
+    title: "Token refresh",
+    intent: "Refresh tokens before they expire.",
+    sections: [{ title: "The guard", overview: "Where the refresh happens.", diffs: [{ file: "src/auth.ts", summary: "Adds the refresh guard." }] }],
+    review: { gitRef: "origin/main...HEAD", base: "origin/main" },
+    generator: { engine: "claude-code", model: "claude-opus-5" },
+  };
+
+  test("export --guide/--patch validates the guide against the patch, infers provenance from git, and wraps it", () => {
+    execFileSync("git", ["init", "-q", "-b", "feature/refresh"], { cwd: workDir });
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: workDir });
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:acme/widgets.git"], { cwd: workDir });
+    writeFileSync(join(workDir, "guide.json"), JSON.stringify(AUTHORED));
+    writeFileSync(join(workDir, "guide.patch"), TWO_FILE_PATCH);
+    const res = runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch"], {}, workDir, { now: "2026-08-15T00:00:00.000Z" });
+    expect(res.code).toBe(0);
+    const out = join(workDir, "guided-review-token-refresh.html");
+    expect(res.stdout).toBe(`${out}\n`);
+    const snap = embeddedSnapshot(readFileSync(out, "utf-8"));
+    expect(snap.review).toEqual({ rawPatch: TWO_FILE_PATCH, gitRef: "origin/main...HEAD", base: "origin/main" });
+    expect(snap.source.kind).toBe("local");
+    expect(snap.source.repo).toBe("acme/widgets");
+    expect(snap.source.branch).toBe("feature/refresh");
+    expect(snap.source.headSha).toMatch(/^[0-9a-f]{40}$/);
+    expect(snap.generator).toEqual({ engine: "claude-code", model: "claude-opus-5", generatedAt: "2026-08-15T00:00:00.000Z" });
+    // The file the guide did not place lands in "Everything else".
+    expect(snap.guide.unplacedFiles).toEqual(["package.json"]);
+    expect(snap.guide.sections[0].diffs[0]).toEqual({ file: "src/auth.ts", summary: "Adds the refresh guard." });
+  });
+
+  test("export --guide reads the patch from stdin with --patch -, and a caller-supplied source wins over inference", () => {
+    writeFileSync(join(workDir, "guide.json"), JSON.stringify({ ...AUTHORED, source: { kind: "pr", repo: "acme/widgets", pr: { url: "https://github.com/acme/widgets/pull/7", number: 7, title: "Refresh", platform: "github" } } }));
+    const res = runGuideCli(["export", "--guide", "guide.json", "--patch", "-", "--out", "-"], {}, workDir, { stdin: () => TWO_FILE_PATCH });
+    expect(res.code).toBe(0);
+    const snap = embeddedSnapshot(res.stdout!);
+    expect(snap.source.kind).toBe("pr");
+    expect(snap.source.pr?.number).toBe(7);
+  });
+
+  test("export --guide fails with actionable errors: unknown files (listing the patch's files), duplicates, bad shape, empty patch, usage", () => {
+    writeFileSync(join(workDir, "guide.patch"), TWO_FILE_PATCH);
+    const write = (g: unknown) => writeFileSync(join(workDir, "guide.json"), JSON.stringify(g));
+
+    write({ ...AUTHORED, sections: [{ title: "S", overview: "o", diffs: [{ file: "src/nope.ts", summary: "?" }] }] });
+    const unknown = runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch"], {}, workDir);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("not in the patch: src/nope.ts");
+    expect(unknown.stderr).toContain("src/auth.ts");
+    expect(unknown.stderr).toContain("package.json");
+
+    write({ ...AUTHORED, sections: [...AUTHORED.sections, { title: "Again", overview: "dup", diffs: [{ file: "src/auth.ts", summary: "again" }] }] });
+    const dup = runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch"], {}, workDir);
+    expect(dup.code).toBe(1);
+    expect(dup.stderr).toContain("placed twice");
+
+    write({ intent: "no title", sections: [] });
+    const shape = runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch"], {}, workDir);
+    expect(shape.code).toBe(1);
+    expect(shape.stderr).toContain("`title`");
+    expect(shape.stderr).toContain("`sections`");
+
+    write({ ...AUTHORED, source: { kind: "spaceship" } });
+    const badSource = runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch"], {}, workDir);
+    expect(badSource.code).toBe(1);
+    expect(badSource.stderr).toContain("$.source.kind");
+
+    write(AUTHORED);
+    writeFileSync(join(workDir, "empty.patch"), "");
+    expect(runGuideCli(["export", "--guide", "guide.json", "--patch", "empty.patch"], {}, workDir).stderr).toContain("no file diffs");
+    expect(runGuideCli(["export", "--guide", "guide.json"], {}, workDir).code).toBe(2);
+    expect(runGuideCli(["export", "--guide", "guide.json", "--patch", "guide.patch", "--id", "x"], {}, workDir).code).toBe(2);
+    expect(runGuideCli(["export", "--guide", "missing.json", "--patch", "guide.patch"], {}, workDir).code).toBe(1);
   });
 });

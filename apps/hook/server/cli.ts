@@ -149,7 +149,7 @@ export function formatTopLevelHelp(): string {
     "  plannotator last",
     "  plannotator archive",
     "  plannotator guide list",
-    "  plannotator guide export --id <savedGuideId> | --snapshot <snapshot.json> [--out <file.html>]",
+    "  plannotator guide export --id <savedGuideId> | --guide <guide.json> --patch <diff.patch> | --snapshot <snapshot.json> [--out <file.html>]",
     "  plannotator sessions",
     "  plannotator uninstall [--purge] [--yes] [--dry-run]",
     "  plannotator improve-context",
