@@ -63,7 +63,7 @@
  *
  * 14. Guide tools (`plannotator guide list|export`):
  *    - List saved Guided Reviews; export one (or a snapshot JSON) as a portable
- *      HTML file whose viewer loads from guide.show
+ *      HTML file whose viewer loads from guides.show
  *
  * Global flags:
  *   --help             - Show top-level usage information

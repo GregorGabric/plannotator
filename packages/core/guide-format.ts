@@ -590,7 +590,7 @@ export function detectGuideLanguages(rawPatch: string): string[] {
 
 /** Where the viewer lives. Produced by the CDN build (manifest) and pinned into every export. */
 export interface GuideViewerAssets {
-  /** Absolute base, e.g. "https://guide.show/v1/". Must be https (http allowed for localhost only). */
+  /** Absolute base, e.g. "https://guides.show/v1/". Must be https (http allowed for localhost only). */
   readonly baseUrl: string;
   /** Path relative to `baseUrl`, e.g. "viewer.8f3a2c.js". */
   readonly js: string;
@@ -624,7 +624,7 @@ export function resolveGuideViewerAssets(
 }
 
 /** Where published viewer builds live (decision record D7/D8). */
-export const DEFAULT_GUIDE_VIEWER_BASE_URL = "https://guide.show/v1/";
+export const DEFAULT_GUIDE_VIEWER_BASE_URL = "https://guides.show/v1/";
 
 function escapeHtmlText(input: string): string {
   return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -691,7 +691,7 @@ function describeSource(snapshot: GuideSnapshotV1): string {
 
 /**
  * The no-JavaScript body: title, intent, every chapter's overview and file
- * list. Readable when guide.show is unreachable; replaced by the viewer once
+ * list. Readable when guides.show is unreachable; replaced by the viewer once
  * it mounts. Deliberately simple (decision record, D6 note).
  */
 export function renderGuideFallbackHtml(snapshot: GuideSnapshotV1): string {

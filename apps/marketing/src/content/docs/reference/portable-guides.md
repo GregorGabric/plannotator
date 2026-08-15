@@ -1,12 +1,12 @@
 ---
 title: "Portable guides"
-description: "The portable Guided Review file: what is in it, how it renders from guide.show, and the snapshot format agents and tools can produce."
+description: "The portable Guided Review file: what is in it, how it renders from guides.show, and the snapshot format agents and tools can produce."
 sidebar:
   order: 34
 section: "Reference"
 ---
 
-A portable guide is **one HTML file** that renders a Guided Review — chapters, per-file summaries, and the exact diff — anywhere: from disk, from an email attachment, from any web host. It contains the guide and the diff; the rendering code is loaded from `guide.show` and pinned to a specific build, so a file exported today keeps opening as-is.
+A portable guide is **one HTML file** that renders a Guided Review — chapters, per-file summaries, and the exact diff — anywhere: from disk, from an email attachment, from any web host. It contains the guide and the diff; the rendering code is loaded from `guides.show` and pinned to a specific build, so a file exported today keeps opening as-is.
 
 ## What is in the file
 
@@ -14,7 +14,7 @@ A portable guide is **one HTML file** that renders a Guided Review — chapters,
 - The **review**: the exact unified diff the guide was generated against (captured when the guide was generated, not when it was exported), its label, diff type, and base.
 - The **source**: what the change is — local changes, a pull/merge request (with a link), a single commit, or a multi-repository workspace — plus repo, branch, and head SHA when known.
 - **Provenance**: which agent and model generated the guide, when, and any custom instructions used.
-- A **plain-text fallback**: the guide's text and file lists render even when `guide.show` is unreachable.
+- A **plain-text fallback**: the guide's text and file lists render even when `guides.show` is unreachable.
 
 The file's size is roughly the size of the diff. There is no cap: a huge diff makes a large file, and that is your call.
 
@@ -54,6 +54,6 @@ Strict JSON — unknown fields are rejected so a file is never silently misread.
 
 Every `diffs[].file` and `unplacedFiles[]` entry should name a file present in `rawPatch`; files that are not resolve to an "outdated" chip in the viewer rather than breaking it.
 
-## guide.show
+## guides.show
 
-`guide.show/v1/…` hosts viewer builds. Files there are content-hashed and never changed or removed; each exported HTML names the exact `viewer.<hash>.js` and `.css` it was made with (with integrity hashes), and preloads only the syntax grammars its diff needs. Nothing about your guide is sent to `guide.show` — the page only fetches the viewer, fonts, and grammars.
+`guides.show/v1/…` hosts viewer builds. Files there are content-hashed and never changed or removed; each exported HTML names the exact `viewer.<hash>.js` and `.css` it was made with (with integrity hashes), and preloads only the syntax grammars its diff needs. Nothing about your guide is sent to `guides.show` — the page only fetches the viewer, fonts, and grammars.

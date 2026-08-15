@@ -6,7 +6,7 @@ Salvage source: branch `guided-review-html-export` (`2cf18cc3`), worktree `/User
 
 ## 1. Goal
 
-Share one Guided Review as a single small HTML file that renders identically to the in-app guide, with the renderer served from `guide.show`. Build the export as a pure function callable from the Plannotator UI and the CLI. Lay the foundation (format, package, domain) for shared feedback and hosted guides without building them.
+Share one Guided Review as a single small HTML file that renders identically to the in-app guide, with the renderer served from `guides.show`. Build the export as a pure function callable from the Plannotator UI and the CLI. Lay the foundation (format, package, domain) for shared feedback and hosted guides without building them.
 
 Non-goals (D11, D12): share links / upload, annotations or PR threads in exports, extra palettes, the standalone agent generator, an embed API for the commercial platform.
 
@@ -25,7 +25,7 @@ Non-goals (D11, D12): share links / upload, annotations or PR threads in exports
                      │ toPortableHtml(snapshot) · fixtures │
                      └────────────────┬────────────────────┘
                                       ▼  one HTML file (size ≈ diff)
-        ┌────────────────────── guide.show (Cloudflare Worker) ──────────────────────┐
+        ┌────────────────────── guides.show (Cloudflare Worker) ──────────────────────┐
         │ /v1/viewer.<hash>.js  /v1/viewer.<hash>.css  /v1/fonts/*  /v1/langs/*.js   │
         │ immutable, content-hashed · /g/<id> reserved · own deploy, not paste-service│
         └────────────────────────────────────┬────────────────────────────────────────┘
@@ -44,11 +44,11 @@ Repo layout (new / changed):
 |---|---|
 | `packages/core/guide-format/` | **new** — snapshot types, `parseGuideSnapshot`, `toPortableHtml`, `estimateBytes`, filename slug, fixtures. Browser-safe, zero deps (D5, D9). |
 | `packages/guide-viewer/` | **new** — the renderer package `@plannotator/guide-viewer` (D2). Ships TS source + prebuilt `styles.css` like `@plannotator/ui`. |
-| `apps/guide-show/` | **new** — Cloudflare Worker with static assets + `wrangler.toml` + the viewer CDN build config (D7, D8). No relationship to `apps/paste-service`. |
+| `apps/guides-show/` | **new** — Cloudflare Worker with static assets + `wrangler.toml` + the viewer CDN build config (D7, D8). No relationship to `apps/paste-service`. |
 | `packages/review-editor/` | imports the guide chain from `@plannotator/guide-viewer`; keeps `GuideScreen`, `GuideEmptyState`, `GuideGenerating` (app shell). |
 | `packages/server/`, `apps/pi-extension/server/` | patch capture, `guide-store` v2, export endpoints (D6). |
 | `apps/hook/server/index.ts` | `guide export` subcommand (D9). |
-| `.github/workflows/` | `guide-show-deploy.yml` on release tags (D10). |
+| `.github/workflows/` | `guides-show-deploy.yml` on release tags (D10). |
 
 ## 3. Snapshot format (`@plannotator/core/guide-format`) — D5
 
@@ -89,21 +89,21 @@ Rules:
 <!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="plannotator-guided-review" content="v1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://guide.show 'wasm-unsafe-eval' blob:; style-src https://guide.show 'unsafe-inline'; font-src https://guide.show; img-src data: blob:; connect-src https://guide.show; worker-src blob:; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src https://guides.show 'wasm-unsafe-eval' blob:; style-src https://guides.show 'unsafe-inline'; font-src https://guides.show; img-src data: blob:; connect-src https://guides.show; worker-src blob:; base-uri 'none'; form-action 'none'">
 <title>{title} · Guided Review</title>
-<link rel="stylesheet" href="https://guide.show/v1/viewer.{cssHash}.css" integrity="sha384-…" crossorigin="anonymous">
-<link rel="modulepreload" href="https://guide.show/v1/langs/typescript.{hash}.js" crossorigin="anonymous"> <!-- one per detected language -->
+<link rel="stylesheet" href="https://guides.show/v1/viewer.{cssHash}.css" integrity="sha384-…" crossorigin="anonymous">
+<link rel="modulepreload" href="https://guides.show/v1/langs/typescript.{hash}.js" crossorigin="anonymous"> <!-- one per detected language -->
 </head><body>
 <div id="root">
   <!-- D1/D6 fallback: title, intent, per-section title + overview + file list + summaries, rendered as simple HTML. Readable with no network. -->
 </div>
 <script id="plannotator-guided-review" type="application/json">{escaped snapshot}</script>
-<script type="module" src="https://guide.show/v1/viewer.{jsHash}.js" integrity="sha384-…" crossorigin="anonymous"></script>
+<script type="module" src="https://guides.show/v1/viewer.{jsHash}.js" integrity="sha384-…" crossorigin="anonymous"></script>
 </body></html>
 ```
 
 - Escaping: `&`, `<`, `>`, U+2028/9 → `\uXXXX` inside the JSON script (salvaged, tested with a literal `</script>` in a patch line).
-- `connect-src https://guide.show` exists only so grammar chunks can be dynamically imported; nothing else may be fetched (D4).
+- `connect-src https://guides.show` exists only so grammar chunks can be dynamically imported; nothing else may be fetched (D4).
 - Filename: `guided-review-{slug}.html`.
 
 ## 4. Viewer package (`@plannotator/guide-viewer`) — D2, D3, D4, D8
@@ -135,7 +135,7 @@ export { GuideView, GuideSectionCard, GuideFileCard, GuideViewportProvider } // 
 
 Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep passing against the package; the app renders the guide byte-identically (manual browser check + a Playwright/DOM snapshot of the guide screen before/after the move on the demo guide).
 
-### 4.3 CDN build (`apps/guide-show/viewer.vite.config.ts`) — D8
+### 4.3 CDN build (`apps/guides-show/viewer.vite.config.ts`) — D8
 - Entry `viewer.tsx`: read `#plannotator-guided-review`, `parseGuideSnapshot`, `mountGuideViewer(#root)`; on parse failure render an error card over the fallback body.
 - **Multi-file build, not single-file**: `inlineDynamicImports: false`. Shiki's `bundledLanguages` entries are already lazy `() => import(...)` loaders, so Rollup emits **one chunk per grammar** automatically → `/v1/langs/<lang>.<hash>.js`. The `shiki/wasm` alias from `apps/review/vite.config.ts` is reused. **Spike (Phase 2 gate):** confirm `@pierre/diffs`' static `bundledLanguages` import keeps the map tiny and grammars in chunks; if not, alias `shiki` to a narrowed shim exporting the same map shape.
 - Fonts: `@fontsource-variable/inter` + `geist-mono` latin subsets emitted as files under `/v1/fonts/`, referenced from the CSS; `font-display: swap` with system fallback (D8).
@@ -143,12 +143,12 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 - Output manifest `manifest.json` `{ version:1, js, css, integrity:{js,css}, langs:{ts:'langs/typescript.<h>.js',…} }` consumed by `toPortableHtml`'s callers (server/CLI read it at build time; the Plannotator binary embeds the manifest of the viewer it was released with).
 - **Size budgets (CI fails above):** `viewer.js` ≤ 1.2 MB raw / 400 KB gzip; `viewer.css` ≤ 120 KB / 30 KB gzip; HTML shell overhead (everything but the snapshot) ≤ 25 KB. Measured and tightened after Phase 2.
 
-## 5. guide.show — D7, D8, D10
+## 5. guides.show — D7, D8, D10
 
-- `apps/guide-show/`: Cloudflare Worker (static assets binding) + `wrangler.toml` (own account/project; **no shared code or config with `apps/paste-service`**).
+- `apps/guides-show/`: Cloudflare Worker (static assets binding) + `wrangler.toml` (own account/project; **no shared code or config with `apps/paste-service`**).
 - Routes: `/v1/*` static, `Cache-Control: public, max-age=31536000, immutable`, `Access-Control-Allow-Origin: *` (grammar/font/worker fetches from `file://` and other origins), `Cross-Origin-Resource-Policy: cross-origin`. `/g/*` → 404 JSON `{ reserved: true }` (route reserved, D11). `/` → minimal landing.
 - Immutability: the deploy step **only adds** files; it never overwrites an existing `/v1/<name>` (upload script checks existence and fails on hash collision with different content).
-- Deploy: `.github/workflows/guide-show-deploy.yml` on `v*` tags — build viewer → run `compat.test.ts` → upload assets → publish manifest as a release asset. Local: `bun run --cwd apps/guide-show deploy`.
+- Deploy: `.github/workflows/guides-show-deploy.yml` on `v*` tags — build viewer → run `compat.test.ts` → upload assets → publish manifest as a release asset. Local: `bun run --cwd apps/guides-show deploy`.
 - Platform-readiness (D7): Worker skeleton keeps a router so `/g/<id>` + upload can be added as routes; R2 binding declared but unused; no KV/DO now.
 
 ## 6. Plannotator producer — D6, D9, D11
@@ -181,7 +181,7 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 | 0 | Branch `portable-guides` off main. Salvage `guide-export.ts`+test, `portableGuideSnapshot.ts`+test, `workerPool` split (restore deleted comments), portable Vite/entry as references. Create `packages/core/guide-format` with schema v1, parser, `toPortableHtml`, fixtures, `compat.test.ts`. | Tests green; fixture parses; escaping test with `</script>`; `bun run typecheck`. |
 | 1 | Viewer carve-out R1–R13; `packages/guide-viewer` with CSS build; review-editor imports it. | Existing guide tests green; app parity check (demo guide before/after screenshots identical, no new network calls in app); `AllFilesCodeView` read-only renders demo diff with no `/api/*` requests. |
 | 2 | CDN build + size budgets; grammar-chunk spike; worker/file:// switch; local `file://` and `http://localhost` smoke on a real exported guide. | Budgets met; grammars are chunks; `file://` opens with highlighting; hosted opens with worker; fallback body readable with network blocked. |
-| 3 | `apps/guide-show` Worker, wrangler, immutability check, deploy workflow (dry-run to a staging project first). | `curl` headers correct; second deploy refuses to overwrite; a Phase-2 HTML pointed at the real domain renders. |
+| 3 | `apps/guides-show` Worker, wrangler, immutability check, deploy workflow (dry-run to a staging project first). | `curl` headers correct; second deploy refuses to overwrite; a Phase-2 HTML pointed at the real domain renders. |
 | 4 | Producer: launch capture, guide-store v2, endpoints (Bun+Pi), CLI, Share menu. | `guide-persistence.test.ts` extended for both runtimes (export-info/export, `saved:` id, v1-envelope 404); CLI tests (`--id`, `--snapshot`, exit codes); Pi vendor parity check; manual: generate → switch diff → export → HTML shows the *launch-time* diff. |
 | 5 | Docs (`docs/commands/code-review.md`, CLAUDE.md env/endpoints tables), release notes, first tagged deploy. | Release pipeline publishes viewer; a guide exported by the release binary opens from disk on a machine without Plannotator. |
 
@@ -192,10 +192,10 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 | D1 size ≈ diff, no caps | HTML overhead budget in CI; no size gate in export path; test exporting a 20 MB synthetic diff succeeds |
 | D2 one renderer | `packages/review-editor` has **no** copy of the guide chain (lint: import from `@plannotator/guide-viewer` only); parity screenshots |
 | D3 read-only, slot preserved | `codeViewProps` type still carries annotation fields; read-only render shows no toolbar/popover; `annotations` block rejected by v1 parser (test) but documented as reserved |
-| D4 guide screen only, no server calls | Playwright on `file://` export: zero non-guide.show requests; CSP blocks any accidental fetch |
+| D4 guide screen only, no server calls | Playwright on `file://` export: zero non-guides.show requests; CSP blocks any accidental fetch |
 | D5 strict, self-describing | unknown-field rejection tests; all four `source.kind`s render an honest header (fixture per kind) |
 | D6 launch-time diff | integration test: launch guide → switch diff → export → snapshot patch equals launch patch; repair reuses it |
-| D7 standalone Cloudflare | `apps/guide-show` imports nothing from `apps/paste-service`; separate wrangler + workflow |
+| D7 standalone Cloudflare | `apps/guides-show` imports nothing from `apps/paste-service`; separate wrangler + workflow |
 | D8 immutable/pinned, per-need assets | deploy script refuses overwrite; HTML carries hash+integrity; only detected languages preloaded; fonts served as files |
 | D9 pure export, three callers | `toPortableHtml` has no I/O; UI + CLI both call it; `--snapshot` form works with a hand-written snapshot |
 | D10 release-gated deploy | workflow triggers only on tags; `compat.test.ts` in the job |
@@ -228,7 +228,7 @@ Status: implemented on branch `portable-guides` (2026-08-15); awaiting the one-t
 
 - [x] Phase 0 — branch, salvage, `core/guide-format` + fixtures + compat test (33 tests)
 - [x] Phase 1 — guide chain carved into `packages/guide-viewer` behind `GuideHost`; `ReviewGuideHost` adapter; `AllFilesCodeView` `readOnly` + `enableKeyboardShortcuts`; parity gate 0/1,440,000 px vs main on the demo guide. Deviation from §4.2: the package injects the diff renderer (host contract) instead of moving `AllFilesCodeView` and its tail into the package; the CDN build imports it from review-editor and stubs annotation-only modules at resolve time (R10 package CSS build deferred — the CDN build reuses the review stylesheet).
-- [x] Phase 2 — `apps/guide-show` multi-file build: 235 grammar chunks split automatically (spike confirmed, no shim), entry 378 KB gz (budget 400), worker fetched → blob (works from `file://` and cross-origin in Chrome), fonts as files, KaTeX stubbed, `manifest.json` (SRI from bytes on disk), budgets script; smoke: file://, hosted, offline fallback.
-- [x] Phase 3 — Worker (R2 for `/v1/`, assets for landing, `/g` + `/api` reserved), add-only R2 publish script, deterministic manifest + checked-in `packages/core/guide-viewer-manifest.ts` with sync/check, `guide-show-deploy.yml` on `v*` tags. Verified locally with `wrangler dev` + local R2. **Not yet run against Cloudflare** — needs bucket, domain, secrets (README checklist).
+- [x] Phase 2 — `apps/guides-show` multi-file build: 235 grammar chunks split automatically (spike confirmed, no shim), entry 378 KB gz (budget 400), worker fetched → blob (works from `file://` and cross-origin in Chrome), fonts as files, KaTeX stubbed, `manifest.json` (SRI from bytes on disk), budgets script; smoke: file://, hosted, offline fallback.
+- [x] Phase 3 — Worker (R2 for `/v1/`, assets for landing, `/g` + `/api` reserved), add-only R2 publish script, deterministic manifest + checked-in `packages/core/guide-viewer-manifest.ts` with sync/check, `guides-show-deploy.yml` on `v*` tags. Verified locally with `wrangler dev` + local R2. **Not yet run against Cloudflare** — needs bucket, domain, secrets (README checklist).
 - [x] Phase 4 — `GuideLaunchReview` captured in `buildCommand`, carried server-side through agent-jobs (Bun + Pi), memoized in `GuideSession`, persisted as `{id}.patch` beside the envelope; `/api/guide/:id/export` + `/export-info` on both servers; `plannotator guide list|export`; `GuideExportButton`; e2e test with a fake engine; docs.
-- [ ] Phase 5 — first tagged viewer deploy to guide.show, then export from a release binary and open on a machine without Plannotator.
+- [ ] Phase 5 — first tagged viewer deploy to guides.show, then export from a release binary and open on a machine without Plannotator.

@@ -100,7 +100,7 @@ describe("plannotator guide", () => {
     expect(readFileSync(join(workDir, "out.html"), "utf-8")).toContain('src="https://cdn.example.test/guides/viewer.');
     // A non-https override is ignored, not embedded.
     const bad = runGuideCli(["export", "--id", "1000-exportable", "--out", "-", "--viewer-url", "javascript:alert(1)"], {}, workDir);
-    expect(bad.stdout).toContain('src="https://guide.show/v1/viewer.');
+    expect(bad.stdout).toContain('src="https://guides.show/v1/viewer.');
   });
 
   test("export --id reports not-found and not-exportable distinctly (exit 1)", () => {

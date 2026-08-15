@@ -16,7 +16,7 @@ import {
 import { FIXTURE_PATCH_TS_JSON, FIXTURE_V1_LOCAL, FIXTURE_V1_PR, GUIDE_SNAPSHOT_FIXTURES } from "./guide-format-fixtures";
 
 const VIEWER = {
-  baseUrl: "https://guide.show/v1/",
+  baseUrl: "https://guides.show/v1/",
   js: "viewer.8f3a2c.js",
   css: "viewer.8f3a2c.css",
   jsIntegrity: "sha384-AAAA",
@@ -108,8 +108,8 @@ describe("createGuideHtml", () => {
 
   test("pins the exact viewer build with integrity and preloads only detected languages", () => {
     const html = createGuideHtml(FIXTURE_V1_LOCAL, { viewer: VIEWER });
-    expect(html).toContain('src="https://guide.show/v1/viewer.8f3a2c.js" integrity="sha384-AAAA"');
-    expect(html).toContain('href="https://guide.show/v1/viewer.8f3a2c.css" integrity="sha384-BBBB"');
+    expect(html).toContain('src="https://guides.show/v1/viewer.8f3a2c.js" integrity="sha384-AAAA"');
+    expect(html).toContain('href="https://guides.show/v1/viewer.8f3a2c.css" integrity="sha384-BBBB"');
     expect(html).toContain("langs/typescript.ab12.js");
     expect(html).toContain("langs/json.cd34.js");
     expect(html).not.toContain("langs/python.ef56.js");
@@ -119,8 +119,8 @@ describe("createGuideHtml", () => {
     const html = createGuideHtml(FIXTURE_V1_LOCAL, { viewer: VIEWER });
     const csp = /Content-Security-Policy" content="([^"]+)"/.exec(html)![1];
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("script-src https://guide.show 'wasm-unsafe-eval' blob:");
-    expect(csp).toContain("connect-src https://guide.show");
+    expect(csp).toContain("script-src https://guides.show 'wasm-unsafe-eval' blob:");
+    expect(csp).toContain("connect-src https://guides.show");
     expect(csp).not.toContain("'unsafe-eval'");
     expect(csp).not.toContain("http:");
   });
@@ -169,11 +169,11 @@ describe("createGuideHtml", () => {
 
 describe("normalizeGuideViewerBaseUrl", () => {
   test("strips credentials, query and hash; forces trailing slash", () => {
-    const url = normalizeGuideViewerBaseUrl("https://user:pw@guide.show/v1?x=1#y");
-    expect(url?.href).toBe("https://guide.show/v1/");
+    const url = normalizeGuideViewerBaseUrl("https://user:pw@guides.show/v1?x=1#y");
+    expect(url?.href).toBe("https://guides.show/v1/");
   });
   test("rejects non-https and garbage", () => {
-    expect(normalizeGuideViewerBaseUrl("ftp://guide.show/")).toBeNull();
+    expect(normalizeGuideViewerBaseUrl("ftp://guides.show/")).toBeNull();
     expect(normalizeGuideViewerBaseUrl("not a url")).toBeNull();
   });
 });

@@ -15,7 +15,7 @@ The earlier attempt exported the *entire review app* into the HTML (17–18 MB) 
 Each numbered decision below is traceable to a verification check in the implementation spec (§Verification matrix).
 
 ### D1 — The artifact is one small HTML file whose size is the diff, never the app
-The exported file contains the guide JSON, the exact diff, provenance, and a plain-text fallback body. It references the renderer on `guide.show`; it does not embed it. **No caps on diff size** — a huge diff produces a huge file and that is the user's call. The thing we refuse is a multi-megabyte *baseline* caused by packing the application.
+The exported file contains the guide JSON, the exact diff, provenance, and a plain-text fallback body. It references the renderer on `guides.show`; it does not embed it. **No caps on diff size** — a huge diff produces a huge file and that is the user's call. The thing we refuse is a multi-megabyte *baseline* caused by packing the application.
 
 ### D2 — One renderer, two hosts: the in-app guide and the portable guide are the same code
 The guide rendering chain (`GuideView → GuideSectionCard → GuideFileCard → GuideViewportManager → AllFilesCodeView` on `@pierre/diffs`, plus the two dependency-free markdown renderers) moves into a package, `@plannotator/guide-viewer`, and Plannotator's review app imports it from there. "No visual drift" is therefore structural, not a promise. `AllFilesCodeView` is reused behind a `readOnly` mode rather than replaced by a lean sibling; the annotation/edit machinery code-splits out for read-only hosts. Rejected: a separate lean diff renderer (would drift on the first Pierre upgrade and re-derive the #1158 viewport contract).
@@ -32,8 +32,8 @@ Payload (v1): `guide` (title, intent, sections[{title, overview, diffs[{file, su
 ### D6 — Capture the diff when the guide job launches, not when the user exports
 A guide describes the diff it was generated against; the on-screen diff may have moved by export time. Plannotator captures the launch-time patch on the job (the same channel `changedFilesSnapshot`/`guideContext` already use) and stores it beside the saved guide (`{id}.patch`). One guide at a time; not a "previous guides" feature — just not throwing away the input. Rejected: an in-memory-only map (dies with the server, and leaked in the earlier branch).
 
-### D7 — guide.show is the CDN today and the platform tomorrow, on Cloudflare, standalone
-A Cloudflare Worker with static assets serves immutable viewer files under `guide.show/v1/…`. It has **nothing to do with the paste service** (separate app, separate deploy, separate wrangler config). URL space reserved from day one: `/v1/…` immutable assets, `/g/<id>` future shared guides, `/` landing. Efficiency, cost and scale for the future platform are first-class when shaping it.
+### D7 — guides.show is the CDN today and the platform tomorrow, on Cloudflare, standalone
+A Cloudflare Worker with static assets serves immutable viewer files under `guides.show/v1/…`. It has **nothing to do with the paste service** (separate app, separate deploy, separate wrangler config). URL space reserved from day one: `/v1/…` immutable assets, `/g/<id>` future shared guides, `/` landing. Efficiency, cost and scale for the future platform are first-class when shaping it.
 
 ### D8 — Immutable, pinned viewer; grammars and fonts fetched per need
 Every file under `/v1/` is content-hashed and never overwritten or deleted, so an exported HTML keeps working indefinitely; the HTML pins the exact viewer build (hash + `integrity`). Syntax grammars are shipped as one small file per language and the exporter lists the languages the diff actually contains, so the viewer fetches only those. Fonts are the real ones (Inter + Geist Mono latin subsets, ~78 KB, cached) with system fallback. Base Plannotator theme with light/dark now, extensible to other palettes. Highlighting runs main-thread when the file is opened from disk (browsers block workers on `file://`) and in a worker when served from an origin — same bundle, one runtime switch.
@@ -42,10 +42,10 @@ Every file under `/v1/` is content-hashed and never overwritten or deleted, so a
 `(snapshot) → HTML` lives once, in the format package. Callers: (1) Plannotator UI Share menu → "Download portable guide"; (2) `plannotator guide export` CLI subcommand; (3) later, an agent skill that produces the guide JSON itself and wraps it via the CLI so people without the Plannotator app get a guide. Only (1) and (2) are built now; (3) must not require redesign.
 
 ### D10 — Viewer releases ride Plannotator releases
-New viewer builds are uploaded to guide.show by a GitHub Actions workflow on tagged Plannotator releases, gated by the format compatibility test. Because assets are pinned (D8), a bad deploy cannot break existing exports.
+New viewer builds are uploaded to guides.show by a GitHub Actions workflow on tagged Plannotator releases, gated by the format compatibility test. Because assets are pinned (D8), a bad deploy cannot break existing exports.
 
 ### D11 — Share links are out of scope
-No upload/`/g/<id>` route is built. The Share menu shows only "Download portable guide" — no disabled placeholders. The menu is expected to grow "Create share link" once guide.show can host.
+No upload/`/g/<id>` route is built. The Share menu shows only "Download portable guide" — no disabled placeholders. The menu is expected to grow "Create share link" once guides.show can host.
 
 ### D12 — Not now (explicit)
 Annotations in exports; PR comment threads; share links; palettes beyond the base theme; the standalone agent generator; any embed component API for the commercial platform (the platform, if it needs guides, serves the same HTML page).

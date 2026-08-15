@@ -1,0 +1,20 @@
+name = "guides-show"
+main = "worker/index.ts"
+compatibility_date = "2025-06-01"
+
+# Immutable viewer files (v1/…) live in R2 — never deleted or overwritten
+# (decision record D8). Uploaded add-only by build/deploy-viewer.ts.
+[[r2_buckets]]
+binding = "VIEWER"
+bucket_name = "guides-show-viewer"
+
+# Landing page only. Assets are a per-deploy snapshot, which is why the viewer
+# is NOT served from here.
+[assets]
+directory = "./site"
+binding = "ASSETS"
+run_worker_first = ["/v1/*", "/g/*", "/api/*", "/healthz"]
+
+routes = [
+  { pattern = "guides.show", custom_domain = true }
+]

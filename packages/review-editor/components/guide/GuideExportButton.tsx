@@ -26,7 +26,7 @@ function formatBytes(bytes: number): string {
 
 /**
  * "Download portable guide" — one HTML file with this guide and the exact diff
- * it describes; the viewer loads from guide.show (decision record D1, D9).
+ * it describes; the viewer loads from guides.show (decision record D1, D9).
  * Renders nothing when the server reports the guide is not exportable (its
  * diff was not retained) or the preflight fails, so a guide that cannot be
  * exported never shows a dead control. Sharing links are deliberately not here
