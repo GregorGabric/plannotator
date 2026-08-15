@@ -224,9 +224,11 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 
 ## 11. Task tracker
 
-- [ ] Phase 0 — branch, salvage, `core/guide-format` + fixtures + tests
-- [ ] Phase 1 — R1–R13, `packages/guide-viewer`, CSS build, app imports it, parity gate
-- [ ] Phase 2 — CDN build, budgets, grammar chunks, worker/file:// switch, smoke
-- [ ] Phase 3 — `apps/guide-show` Worker, immutability, deploy workflow (staging → prod)
-- [ ] Phase 4 — launch capture, guide-store v2, endpoints (Bun+Pi), CLI, Share menu, tests
-- [ ] Phase 5 — docs, release, first tagged viewer deploy, end-to-end on a clean machine
+Status: implemented on branch `portable-guides` (2026-08-15); awaiting the one-time Cloudflare setup + first deploy.
+
+- [x] Phase 0 — branch, salvage, `core/guide-format` + fixtures + compat test (33 tests)
+- [x] Phase 1 — guide chain carved into `packages/guide-viewer` behind `GuideHost`; `ReviewGuideHost` adapter; `AllFilesCodeView` `readOnly` + `enableKeyboardShortcuts`; parity gate 0/1,440,000 px vs main on the demo guide. Deviation from §4.2: the package injects the diff renderer (host contract) instead of moving `AllFilesCodeView` and its tail into the package; the CDN build imports it from review-editor and stubs annotation-only modules at resolve time (R10 package CSS build deferred — the CDN build reuses the review stylesheet).
+- [x] Phase 2 — `apps/guide-show` multi-file build: 235 grammar chunks split automatically (spike confirmed, no shim), entry 378 KB gz (budget 400), worker fetched → blob (works from `file://` and cross-origin in Chrome), fonts as files, KaTeX stubbed, `manifest.json` (SRI from bytes on disk), budgets script; smoke: file://, hosted, offline fallback.
+- [x] Phase 3 — Worker (R2 for `/v1/`, assets for landing, `/g` + `/api` reserved), add-only R2 publish script, deterministic manifest + checked-in `packages/core/guide-viewer-manifest.ts` with sync/check, `guide-show-deploy.yml` on `v*` tags. Verified locally with `wrangler dev` + local R2. **Not yet run against Cloudflare** — needs bucket, domain, secrets (README checklist).
+- [x] Phase 4 — `GuideLaunchReview` captured in `buildCommand`, carried server-side through agent-jobs (Bun + Pi), memoized in `GuideSession`, persisted as `{id}.patch` beside the envelope; `/api/guide/:id/export` + `/export-info` on both servers; `plannotator guide list|export`; `GuideExportButton`; e2e test with a fake engine; docs.
+- [ ] Phase 5 — first tagged viewer deploy to guide.show, then export from a release binary and open on a machine without Plannotator.

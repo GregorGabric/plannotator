@@ -102,6 +102,7 @@ jobs:
           packages/review-editor/components/AllFilesCodeView.lifecycle.test.tsx
           packages/guide-viewer/GuideSectionCard.test.tsx
           packages/guide-viewer/GuideView.test.tsx
+          packages/review-editor/components/guide/GuideExportButton.test.tsx
           packages/review-editor/hooks/useReviewSearch.test.tsx
           packages/review-editor/hooks/useCallFlowAnalysis.test.tsx
           packages/review-editor/hooks/useCallFlowInstall.test.tsx
