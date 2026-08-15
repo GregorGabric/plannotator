@@ -1139,8 +1139,8 @@ describe("Core Plannotator skills", () => {
         checked++;
       }
     }
-    // 3 core + 4 extra + 2 kiro — bump when adding skills, never below.
-    expect(checked).toBeGreaterThanOrEqual(9);
+    // 3 core + 3 extra + 2 kiro — bump when adding skills, never below.
+    expect(checked).toBeGreaterThanOrEqual(8);
   });
 });
 

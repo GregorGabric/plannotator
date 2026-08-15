@@ -95,7 +95,7 @@ Options:
                          enabled by PLANNOTATOR_INSTALL_CALLDIFF=1 or
                          { "installCallFlow": true } in config.json.
   --extras               Install the extra skills (compound, setup-goal,
-                         visual-explainer, guide) via `npx skills add` without asking.
+                         visual-explainer) via `npx skills add` without asking.
   --no-extras            Skip the extras without asking.
   --model-invocable <l>  Comma-separated skill names to make model-invocable
                          (e.g. plannotator-review,plannotator-compound), or
@@ -1377,7 +1377,7 @@ fi
 # CI runs without a terminal never prompt. CLI flags win over everything.
 PREFS_FILE="$_config_dir/install-prefs"
 CORE_SKILL_NAMES="plannotator-review plannotator-annotate plannotator-last"
-EXTRA_SKILL_NAMES="plannotator-compound plannotator-setup-goal plannotator-visual-explainer plannotator-guide"
+EXTRA_SKILL_NAMES="plannotator-compound plannotator-setup-goal plannotator-visual-explainer"
 
 saved_extras=""
 saved_invocable=""

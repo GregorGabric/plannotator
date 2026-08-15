@@ -186,7 +186,7 @@ Open it with the **Guide** button in the review header (or `Mod+Shift+G`), pick 
 
 **Download portable guide** (top-right of a guide) saves the guide as one small HTML file you can send to anyone: it contains the guide, the exact diff it was generated against, and where the change came from (repo, branch, PR link, generating agent). The file renders identically to the in-app guide — same chapters, same diff viewer, syntax highlighting, light/dark — by loading the viewer from `guides.show`, so its size is roughly the size of the diff, never the app. It opens straight from disk. Without internet the file still shows the guide text and file list.
 
-The same export is available from the command line — `plannotator guide list` shows saved guides, `plannotator guide export --id <id>` writes the HTML — and `plannotator guide export --guide guide.json --patch guide.patch` wraps a guide an agent wrote itself (the `plannotator-guide` extra skill; see [portable guide format](/docs/reference/portable-guides/)). Guides generated before this feature have no retained diff and are not exportable.
+The same export is available from the command line — `plannotator guide list` shows saved guides, `plannotator guide export --id <id>` writes the HTML — and `plannotator guide export --guide guide.json --patch guide.patch` wraps a guide an agent wrote itself (the standalone `plannotator-guide` skill; see [portable guide format](/docs/reference/portable-guides/)). Guides generated before this feature have no retained diff and are not exportable.
 
 ## How review agents prompt the CLI
 
