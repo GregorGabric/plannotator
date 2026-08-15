@@ -23,7 +23,7 @@ import { setStorageBackend } from '@plannotator/ui/utils/storage';
 import { ThemeProvider } from '@plannotator/ui/components/ThemeProvider';
 import { TooltipProvider } from '@plannotator/ui/components/Tooltip';
 import { readEmbeddedGuideSnapshot, type GuideSnapshot } from '@plannotator/core/guide-format';
-import { GuideViewer } from '@plannotator/guide-viewer';
+import { GuideSectionSkeleton, GuideViewer } from '@plannotator/guide-viewer';
 import { ReadOnlyDiffRenderer, getReadOnlyDiffRendererProps } from './ReadOnlyDiffRenderer';
 import { PortableWorkerPool, preparePortableWorkerFactory } from './portablePool';
 
@@ -115,9 +115,12 @@ async function boot() {
     return;
   }
 
-  // 3. Worker (best effort), then 4. render.
+  // 3. Worker (best effort). Preparing it means fetching the worker script and
+  //    probing how this browser lets us construct one, so show the guide's
+  //    own loading state meanwhile instead of the plain-text fallback.
+  root.render(shell(<div className="min-h-screen bg-background text-foreground"><GuideSectionSkeleton /></div>));
   const workerFactory = await preparePortableWorkerFactory();
-  // Observable for smoke tests and support: which highlighting path this page took.
+  // 4. Render. Observable for smoke tests and support: which highlighting path this page took.
   document.documentElement.dataset.pgrHighlighter = workerFactory ? 'worker' : 'main-thread';
   root.render(shell(<App snapshot={parsed.value} workerFactory={workerFactory} />));
 }

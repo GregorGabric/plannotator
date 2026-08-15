@@ -732,10 +732,17 @@ ${unplaced}
 </article>`;
 }
 
+// The fallback article is for readers whose viewer never arrives (offline,
+// blocked, no JS). Everyone else would otherwise see it flash for the second
+// or two the viewer takes to download on a cold cache, so it stays invisible
+// for the first moments and reveals itself only if nothing has replaced it
+// (CSS-only, no script needed). The body ground paints in the right theme
+// immediately.
 const FALLBACK_STYLE = `
 html{color-scheme:light dark}
 body.pgr-fallback-body{margin:0;background:#f5f7f6}
-.pgr-fallback{max-width:72ch;margin:2rem auto;padding:0 1.25rem;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2421}
+@keyframes pgr-reveal{to{opacity:1}}
+.pgr-fallback{opacity:0;animation:pgr-reveal 0s linear 2.5s forwards;max-width:72ch;margin:2rem auto;padding:0 1.25rem;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2421}
 .pgr-fallback h1{font-size:1.75rem;line-height:1.2;margin:0 0 .5rem}
 .pgr-fallback h2{font-size:1.15rem;margin:1.75rem 0 .5rem}
 .pgr-fallback .meta{color:#5b6a64;font-size:.9rem;margin:.25rem 0}
