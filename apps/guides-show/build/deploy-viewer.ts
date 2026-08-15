@@ -3,6 +3,9 @@
  * Upload a built viewer to the guides.show R2 bucket — ADD-ONLY.
  *   bun build/deploy-viewer.ts [--bucket guides-show-viewer] [--dry-run] [--local]
  *
+ * Wrangler 4 targets LOCAL storage for `r2 object` commands unless --remote is
+ * passed, so this script passes --remote by default and --local on request.
+ *
  * Every file under dist/viewer is content-hashed, so a key can only ever map
  * to one byte sequence; uploading the same key twice is a no-op by
  * construction, and nothing is ever deleted (decision record D8). The two
@@ -47,7 +50,7 @@ async function wrangler(argv: string[]): Promise<{ code: number; out: string; er
 
 async function existingBytes(key: string): Promise<Uint8Array | null> {
   const tmp = `/tmp/guides-show-verify-${process.pid}-${Math.random().toString(36).slice(2)}`;
-  const r = await wrangler(['r2', 'object', 'get', `${bucket}/${key}`, '--file', tmp, ...(local ? ['--local'] : [])]);
+  const r = await wrangler(['r2', 'object', 'get', `${bucket}/${key}`, '--file', tmp, local ? '--local' : '--remote']);
   if (r.code !== 0) return null;
   try { return new Uint8Array(readFileSync(tmp)); } catch { return null; }
 }
@@ -72,7 +75,7 @@ let uploaded = 0;
 for (const rel of files) {
   const key = `v1/${rel}`;
   if (dryRun) { console.log(`  put ${key}`); continue; }
-  const r = await wrangler(['r2', 'object', 'put', `${bucket}/${key}`, '--file', path.join(dist, rel), '--content-type', ctype(rel), '--cache-control', 'public, max-age=31536000, immutable', ...(local ? ['--local'] : [])]);
+  const r = await wrangler(['r2', 'object', 'put', `${bucket}/${key}`, '--file', path.join(dist, rel), '--content-type', ctype(rel), '--cache-control', 'public, max-age=31536000, immutable', local ? '--local' : '--remote']);
   if (r.code !== 0) { console.error(`upload failed for ${key}\n${r.err}`); process.exit(1); }
   uploaded++;
   if (uploaded % 25 === 0) console.log(`  ${uploaded}/${files.length}`);
@@ -80,7 +83,7 @@ for (const rel of files) {
 if (!dryRun) {
   const stamp = /\.([A-Za-z0-9_-]+)\.js$/.exec(manifest.js)?.[1] ?? 'unknown';
   const metaKey = `meta/v${manifest.version}/manifest.${stamp}.json`;
-  const r = await wrangler(['r2', 'object', 'put', `${bucket}/${metaKey}`, '--file', path.join(dist, 'manifest.json'), '--content-type', 'application/json; charset=utf-8', ...(local ? ['--local'] : [])]);
+  const r = await wrangler(['r2', 'object', 'put', `${bucket}/${metaKey}`, '--file', path.join(dist, 'manifest.json'), '--content-type', 'application/json; charset=utf-8', local ? '--local' : '--remote']);
   if (r.code !== 0) { console.error(`manifest upload failed\n${r.err}`); process.exit(1); }
   console.log(`published ${uploaded} files; manifest at ${metaKey}`);
 }

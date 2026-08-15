@@ -26,6 +26,10 @@ Or through the real Worker: `bun run deploy:viewer -- --local` (seeds local R2) 
 
 Everything under `/v1/` is content-hashed and never overwritten or deleted. Exports pin `viewer.<hash>.js` + `integrity`, so a guide exported today opens forever. Mutable pointers (build manifests) live under `/meta/`, never `/v1/`.
 
+## Deploy status
+
+First deployed 2026-08-15 from a local wrangler login: bucket `guides-show-viewer` created, viewer build `viewer.DULnMtI1.js` published to `/v1/`, Worker live on the `guides.show` custom domain. Verified: immutable + CORS headers on the edge, served bytes match the pinned SRI, an export with the default URL opens from disk.
+
 ## First deploy checklist (one-time)
 
 1. Cloudflare: create R2 bucket `guides-show-viewer`; add the `guides.show` zone; the Worker route uses `custom_domain = true`.
