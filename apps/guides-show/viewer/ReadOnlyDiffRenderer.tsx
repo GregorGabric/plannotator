@@ -15,8 +15,33 @@ const noop = () => {};
  * Display settings come from configStore defaults (or whatever the host
  * seeded) — never cookies, since the viewer installs an in-memory backend.
  */
+/**
+ * Below Tailwind's `lg` (1024px) the diff pane is at most ~430px wide (a phone
+ * has ~350px, a portrait tablet shares the row with the chapter column), so a
+ * two-column diff gets under 220px per side and is unreadable; force unified
+ * there. The setting itself is untouched: widen the window past 1024px and the
+ * configured style applies again. Desktop layouts are unaffected.
+ */
+const NARROW_VIEWPORT = '(max-width: 1023px)';
+
+function useNarrowViewport(): boolean {
+  const [narrow, setNarrow] = React.useState<boolean>(
+    () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(NARROW_VIEWPORT).matches,
+  );
+  React.useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mql = window.matchMedia(NARROW_VIEWPORT);
+    const onChange = () => setNarrow(mql.matches);
+    onChange();
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+  return narrow;
+}
+
 export const ReadOnlyDiffRenderer: React.FC<GuideDiffRendererProps> = (props) => {
-  const diffStyle = useConfigValue('diffStyle');
+  const configuredDiffStyle = useConfigValue('diffStyle');
+  const diffStyle = useNarrowViewport() ? 'unified' : configuredDiffStyle;
   const diffOverflow = useConfigValue('diffOverflow');
   const diffIndicators = useConfigValue('diffIndicators');
   const lineDiffType = useConfigValue('diffLineDiffType');

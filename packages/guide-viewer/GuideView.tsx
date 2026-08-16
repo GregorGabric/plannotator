@@ -133,8 +133,9 @@ export const GuideView: React.FC<GuideViewProps> = ({
   );
 
   return (
-    <GuideViewportProvider className="w-full px-10 py-8" eager={guideFileCount <= GUIDE_EAGER_MOUNT_MAX_FILES}>
-      {headerActions && <div className="float-right ml-6 flex items-center gap-2">{headerActions}</div>}
+    <GuideViewportProvider className="w-full px-3 py-5 sm:px-6 sm:py-6 lg:px-10 lg:py-8" eager={guideFileCount <= GUIDE_EAGER_MOUNT_MAX_FILES}>
+      {/* Header actions sit in a row above the title on narrow screens and float beside it from md up (desktop unchanged). */}
+      {headerActions && <div className="mb-3 flex items-center justify-end gap-2 md:float-right md:mb-0 md:ml-6">{headerActions}</div>}
       <div className="max-w-[72ch]">
         <h1 className="text-[22px] font-semibold tracking-tight text-foreground [text-wrap:balance]">{guide.title}</h1>
         {guide.intent && (
