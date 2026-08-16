@@ -370,6 +370,7 @@ function ActiveGuide({
   }
 
   const engine = jobs.find((j) => j.id === jobId)?.engine;
+  const model = jobs.find((j) => j.id === jobId)?.model;
 
   return (
     <div className="w-full">
@@ -379,7 +380,7 @@ function ActiveGuide({
           guide={guide}
           reviewed={reviewed}
           onToggleReviewed={toggleReviewed}
-          engineLabel={engine ? REVIEW_ENGINE_LABEL[engine as ReviewEngine] ?? engine : undefined}
+          engineLabel={engine ? `${REVIEW_ENGINE_LABEL[engine as ReviewEngine] ?? engine}${model ? ` · ${model}` : ''}` : undefined}
           focusedFile={focusedFile}
           onFocusFile={setFocusedFile}
           onRegenerate={guideLaunch.canLaunch && !regenerating ? handleRegenerate : undefined}
