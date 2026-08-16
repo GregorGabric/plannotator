@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   formatInteractiveNoArgClarification,
   formatSubcommandHelp,
@@ -332,10 +334,15 @@ describe("guide subcommand through the entrypoint", () => {
   // strips the annotate gate flags (`--json` among them) from the whole argv
   // before dispatching, and `plannotator guide share --json` must still print
   // the JSON record the guide CLI owns rather than the bare URL.
-  test("guide share --json prints the JSON record, wherever --json sits", async () => {
+  //
+  // The entrypoint imports the built app HTML (`../dist/*.html`) at module
+  // load, so this only runs where the hook has been built (`bun run
+  // build:hook`); the CI test job does not build it.
+  const entryHtmlBuilt = existsSync(resolve(import.meta.dir, "../dist/index.html")) && existsSync(resolve(import.meta.dir, "../dist/review.html"));
+  test.skipIf(!entryHtmlBuilt)("guide share --json prints the JSON record, wherever --json sits", async () => {
     const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
-    const { join, resolve } = await import("node:path");
+    const { join } = await import("node:path");
     const { FIXTURE_V1_PR } = await import("@plannotator/shared/guide-format-fixtures");
     const workDir = mkdtempSync(join(tmpdir(), "plannotator-guide-entry-"));
     const host = Bun.serve({

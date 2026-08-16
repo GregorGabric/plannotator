@@ -194,10 +194,14 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
   // model catalogs are discovered LAZILY (see buildCapabilitiesResponse) so a
   // slow/unauthenticated `<binary> models` spawn never blocks review-server
   // startup — it runs at most once, on the first /capabilities request. ---
+  // Resolved against the live `process.env.PATH`, which is also what the job
+  // spawn inherits, so detection and execution agree. (`Bun.which` without the
+  // option consults the PATH captured at process start.)
+  const onPath = (binary: string): boolean => !!Bun.which(binary, { PATH: process.env.PATH });
   const capabilities: AgentCapability[] = [
-    { id: "claude", name: "Claude Code", available: !!Bun.which("claude") },
-    { id: "codex", name: "Codex CLI", available: !!Bun.which("codex") },
-    { id: "tour", name: "Code Tour", available: !!Bun.which("claude") || !!Bun.which("codex") },
+    { id: "claude", name: "Claude Code", available: onPath("claude") },
+    { id: "codex", name: "Codex CLI", available: onPath("codex") },
+    { id: "tour", name: "Code Tour", available: onPath("claude") || onPath("codex") },
     {
       id: "guide",
       name: "Guided Review",
@@ -205,9 +209,9 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
       // same review-mode + binary-on-PATH gating as their own capability
       // entries below (NOTE: cursor's binary is `agent`).
       available:
-        !!Bun.which("claude") ||
-        !!Bun.which("codex") ||
-        (mode === "review" && Object.values(MARKER_ENGINES).some((engine) => !!Bun.which(engine.binary))),
+        onPath("claude") ||
+        onPath("codex") ||
+        (mode === "review" && Object.values(MARKER_ENGINES).some((engine) => onPath(engine.binary))),
     },
   ];
   // Marker engines (Cursor, OpenCode, Pi) — same shape, one loop. Available only
@@ -216,7 +220,7 @@ export function createAgentJobHandler(options: AgentJobHandlerOptions): AgentJob
     capabilities.push({
       id: engine.id,
       name: engine.name,
-      available: mode === "review" && !!Bun.which(engine.binary),
+      available: mode === "review" && onPath(engine.binary),
     });
   }
 
