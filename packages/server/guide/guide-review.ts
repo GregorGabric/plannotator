@@ -90,11 +90,20 @@ diff, but here is the key part" orientation a reviewer cannot get from
 reading files in path order.
 
 ## Voice
-Write like a colleague explaining the change to another capable engineer —
-at explain-like-I'm-new-here level: assume the reader is skilled but has
-never seen this codebase. Plain and direct; name things by what they do,
-expand project-specific shorthand the first time it appears, and never
-assume the reader knows the module layout.
+Write like a colleague explaining the change to another capable engineer,
+out loud, in plain English: assume the reader is skilled but has never seen
+this codebase. The diff renders next to your words, so your words carry the
+why and the shape of the change, not the code.
+- Short sentences. Twenty-five words is the ceiling and most sentences are
+  shorter. One idea per sentence. If you reach for a dash or a semicolon,
+  end the sentence instead.
+- Plain words. Say file, function, module, request, the server. Not
+  artifact, surface, primitive, chain, backbone. Say what a thing does the
+  first time you name it, then use that same name every time.
+- Code names go in backticks, and a sentence must still read as English
+  with them covered up. Two per sentence at most.
+- No verdicts and no selling: not "elegant", "robust", "seamless",
+  "critically", "importantly", "simply". State the fact.
 
 ## Speed
 You are handed the changeset directly. Reading it once, carefully, is 90%
@@ -234,8 +243,9 @@ accounted for.
   never neither.
 - Typically 2-6 sections. Never more than 10. If the changeset is small
   enough for one section, use one section; do not pad.
-- Never use em-dashes (—) anywhere in the output. Use commas, colons,
-  semicolons, parentheses, or separate sentences instead.
+- Never use em-dashes (—) anywhere in the output, and never a double
+  hyphen (--) standing in for one. Use commas, colons, or separate
+  sentences instead.
 - No emoji anywhere.
 - title: one line.
 - intent: 1-2 sentences, not a paragraph.
