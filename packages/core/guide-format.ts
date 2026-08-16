@@ -366,6 +366,10 @@ function parsePullRequest(input: unknown, path: string): Parsed<GuideSnapshotPul
   if (isFail(s)) return s;
   const url = str(s.value.url, `${path}.url`, { nonEmpty: true });
   if (isFail(url)) return url;
+  // Hosted pages render this straight into an href, so only web URLs pass;
+  // CSP and React already neuter `javascript:` links, this keeps that guard
+  // from resting on them alone.
+  if (!/^https?:\/\//i.test(url.value)) return fail(`${path}.url`, "Expected an http(s) URL");
   const number = optNum(s.value, "number", path);
   if (isFail(number)) return number;
   const title = optStr(s.value, "title", path);

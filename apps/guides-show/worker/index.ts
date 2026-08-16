@@ -1,19 +1,41 @@
 /**
  * guides.show — Cloudflare Worker.
  *
- * Today: serves the immutable portable-guide viewer from R2 under /v1/ and a
- * static landing page. Designed to grow into the platform (decision record D7):
- * /g/<id> (shared guides) and /api/* are reserved and routed here first, so
- * adding them is adding routes, not re-architecting.
+ * Serves the immutable portable-guide viewer from R2 under /v1/, a static
+ * landing page, and shared guides: /g/<id> pages plus the /api/g* create,
+ * fetch and delete routes (contract: adr/implementation/guide-share-hosting.md).
+ * The share routes are the pure handler in ../share/core/handler.ts over an R2
+ * store; the Bun self-host target runs the same handler over fs or S3.
  *
  * Why R2 for /v1 and not Workers Static Assets: assets are a per-deploy
  * snapshot, so a file missing from the next deploy disappears — but every HTML
  * ever exported pins a specific viewer build by URL + integrity, and must keep
  * opening forever (D8). R2 objects are only ever added.
  */
+import { GUIDE_VIEWER_MANIFEST } from '@plannotator/core/guide-viewer-manifest';
+import { handleGuideShareRequest, isGuideShareRoute } from '../share/core/handler';
+import { R2GuideStore } from '../share/stores/r2';
+
 export interface Env {
   VIEWER: R2Bucket;
+  /** Shared guides: `g/<id>` bodies + `g/<id>.meta` records (see share/stores/r2.ts). */
+  GUIDES: R2Bucket;
+  /** Optional Cloudflare rate-limiting binding; uploads only. Absent = no limiting. */
+  RATE_LIMITER?: RateLimit;
+  /**
+   * Optional operator ceiling on how long any shared guide is kept, in
+   * seconds (`[vars]` in wrangler.toml). Uploads without a ttl get this
+   * lifetime and longer requests are clamped; absent or unparsable = the
+   * contract default, kept until unshared. The kill switch for storage growth.
+   */
+  MAX_TTL_SECONDS?: string;
   ASSETS: Fetcher;
+}
+
+/** `MAX_TTL_SECONDS` as a positive integer, or undefined when unset/unusable. */
+export function maxTtlSecondsFrom(env: Pick<Env, 'MAX_TTL_SECONDS'>): number | undefined {
+  const n = Number(env.MAX_TTL_SECONDS);
+  return env.MAX_TTL_SECONDS !== undefined && env.MAX_TTL_SECONDS !== '' && Number.isSafeInteger(n) && n >= 1 ? n : undefined;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -89,9 +111,16 @@ export default {
       if (!key) return new Response('bad request', { status: 400 });
       return serveViewerAsset(req, key, env.VIEWER);
     }
-    if (path === '/g' || path.startsWith('/g/')) {
-      // Reserved: shared guides (out of scope for now, D11).
-      return json({ reserved: true, message: 'Shared guides are not available yet.' }, 404);
+    if (isGuideShareRoute(path)) {
+      // Shared guides. The handler pins this Worker's own /v1/ as the viewer
+      // base and this origin as the canonical page URL, both taken from req.url.
+      const maxTtlSeconds = maxTtlSecondsFrom(env);
+      return handleGuideShareRequest(req, {
+        store: new R2GuideStore(env.GUIDES),
+        viewerManifest: GUIDE_VIEWER_MANIFEST,
+        rateLimit: env.RATE_LIMITER,
+        ...(maxTtlSeconds !== undefined && { maxTtlSeconds }),
+      });
     }
     if (path.startsWith('/api/')) return json({ error: 'not found' }, 404);
     if (path === '/healthz') return json({ ok: true });

@@ -68,8 +68,33 @@ export interface SavedGuideEnvelope {
    * case the guide is not exportable ("diff not retained").
    */
   review?: SavedGuideReview;
+  /**
+   * The share link this guide currently has on the guide host (guide share
+   * hosting contract, §7), so a saved guide remembers its link across
+   * sessions and can remove it later. Absent when never shared or after the
+   * link was removed.
+   */
+  share?: SavedGuideShare;
   guide: CodeGuideOutput;
   reviewed: boolean[];
+}
+
+export interface SavedGuideShare {
+  /** The host's guide id (base64url, the last path segment of `url`). */
+  id: string;
+  /** Full share URL, including the `#key=…` fragment for encrypted shares. */
+  url: string;
+  /** ISO timestamp of when the link was created. */
+  createdAt: string;
+  /** Bearer token that deletes the link on the host. Returned once by the host; only this file remembers it. */
+  deleteToken: string;
+  /**
+   * The guide host the link was created on (`https://guides.show` or a
+   * self-host), so removal goes to the host that holds the upload even when
+   * the configured share URL has changed since. Absent on records written
+   * before this field existed; callers fall back to the origin of `url`.
+   */
+  serviceUrl?: string;
 }
 
 export interface SavedGuideReview {
@@ -206,6 +231,7 @@ function parseEnvelope(raw: string): SavedGuideEnvelope | null {
     ...(typeof obj.generatedAt === "number" ? { generatedAt: obj.generatedAt } : {}),
     ...(typeof obj.customInstructions === "string" && obj.customInstructions ? { customInstructions: obj.customInstructions } : {}),
     ...(parseSavedReview(obj.review) ? { review: parseSavedReview(obj.review)! } : {}),
+    ...(parseSavedShare(obj.share) ? { share: parseSavedShare(obj.share)! } : {}),
     guide: guide as unknown as CodeGuideOutput,
     reviewed: coerceReviewed(obj.reviewed, sectionCount),
   };
@@ -228,6 +254,35 @@ function parseSavedReview(value: unknown): SavedGuideReview | null {
     source: source as unknown as GuideSnapshotSource,
     patchFile: r.patchFile,
   };
+}
+
+function parseSavedShare(value: unknown): SavedGuideShare | null {
+  if (!value || typeof value !== "object") return null;
+  const r = value as Record<string, unknown>;
+  if (typeof r.id !== "string" || !r.id) return null;
+  if (typeof r.url !== "string" || !r.url) return null;
+  if (typeof r.deleteToken !== "string" || !r.deleteToken) return null;
+  return {
+    id: r.id,
+    url: r.url,
+    createdAt: typeof r.createdAt === "string" ? r.createdAt : new Date(0).toISOString(),
+    deleteToken: r.deleteToken,
+    ...(typeof r.serviceUrl === "string" && r.serviceUrl ? { serviceUrl: r.serviceUrl } : {}),
+  };
+}
+
+/**
+ * Where a recorded share link lives: the host it was created on, or, for
+ * records without one, the origin of the link itself (the host answers
+ * `<origin>/g/<id>`, so the origin is the host).
+ */
+export function savedGuideShareServiceUrl(share: SavedGuideShare): string | null {
+  if (share.serviceUrl) return share.serviceUrl;
+  try {
+    return new URL(share.url).origin;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -365,6 +420,18 @@ export function updateGuideReviewed(repoKey: string, id: string, reviewed: boole
   });
 }
 
+/**
+ * Record (or, with null, forget) the share link of a saved guide. Atomic
+ * rewrite of the whole envelope; false when the guide does not exist or the
+ * write failed.
+ */
+export function updateGuideShare(repoKey: string, id: string, share: SavedGuideShare | null): boolean {
+  const envelope = loadGuide(repoKey, id);
+  if (!envelope) return false;
+  const { share: _previous, ...rest } = envelope;
+  return saveGuide(repoKey, id, share ? { ...rest, share } : rest);
+}
+
 /** List all saved guides for a repo, newest first. Corrupt files are skipped. */
 export function listGuides(repoKey: string): Array<{ id: string; envelope: SavedGuideEnvelope }> {
   let names: string[];
@@ -471,6 +538,13 @@ export interface GuideStoreSession {
   getSavedGuideSnapshot(id: string): Promise<GuideSnapshot | null>;
   /** Portable snapshot for a live job that was autosaved this session, else null. */
   getJobGuideSnapshot(jobId: string): Promise<GuideSnapshot | null>;
+  /**
+   * Where the envelope behind an endpoint guide id lives on disk: `saved:{id}`
+   * → this repo's shelf; a live job → its autosave (when one happened). Null
+   * when nothing is persisted. Backs the share-link bookkeeping
+   * (`updateGuideShare`) so a saved guide remembers its link.
+   */
+  locateEnvelope(jobId: string): Promise<{ repoKey: string; id: string } | null>;
 }
 
 export function createGuideStoreSession(options: GuideStoreSessionOptions): GuideStoreSession {
@@ -647,6 +721,17 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
       if (!saved) return null;
       const envelope = loadGuide(saved.repoKey, saved.id);
       return envelope ? buildSavedGuideSnapshot(saved.repoKey, envelope) : null;
+    },
+
+    async locateEnvelope(jobId) {
+      if (jobId.startsWith(SAVED_GUIDE_ID_PREFIX)) {
+        const id = jobId.slice(SAVED_GUIDE_ID_PREFIX.length);
+        const repoKey = await resolveRepoKey();
+        return loadGuide(repoKey, id) ? { repoKey, id } : null;
+      }
+      const saved = savedIdByJob.get(jobId);
+      if (!saved) return null;
+      return loadGuide(saved.repoKey, saved.id) ? saved : null;
     },
   };
 }

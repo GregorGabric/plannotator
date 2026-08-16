@@ -1,7 +1,9 @@
 /**
- * `plannotator guide <list|export>` — portable Guided Review exports from the
- * command line (decision record D9): the same pure export function the UI
- * uses, callable without a running review server. Three sources:
+ * `plannotator guide <list|export|share|unshare>` — portable Guided Review
+ * exports and share links from the command line (decision record D9; guide
+ * share hosting contract §7): the same pure export function and the same
+ * upload the UI uses, callable without a running review server. Three
+ * sources for export and share alike:
  *
  *   --id <savedGuideId>              a guide Plannotator saved (any repo shelf)
  *   --guide <guide.json> --patch <p> a guide authored elsewhere (an agent skill
@@ -29,9 +31,11 @@ import {
   type GuideSnapshotSource,
 } from "@plannotator/shared/guide-format";
 import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
-import { buildSavedGuideSnapshot, findSavedGuideById, listAllSavedGuides } from "@plannotator/shared/guide-store";
+import { buildSavedGuideSnapshot, findSavedGuideById, listAllSavedGuides, savedGuideShareServiceUrl, updateGuideShare, type SavedGuideShare } from "@plannotator/shared/guide-store";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
+import { loadConfig, normalizeGuideShareUrl, resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
 import { validateGuideOutput } from "./guide-review";
+import { GuideShareError, shareGuide, unshareGuide } from "./guide-share";
 
 export interface GuideCliResult {
   code: 0 | 1 | 2;
@@ -45,8 +49,12 @@ export const GUIDE_CLI_USAGE = [
   "  plannotator guide export --id <savedGuideId> [--out <file.html> | --out -]",
   "  plannotator guide export --guide <guide.json> --patch <diff.patch | -> [--out <file.html> | --out -]",
   "  plannotator guide export --snapshot <snapshot.json> [--out <file.html> | --out -]",
+  "  plannotator guide share --id <savedGuideId> | --guide <guide.json> --patch <diff.patch | -> | --snapshot <snapshot.json>",
+  "                          [--public] [--ttl <7d | 24h | 30m | 3600>] [--service-url <url>] [--json]",
+  "  plannotator guide unshare <id> --token <deleteToken> [--service-url <url>]",
   "",
-  "Export a Guided Review as one portable HTML file (the viewer loads from guides.show).",
+  "Export a Guided Review as one portable HTML file (the viewer loads from guides.show),",
+  "or share it as a link on guides.show (or a self-hosted guide host).",
   "",
   "Options:",
   "  --id <id>          A guide Plannotator saved (see `plannotator guide list`)",
@@ -59,7 +67,20 @@ export const GUIDE_CLI_USAGE = [
   "  --out <file>       Where to write the HTML (default: ./guided-review-<slug>.html); `-` writes to stdout",
   "  --viewer-url <u>   Viewer base URL override (default https://guides.show/v1/; also PLANNOTATOR_GUIDE_VIEWER_URL)",
   "",
-  "Exit codes: 0 exported · 1 not found / not exportable / invalid guide or snapshot · 2 usage",
+  "Share options:",
+  "  --public           Store the guide unencrypted so the link can unfurl with a preview. By default the",
+  "                     upload is end-to-end encrypted: the host never sees the code and the key lives",
+  "                     only in the link (the part after #).",
+  "  --ttl <duration>   Remove the link automatically after this long: seconds, or 30m / 24h / 7d.",
+  "                     Default: the link stays until you unshare it.",
+  "  --service-url <u>  Guide host to upload to (default https://guides.show; also PLANNOTATOR_GUIDE_SHARE_URL",
+  "                     or `guideShareUrl` in ~/.plannotator/config.json)",
+  "  --json             Print { id, url, deleteToken, expiresAt? } instead of the bare URL",
+  "  --token <t>        (unshare) The delete token printed when the guide was shared",
+  "",
+  "Sharing is refused while PLANNOTATOR_SHARE=disabled (or `share: \"disabled\"` in config.json).",
+  "",
+  "Exit codes: 0 done · 1 not found / not exportable / invalid guide or snapshot / share service error · 2 usage",
 ].join("\n");
 
 function takeOption(args: string[], name: string): { value?: string; rest: string[] } | { error: string } {
@@ -68,6 +89,34 @@ function takeOption(args: string[], name: string): { value?: string; rest: strin
   const value = args[i + 1];
   if (value === undefined || value.startsWith("--")) return { error: `${name} requires a value` };
   return { value, rest: [...args.slice(0, i), ...args.slice(i + 2)] };
+}
+
+function takeFlag(args: string[], name: string): { present: boolean; rest: string[] } {
+  const i = args.indexOf(name);
+  if (i < 0) return { present: false, rest: args };
+  return { present: true, rest: [...args.slice(0, i), ...args.slice(i + 1)] };
+}
+
+/**
+ * `--ttl` values: whole seconds, or a number with an s / m / h / d suffix
+ * (`30m`, `24h`, `7d`). Null when the text is not a positive duration.
+ */
+export function parseGuideShareTtl(text: string): number | null {
+  const m = /^\s*(\d+)\s*([smhd]?)\s*$/i.exec(text);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isSafeInteger(n) || n <= 0) return null;
+  const unit = m[2].toLowerCase();
+  const factor = unit === "d" ? 86_400 : unit === "h" ? 3_600 : unit === "m" ? 60 : 1;
+  const seconds = n * factor;
+  return Number.isSafeInteger(seconds) ? seconds : null;
+}
+
+/** What `runGuideCli` may inject: stdin for `--patch -`, a fixed clock, a fetch for the share service. */
+export interface GuideCliIo {
+  stdin?: () => string;
+  now?: string;
+  fetch?: typeof fetch;
 }
 
 export function runGuideList(): GuideCliResult {
@@ -217,55 +266,86 @@ export function buildAuthoredGuideSnapshot(
   return { ok: true, snapshot: parsed.value };
 }
 
-export function runGuideExport(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: { stdin?: () => string; now?: string } = {}): GuideCliResult {
+interface SourceArgs {
+  id?: string;
+  snapshot?: string;
+  guide?: string;
+  patch?: string;
+  /** Arguments left for the caller's own flags. */
+  rest: string[];
+}
+
+type SnapshotSource =
+  | { ok: true; snapshot: GuideSnapshot; saved?: { repoKey: string; id: string; share?: SavedGuideShare } }
+  | { ok: false; result: GuideCliResult };
+
+/**
+ * The `--id | --guide/--patch | --snapshot` source selection shared by
+ * `export` and `share`. Consumes those options from `argv`; usage mistakes
+ * come back as exit-2 results so callers can finish their own argument
+ * checks before anything is read from disk.
+ */
+function parseSourceArgs(argv: string[]): { ok: true; args: SourceArgs } | { ok: false; result: GuideCliResult } {
+  const usage = (msg: string) => ({ ok: false as const, result: { code: 2 as const, stderr: `${msg}\n\n${GUIDE_CLI_USAGE}\n` } });
   const idOpt = takeOption(argv, "--id");
-  if ("error" in idOpt) return { code: 2, stderr: `${idOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  if ("error" in idOpt) return usage(idOpt.error);
   const snapOpt = takeOption(idOpt.rest, "--snapshot");
-  if ("error" in snapOpt) return { code: 2, stderr: `${snapOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  if ("error" in snapOpt) return usage(snapOpt.error);
   const guideOpt = takeOption(snapOpt.rest, "--guide");
-  if ("error" in guideOpt) return { code: 2, stderr: `${guideOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  if ("error" in guideOpt) return usage(guideOpt.error);
   const patchOpt = takeOption(guideOpt.rest, "--patch");
-  if ("error" in patchOpt) return { code: 2, stderr: `${patchOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  const outOpt = takeOption(patchOpt.rest, "--out");
-  if ("error" in outOpt) return { code: 2, stderr: `${outOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  const viewerOpt = takeOption(outOpt.rest, "--viewer-url");
-  if ("error" in viewerOpt) return { code: 2, stderr: `${viewerOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  if (viewerOpt.rest.length > 0) return { code: 2, stderr: `Unknown argument: ${viewerOpt.rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
+  if ("error" in patchOpt) return usage(patchOpt.error);
   if ((idOpt.value ? 1 : 0) + (snapOpt.value ? 1 : 0) + (guideOpt.value ? 1 : 0) !== 1) {
-    return { code: 2, stderr: `Provide exactly one of --id, --guide (with --patch), or --snapshot.\n\n${GUIDE_CLI_USAGE}\n` };
+    return usage("Provide exactly one of --id, --guide (with --patch), or --snapshot.");
   }
   if ((guideOpt.value === undefined) !== (patchOpt.value === undefined)) {
-    return { code: 2, stderr: `--guide and --patch go together.\n\n${GUIDE_CLI_USAGE}\n` };
+    return usage("--guide and --patch go together.");
   }
+  return { ok: true, args: { id: idOpt.value, snapshot: snapOpt.value, guide: guideOpt.value, patch: patchOpt.value, rest: patchOpt.rest } };
+}
 
-  let snapshot: GuideSnapshot;
-  if (idOpt.value) {
-    const found = findSavedGuideById(idOpt.value);
-    if (!found) return { code: 1, stderr: `No saved guide with id ${idOpt.value}. Run \`plannotator guide list\`.\n` };
+/** Load the snapshot a parsed source names. `saved` is set for `--id` so a share can be recorded on its envelope (and carries any link it already has). */
+function loadSnapshotSource(args: SourceArgs, cwd: string, io: GuideCliIo): SnapshotSource {
+  if (args.id) {
+    const found = findSavedGuideById(args.id);
+    if (!found) return { ok: false, result: { code: 1, stderr: `No saved guide with id ${args.id}. Run \`plannotator guide list\`.\n` } };
     const built = buildSavedGuideSnapshot(found.repoKey, found.envelope);
-    if (!built) return { code: 1, stderr: `Guide ${idOpt.value} cannot be exported: its diff was not retained (it predates portable exports).\n` };
-    snapshot = built;
-  } else if (guideOpt.value) {
-    const guideFile = resolve(cwd, guideOpt.value);
-    if (!existsSync(guideFile)) return { code: 1, stderr: `Guide file not found: ${guideFile}\n` };
+    if (!built) return { ok: false, result: { code: 1, stderr: `Guide ${args.id} cannot be exported: its diff was not retained (it predates portable exports).\n` } };
+    return { ok: true, snapshot: built, saved: { repoKey: found.repoKey, id: args.id, ...(found.envelope.share ? { share: found.envelope.share } : {}) } };
+  }
+  if (args.guide) {
+    const guideFile = resolve(cwd, args.guide);
+    if (!existsSync(guideFile)) return { ok: false, result: { code: 1, stderr: `Guide file not found: ${guideFile}\n` } };
     let rawPatch: string;
-    if (patchOpt.value === "-") {
+    if (args.patch === "-") {
       rawPatch = io.stdin ? io.stdin() : readFileSync(0, "utf-8");
     } else {
-      const patchFile = resolve(cwd, patchOpt.value!);
-      if (!existsSync(patchFile)) return { code: 1, stderr: `Patch file not found: ${patchFile}\n` };
+      const patchFile = resolve(cwd, args.patch!);
+      if (!existsSync(patchFile)) return { ok: false, result: { code: 1, stderr: `Patch file not found: ${patchFile}\n` } };
       rawPatch = readFileSync(patchFile, "utf-8");
     }
     const built = buildAuthoredGuideSnapshot(readFileSync(guideFile, "utf-8"), rawPatch, { cwd, now: io.now });
-    if (!built.ok) return { code: 1, stderr: `${built.error}\n` };
-    snapshot = built.snapshot;
-  } else {
-    const file = resolve(cwd, snapOpt.value!);
-    if (!existsSync(file)) return { code: 1, stderr: `Snapshot file not found: ${file}\n` };
-    const parsed = parseGuideSnapshotJson(readFileSync(file, "utf-8"));
-    if (!parsed.ok) return { code: 1, stderr: `Invalid guide snapshot (${parsed.error.path}): ${parsed.error.message}\n` };
-    snapshot = parsed.value;
+    if (!built.ok) return { ok: false, result: { code: 1, stderr: `${built.error}\n` } };
+    return { ok: true, snapshot: built.snapshot };
   }
+  const file = resolve(cwd, args.snapshot!);
+  if (!existsSync(file)) return { ok: false, result: { code: 1, stderr: `Snapshot file not found: ${file}\n` } };
+  const parsed = parseGuideSnapshotJson(readFileSync(file, "utf-8"));
+  if (!parsed.ok) return { ok: false, result: { code: 1, stderr: `Invalid guide snapshot (${parsed.error.path}): ${parsed.error.message}\n` } };
+  return { ok: true, snapshot: parsed.value };
+}
+
+export function runGuideExport(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: GuideCliIo = {}): GuideCliResult {
+  const outOpt = takeOption(argv, "--out");
+  if ("error" in outOpt) return { code: 2, stderr: `${outOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const viewerOpt = takeOption(outOpt.rest, "--viewer-url");
+  if ("error" in viewerOpt) return { code: 2, stderr: `${viewerOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const parsedSource = parseSourceArgs(viewerOpt.rest);
+  if (!parsedSource.ok) return parsedSource.result;
+  if (parsedSource.args.rest.length > 0) return { code: 2, stderr: `Unknown argument: ${parsedSource.args.rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
+  const source = loadSnapshotSource(parsedSource.args, cwd, io);
+  if (!source.ok) return source.result;
+  const { snapshot } = source;
 
   const viewer = resolveGuideViewerAssets(GUIDE_VIEWER_MANIFEST, { baseUrl: viewerOpt.value ?? env.PLANNOTATOR_GUIDE_VIEWER_URL });
   const html = createGuideHtml(snapshot, { viewer });
@@ -279,12 +359,134 @@ export function runGuideExport(argv: string[], env: NodeJS.ProcessEnv = process.
   return { code: 0, stdout: `${outPath}\n`, stderr: `Exported ${snapshot.guide.title} (${(Buffer.byteLength(html, "utf8") / 1024).toFixed(0)} KB)\n` };
 }
 
-export function runGuideCli(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: { stdin?: () => string; now?: string } = {}): GuideCliResult {
+/** `--service-url` wins over env/config, but must be an http(s) URL like the rest. */
+function resolveServiceUrl(override: string | undefined, env: NodeJS.ProcessEnv): { url: string } | { error: string } {
+  if (override !== undefined) {
+    const normalized = normalizeGuideShareUrl(override);
+    if (!normalized) return { error: `--service-url must be an http(s) URL, got ${JSON.stringify(override)}` };
+    return { url: normalized };
+  }
+  return { url: resolveGuideShareUrl(loadConfig(), env) };
+}
+
+/**
+ * `plannotator guide share`: upload the guide (encrypted unless `--public`)
+ * and print its link. The delete token is printed ONCE, on stderr, with the
+ * exact `unshare` command; a `--id` share is also recorded on the saved
+ * envelope so the in-app share menu sees the same link.
+ */
+export async function runGuideShare(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: GuideCliIo = {}): Promise<GuideCliResult> {
+  const publicFlag = takeFlag(argv, "--public");
+  const jsonFlag = takeFlag(publicFlag.rest, "--json");
+  const ttlOpt = takeOption(jsonFlag.rest, "--ttl");
+  if ("error" in ttlOpt) return { code: 2, stderr: `${ttlOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const serviceOpt = takeOption(ttlOpt.rest, "--service-url");
+  if ("error" in serviceOpt) return { code: 2, stderr: `${serviceOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  let ttlSeconds: number | undefined;
+  if (ttlOpt.value !== undefined) {
+    const parsed = parseGuideShareTtl(ttlOpt.value);
+    if (parsed === null) return { code: 2, stderr: `--ttl must be a positive duration: seconds, or 30m / 24h / 7d (got ${JSON.stringify(ttlOpt.value)}).\n\n${GUIDE_CLI_USAGE}\n` };
+    ttlSeconds = parsed;
+  }
+  const service = resolveServiceUrl(serviceOpt.value, env);
+  if ("error" in service) return { code: 2, stderr: `${service.error}\n\n${GUIDE_CLI_USAGE}\n` };
+
+  // Every argument is validated before the sharing gate so usage mistakes
+  // still read as usage (exit 2), the same as `export`.
+  const parsedSource = parseSourceArgs(serviceOpt.rest);
+  if (!parsedSource.ok) return parsedSource.result;
+  if (parsedSource.args.rest.length > 0) return { code: 2, stderr: `Unknown argument: ${parsedSource.args.rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
+
+  if (!resolveSharingEnabled(loadConfig(), env)) {
+    return { code: 1, stderr: "Sharing is disabled (PLANNOTATOR_SHARE=disabled or share: \"disabled\" in ~/.plannotator/config.json). Use `plannotator guide export` for a local file instead.\n" };
+  }
+  const source = loadSnapshotSource(parsedSource.args, cwd, io);
+  if (!source.ok) return source.result;
+  // One link per saved guide: the envelope is the only place the delete token
+  // lives, so a second upload would orphan the first on the host.
+  const existing = source.saved?.share;
+  if (existing) {
+    return {
+      code: 1,
+      stderr: [
+        `Guide ${source.saved!.id} already has a share link: ${existing.url}`,
+        `Remove it first: plannotator guide unshare ${existing.id} --token ${existing.deleteToken}`,
+        "",
+      ].join("\n"),
+    };
+  }
+
+  const mode = publicFlag.present ? "plain" : "encrypted";
+  let shared;
+  try {
+    shared = await shareGuide(source.snapshot, { serviceUrl: service.url, mode, ttlSeconds, viewer: GUIDE_VIEWER_MANIFEST, fetch: io.fetch });
+  } catch (e) {
+    if (e instanceof GuideShareError) return { code: 1, stderr: `${e.message}\n` };
+    throw e;
+  }
+  if (source.saved) {
+    updateGuideShare(source.saved.repoKey, source.saved.id, {
+      id: shared.id,
+      url: shared.url,
+      createdAt: io.now ?? new Date().toISOString(),
+      deleteToken: shared.deleteToken,
+      serviceUrl: service.url,
+    });
+  }
+
+  const kb = (shared.bytes / 1024).toFixed(0);
+  const how = mode === "encrypted" ? "encrypted, key in the link" : "public, unencrypted";
+  const expiry = shared.expiresAt ? `, expires ${shared.expiresAt}` : "";
+  const stderr = [
+    `Shared ${source.snapshot.guide.title} (${kb} KB, ${how}${expiry})`,
+    `Delete with: plannotator guide unshare ${shared.id} --token ${shared.deleteToken}`,
+    "",
+  ].join("\n");
+  if (jsonFlag.present) {
+    const record = { id: shared.id, url: shared.url, deleteToken: shared.deleteToken, ...(shared.expiresAt ? { expiresAt: shared.expiresAt } : {}) };
+    return { code: 0, stdout: `${JSON.stringify(record)}\n`, stderr };
+  }
+  return { code: 0, stdout: `${shared.url}\n`, stderr };
+}
+
+/**
+ * `plannotator guide unshare <id> --token <t>`: remove the link on the host;
+ * forget it on any saved envelope that recorded it. Without `--service-url`,
+ * a link some saved guide remembers is removed from the host it was created
+ * on, whatever the configured share URL is now.
+ */
+export async function runGuideUnshare(argv: string[], env: NodeJS.ProcessEnv = process.env, io: GuideCliIo = {}): Promise<GuideCliResult> {
+  const tokenOpt = takeOption(argv, "--token");
+  if ("error" in tokenOpt) return { code: 2, stderr: `${tokenOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const serviceOpt = takeOption(tokenOpt.rest, "--service-url");
+  if ("error" in serviceOpt) return { code: 2, stderr: `${serviceOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const [id, ...extra] = serviceOpt.rest;
+  if (!id || id.startsWith("--")) return { code: 2, stderr: `unshare needs the shared guide id.\n\n${GUIDE_CLI_USAGE}\n` };
+  if (extra.length > 0) return { code: 2, stderr: `Unknown argument: ${extra[0]}\n\n${GUIDE_CLI_USAGE}\n` };
+  if (!tokenOpt.value) return { code: 2, stderr: `unshare needs --token <deleteToken>.\n\n${GUIDE_CLI_USAGE}\n` };
+  const service = resolveServiceUrl(serviceOpt.value, env);
+  if ("error" in service) return { code: 2, stderr: `${service.error}\n\n${GUIDE_CLI_USAGE}\n` };
+  const remembered = listAllSavedGuides().filter(({ envelope }) => envelope.share?.id === id);
+  const recordedHost = serviceOpt.value === undefined ? remembered.map(({ envelope }) => savedGuideShareServiceUrl(envelope.share!)).find((u) => u) : undefined;
+
+  try {
+    await unshareGuide(id, tokenOpt.value, { serviceUrl: recordedHost ?? service.url, fetch: io.fetch });
+  } catch (e) {
+    if (e instanceof GuideShareError) return { code: 1, stderr: `${e.message}\n` };
+    throw e;
+  }
+  for (const { repoKey, id: savedId } of remembered) updateGuideShare(repoKey, savedId, null);
+  return { code: 0, stdout: "Removed\n" };
+}
+
+export async function runGuideCli(argv: string[], env: NodeJS.ProcessEnv = process.env, cwd = process.cwd(), io: GuideCliIo = {}): Promise<GuideCliResult> {
   const [sub, ...rest] = argv;
   if (sub === "list") {
     if (rest.length > 0) return { code: 2, stderr: `Unknown argument: ${rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
     return runGuideList();
   }
   if (sub === "export") return runGuideExport(rest, env, cwd, io);
+  if (sub === "share") return runGuideShare(rest, env, cwd, io);
+  if (sub === "unshare") return runGuideUnshare(rest, env, io);
   return { code: 2, stderr: `${GUIDE_CLI_USAGE}\n` };
 }

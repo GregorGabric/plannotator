@@ -1,6 +1,8 @@
 /**
  * guides.show viewer entry — mounts a portable Guided Review from the snapshot
- * embedded in the exported HTML (`#plannotator-guided-review`).
+ * embedded in the exported HTML (`#plannotator-guided-review`), or, on a hosted
+ * encrypted page (`<meta name="plannotator-guided-review-payload">`), from the
+ * ciphertext it fetches and opens with the key in the URL fragment.
  *
  * Boot order is load-bearing:
  *   1. install a settings backend BEFORE anything reads a setting (configStore
@@ -8,11 +10,14 @@
  *      so the reader's light/dark choice survives a reload; memory otherwise.
  *      Never cookies: on `file://` they either fail or leak into the reader's
  *      other pages,
- *   2. read + parse the snapshot,
+ *   2. read + parse the snapshot (embedded first; else the encrypted hosted
+ *      path — see ./hosted.tsx),
  *   3. try to prepare a worker (fetch → blob); fall back to main thread,
- *   4. render the same guide chain the review app renders.
+ *   4. render the same guide chain the review app renders. Hosted pages
+ *      (either mode) add a client-side "Download portable guide" control.
  *
  * Decision record: adr/decisions/007-portable-guided-reviews-20260815.md.
+ * Hosting contract: adr/implementation/guide-share-hosting.md (section 6).
  */
 import '@plannotator/review-editor/styles';
 import './portable.css';
@@ -29,6 +34,7 @@ import { readEmbeddedGuideSnapshot, type GuideSnapshot } from '@plannotator/core
 import { GuideSectionSkeleton, GuideViewer } from '@plannotator/guide-viewer';
 import { ReadOnlyDiffRenderer, getReadOnlyDiffRendererProps } from './ReadOnlyDiffRenderer';
 import { PortableWorkerPool, preparePortableWorkerFactory } from './portablePool';
+import { HostedDownloadButton, loadHostedEncryptedSnapshot, readHostedPage } from './hosted';
 
 // 1. Settings: localStorage if usable (private mode / disabled storage throw
 //    on access), else memory for the life of the page. Keys are namespaced so
@@ -83,14 +89,23 @@ function ErrorCard({ title, detail }: { title: string; detail: string }) {
   );
 }
 
-function App({ snapshot, workerFactory }: { snapshot: GuideSnapshot; workerFactory: (() => Worker) | null }) {
+function App({ snapshot, workerFactory, hosted }: { snapshot: GuideSnapshot; workerFactory: (() => Worker) | null; hosted: boolean }) {
+  // Only a hosted page offers the download: a downloaded file IS the export.
+  const headerActions = hosted ? (
+    <>
+      <HostedDownloadButton snapshot={snapshot} scriptUrl={import.meta.url} />
+      <ModeToggle />
+    </>
+  ) : (
+    <ModeToggle />
+  );
   const view = (
     <GuideViewer
       snapshot={snapshot}
       DiffRenderer={ReadOnlyDiffRenderer}
       getDiffRendererProps={getReadOnlyDiffRendererProps}
       sourceLine={<SourceLine snapshot={snapshot} />}
-      headerActions={<ModeToggle />}
+      headerActions={headerActions}
       className="min-h-screen bg-background text-foreground"
     />
   );
@@ -101,47 +116,83 @@ async function boot() {
   const rootEl = document.getElementById('root');
   if (!rootEl) throw new Error('portable guide: #root missing');
 
-  // 2. Snapshot. In dev (no exported document) fall back to a fixture so the
-  //    viewer can be iterated on with `vite`.
+  const page = readHostedPage(document);
+  const hosted = page.hostedUrl !== null;
+
+  // 2. Snapshot. Embedded when present (downloaded file, or a hosted plain
+  //    page); otherwise the hosted encrypted path fetches it. In dev (no
+  //    exported document) fall back to a fixture so the viewer can be
+  //    iterated on with `vite`.
   let parsed = readEmbeddedGuideSnapshot(document);
-  if (!parsed && import.meta.env.DEV) {
+  const encrypted = !parsed && page.payloadUrl !== null;
+  if (!parsed && !encrypted && import.meta.env.DEV) {
     const { FIXTURE_V1_PR } = await import('@plannotator/core/guide-format-fixtures');
     parsed = { ok: true, value: FIXTURE_V1_PR };
   }
 
-  const palette = parsed?.ok ? parsed.value.theme?.palette : undefined;
   // The exported document paints a plain fallback ground until we mount; from
   // here on the theme owns the body background.
   document.body.classList.remove('pgr-fallback-body');
   const root = createRoot(rootEl);
-  const shell = (children: React.ReactNode) => (
+  const shell = (children: React.ReactNode, palette: string | undefined) => (
     <React.StrictMode>
       {/* `system` follows the OS live (ThemeProvider watches prefers-color-scheme);
           a stored choice from the header toggle wins over it (readThemePairCookies
-          via the storage backend above). */}
-      <ThemeProvider defaultTheme="system" defaultColorTheme={palette ?? 'plannotator'}>
+          via the storage backend above). Keyed on the palette: the encrypted path
+          learns the guide's palette only after the fetch, and the provider reads
+          its default once. */}
+      <ThemeProvider key={palette ?? ''} defaultTheme="system" defaultColorTheme={palette ?? 'plannotator'}>
         <TooltipProvider delayDuration={200} skipDelayDuration={100}>{children}</TooltipProvider>
       </ThemeProvider>
     </React.StrictMode>
   );
+  const skeleton = (palette: string | undefined) =>
+    root.render(shell(<div className="min-h-screen bg-background text-foreground"><GuideSectionSkeleton /></div>, palette));
+
+  if (encrypted && page.payloadUrl) {
+    // Hosted encrypted page: the host stamped WHERE the ciphertext is; the key
+    // is ours alone (URL fragment, never sent). Skeleton while it travels.
+    skeleton(undefined);
+    const loaded = await loadHostedEncryptedSnapshot(page.payloadUrl, location.hash);
+    switch (loaded.kind) {
+      case 'missing-key':
+        root.render(shell(<ErrorCard title="This link is missing its key" detail="The key is the part of the link after #. Ask for the full link, including the fragment." />, undefined));
+        return;
+      case 'unavailable':
+        root.render(shell(<ErrorCard title="This guide is no longer available" detail={`It may have been removed or expired. (${loaded.detail})`} />, undefined));
+        return;
+      case 'wrong-key':
+        root.render(shell(<ErrorCard title="The key in this link does not open this guide" detail="The part after # is wrong or incomplete. Ask for the link again." />, undefined));
+        return;
+      case 'invalid':
+        root.render(shell(<ErrorCard title="This guide could not be opened" detail={`${loaded.path}: ${loaded.message}`} />, undefined));
+        return;
+      case 'ok':
+        parsed = { ok: true, value: loaded.snapshot };
+        break;
+    }
+  }
 
   if (!parsed) {
-    root.render(shell(<ErrorCard title="No guide found in this document" detail={`Expected a <script id="plannotator-guided-review" type="application/json"> element.`} />));
+    root.render(shell(<ErrorCard title="No guide found in this document" detail={`Expected a <script id="plannotator-guided-review" type="application/json"> element.`} />, undefined));
     return;
   }
-  if (!parsed.ok) {
-    root.render(shell(<ErrorCard title="This guide could not be opened" detail={`${parsed.error.path}: ${parsed.error.message}`} />));
+  if (parsed.ok === false) {
+    root.render(shell(<ErrorCard title="This guide could not be opened" detail={`${parsed.error.path}: ${parsed.error.message}`} />, undefined));
     return;
   }
+  const palette = parsed.value.theme?.palette;
 
   // 3. Worker (best effort). Preparing it means fetching the worker script and
   //    probing how this browser lets us construct one, so show the guide's
   //    own loading state meanwhile instead of the plain-text fallback.
-  root.render(shell(<div className="min-h-screen bg-background text-foreground"><GuideSectionSkeleton /></div>));
+  skeleton(palette);
   const workerFactory = await preparePortableWorkerFactory();
-  // 4. Render. Observable for smoke tests and support: which highlighting path this page took.
+  // 4. Render. Observable for smoke tests and support: which highlighting path
+  //    this page took, and whether it is a hosted page.
   document.documentElement.dataset.pgrHighlighter = workerFactory ? 'worker' : 'main-thread';
-  root.render(shell(<App snapshot={parsed.value} workerFactory={workerFactory} />));
+  if (hosted) document.documentElement.dataset.pgrHosted = encrypted ? 'encrypted' : 'plain';
+  root.render(shell(<App snapshot={parsed.value} workerFactory={workerFactory} hosted={hosted} />, palette));
 }
 
 void boot();

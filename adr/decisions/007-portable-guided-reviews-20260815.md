@@ -47,8 +47,16 @@ New viewer builds are uploaded to guides.show by a GitHub Actions workflow on ta
 ### D11 — Share links are out of scope
 No upload/`/g/<id>` route is built. The Share menu shows only "Download portable guide" — no disabled placeholders. The menu is expected to grow "Create share link" once guides.show can host.
 
+**Addendum (2026-08-15): built.** Share links exist now, under the contract in `adr/implementation/guide-share-hosting.md` (scope memo: `adr/research/scope-guide-share-hosting-20260815.md`). What was decided and shipped:
+
+- Encrypted by default: the uploader compresses and encrypts the snapshot with the same `@plannotator/core` primitives plan share links use, and the key lives only in the URL fragment (`#key=`), so the host holds ciphertext it cannot read and the served page decrypts in the browser. `--public` / "Allow link previews" is the opt-in that stores the snapshot unencrypted so the page can carry a title and `og:` tags.
+- No expiry by default; `ttl` is optional per share, and a host may set an operator ceiling. A one-time delete token removes a guide; Plannotator records the link and token on the saved guide (one link per guide) so the app can remove it later.
+- The service lives in `apps/guides-show` (`share/` handler + stores), served by the Worker over an R2 bucket and by a Bun self-host target with the same routes (`POST /api/g`, `GET /g/<id>`, `GET /api/g/<id>`, `DELETE /api/g/<id>`). The CLI (`plannotator guide share` / `unshare`) shares without a running Plannotator. `PLANNOTATOR_GUIDE_SHARE_URL` / `guideShareUrl` points at a self-host; `PLANNOTATOR_SHARE=disabled` turns it off.
+- Hosted pages carry a hosted meta and a client-side Download button that rebuilds the portable file, so a link never traps a guide on the host. The downloadable file still has no cap (D1); the host caps stored bodies at 25 MiB.
+- Deploying the Worker with the `guides-show-guides` bucket to production is a separate, explicit step, not part of the build.
+
 ### D12 — Not now (explicit)
-Annotations in exports; PR comment threads; share links; palettes beyond the base theme; any embed component API for the commercial platform (the platform, if it needs guides, serves the same HTML page).
+Annotations in exports; PR comment threads; palettes beyond the base theme; any embed component API for the commercial platform (the platform, if it needs guides, serves the same HTML page). Share links left this list on 2026-08-15 (see the D11 addendum). Still out: listings or accounts on guides.show, feedback submitted from a hosted page, and expiry by default.
 
 ## Consequences
 
@@ -60,6 +68,7 @@ Annotations in exports; PR comment threads; share links; palettes beyond the bas
 
 ## References
 - `adr/implementation/portable-guided-reviews.md` — implementation spec, phases, verification matrix
+- `adr/implementation/guide-share-hosting.md` — share link hosting contract (D11 addendum)
 - `adr/decisions/006-guided-review-first-class-feature-20260702-192821.md`
 - `adr/research/SPIKE-guide-diff-annotation-reuse-20260702-194831.md`
 - Branch `guided-review-html-export` (`2cf18cc3`) — salvage source

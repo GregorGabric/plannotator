@@ -7,10 +7,10 @@ import type { GuideViewerAssets } from "./guide-format";
 export const GUIDE_VIEWER_MANIFEST_VERSION = 1 as const;
 
 export const GUIDE_VIEWER_MANIFEST: Omit<GuideViewerAssets, "baseUrl"> = {
-  js: "viewer.DzFtTGOP.js",
-  css: "viewer.BJ-fOnfU.css",
-  jsIntegrity: "sha384-A2rRI7dA2sF2QTMJc20c8tYVMhFGSTmPn7gQbI3tXU97CpmmQnceM2ETbX50NO4Q",
-  cssIntegrity: "sha384-g/+sNfislS6dO08kEnjYbI3nOtVP/5yUfBt/PtehMi0Y2ZJndeWwtQtJwi+MTagW",
+  js: "viewer.C6cktr0w.js",
+  css: "viewer.CnPJebib.css",
+  jsIntegrity: "sha384-BzxEQiQ2vDjk04PTN2NXMn4Hpi4U+LBzA+gbX+UXY1nuGcuKsHyhqS71JT0oDbfB",
+  cssIntegrity: "sha384-dUTTm5EHtTlokz2EF7LWKAAPDxY3zVboluRdRiXZxvpaq1mhVXV51JRV0OR9HRoL",
   langs: {
     "abap": "chunks/abap.BdImnpbu.js",
     "actionscript-3": "chunks/actionscript-3.CoDkCxhg.js",

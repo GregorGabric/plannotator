@@ -13,7 +13,8 @@
     "deploy:viewer": "bun run build/deploy-viewer.ts",
     "export:samples": "bun run build/export-sample.ts",
     "serve:local": "bun run build/serve-local.ts",
-    "test": "bun test worker",
+    "serve": "bun run targets/bun.ts",
+    "test": "bun test worker share targets",
     "sync:manifest": "bun run build/sync-manifest.ts",
     "check:manifest": "bun run build/sync-manifest.ts --check"
   },

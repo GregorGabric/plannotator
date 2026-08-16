@@ -61,6 +61,8 @@ describe("parseGuideSnapshot rejects what it must", () => {
     ["bad source kind", (s) => (s.source.kind = "branch"), "$.source.kind"],
     ["pr without url", (s) => (s.source.pr = { number: 1 }), "$.source.pr.url"],
     ["bad platform", (s) => (s.source.pr = { url: "https://x", platform: "bitbucket" }), "$.source.pr.platform"],
+    // Rendered into an href on hosted pages: only web URLs.
+    ["pr url with a script scheme", (s) => (s.source.pr = { url: "javascript:alert(1)" }), "$.source.pr.url"],
     ["missing rawPatch", (s) => delete s.review.rawPatch, "$.review.rawPatch"],
     ["bad exportedAt", (s) => (s.exportedAt = "yesterday"), "$.exportedAt"],
   ];

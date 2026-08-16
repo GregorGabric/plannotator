@@ -86,7 +86,9 @@ import {
 } from "./claude-review";
 import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "./tour/tour-review";
 import { createGuideSession, GUIDE_EMPTY_OUTPUT_ERROR } from "./guide/guide-review";
-import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX } from "@plannotator/shared/guide-store";
+import { GuideShareError, shareGuide, unshareGuide } from "./guide/guide-share";
+import { createGuideStoreSession, loadGuide, SAVED_GUIDE_ID_PREFIX, savedGuideShareServiceUrl, updateGuideShare } from "@plannotator/shared/guide-store";
+import { resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
 import {
   buildGuideSnapshot,
   createGuideHtml,
@@ -1716,6 +1718,108 @@ export async function startReviewServer(
                 "Cache-Control": "no-store",
               },
             });
+          }
+
+          // API: Share a guide on the guide host (guide share hosting
+          // contract §7). POST uploads (encrypted unless `public`) and records
+          // the link on the saved envelope; DELETE removes it with the stored
+          // token; share-info tells the UI whether sharing is on and whether a
+          // link already exists. The mutating verbs carry the same
+          // cross-origin guard as the other state-changing endpoints: an
+          // upload publishes the diff off-machine.
+          const guideShareMatch = url.pathname.match(/^\/api\/guide\/([^/]+)\/(share|share-info)$/);
+          if (guideShareMatch && guideShareMatch[2] === "share-info" && req.method === "GET") {
+            const jobId = decodeURIComponent(guideShareMatch[1]);
+            const config = loadConfig();
+            const located = await guideStore.locateEnvelope(jobId);
+            const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+            return Response.json({
+              enabled: resolveSharingEnabled(config),
+              serviceUrl: resolveGuideShareUrl(config),
+              ...(existing ? { existing: { url: existing.url, createdAt: existing.createdAt } } : {}),
+            });
+          }
+          if (guideShareMatch && guideShareMatch[2] === "share" && (req.method === "POST" || req.method === "DELETE")) {
+            if (!callFlowInstallOriginAllowed(req.headers.get("origin"), url.host)) {
+              return Response.json({ error: "Cross-origin share requests are not allowed" }, { status: 403 });
+            }
+            const jobId = decodeURIComponent(guideShareMatch[1]);
+            const config = loadConfig();
+            const serviceUrl = resolveGuideShareUrl(config);
+            if (req.method === "POST") {
+              if (!resolveSharingEnabled(config)) return Response.json({ error: "sharing disabled" }, { status: 403 });
+              // Every body field is optional, so no body at all means the defaults.
+              let body: { public?: unknown; ttlSeconds?: unknown };
+              try {
+                const raw = await req.text();
+                const parsed: unknown = raw.trim() === "" ? {} : JSON.parse(raw);
+                if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+                body = parsed as { public?: unknown; ttlSeconds?: unknown };
+              } catch {
+                return Response.json({ error: "Invalid JSON" }, { status: 400 });
+              }
+              if (body.public !== undefined && typeof body.public !== "boolean") return Response.json({ error: "public must be a boolean" }, { status: 400 });
+              if (body.ttlSeconds !== undefined && (typeof body.ttlSeconds !== "number" || !Number.isSafeInteger(body.ttlSeconds) || body.ttlSeconds <= 0)) {
+                return Response.json({ error: "ttlSeconds must be a positive integer" }, { status: 400 });
+              }
+              // One link per guide: the envelope is the only place the delete
+              // token lives, so a second upload would orphan the first on the
+              // host. Remove the existing link before creating another.
+              const located = await guideStore.locateEnvelope(jobId);
+              const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+              if (existing) {
+                return Response.json({ error: "This guide already has a share link. Remove it before creating another.", url: existing.url }, { status: 409 });
+              }
+              const snapshot = await resolveGuideSnapshotForExport(jobId);
+              if (!snapshot) {
+                return Response.json({ error: "This guide cannot be shared: its diff was not retained." }, { status: 404 });
+              }
+              try {
+                const shared = await shareGuide(snapshot, {
+                  serviceUrl,
+                  mode: body.public === true ? "plain" : "encrypted",
+                  ...(body.ttlSeconds !== undefined ? { ttlSeconds: body.ttlSeconds } : {}),
+                  viewer: GUIDE_VIEWER_MANIFEST,
+                });
+                // `recorded` tells the client whether this Plannotator can
+                // remove the link later; without an envelope (guide history
+                // off, or an autosave that never happened) only the one-time
+                // token can.
+                const recorded = located
+                  ? updateGuideShare(located.repoKey, located.id, {
+                      id: shared.id,
+                      url: shared.url,
+                      createdAt: new Date().toISOString(),
+                      deleteToken: shared.deleteToken,
+                      serviceUrl,
+                    })
+                  : false;
+                return Response.json({ ...shared, recorded });
+              } catch (e) {
+                if (e instanceof GuideShareError) return Response.json({ error: e.message }, { status: 502 });
+                throw e;
+              }
+            }
+            // DELETE: the record is the only place the delete token lives, and
+            // it names the host the link was created on; the configured share
+            // URL may have changed since (or differ from the CLI shell that
+            // created the link), and a 404 from the wrong host would forget a
+            // link that is still live.
+            const located = await guideStore.locateEnvelope(jobId);
+            const record = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+            if (!located || !record) return Response.json({ error: "No share link for this guide" }, { status: 404 });
+            try {
+              await unshareGuide(record.id, record.deleteToken, { serviceUrl: savedGuideShareServiceUrl(record) ?? serviceUrl });
+            } catch (e) {
+              // Already gone on the host (expired or removed elsewhere): the
+              // link is dead either way, so forget it here too.
+              if (!(e instanceof GuideShareError && e.status === 404)) {
+                if (e instanceof GuideShareError) return Response.json({ error: e.message }, { status: 502 });
+                throw e;
+              }
+            }
+            updateGuideShare(located.repoKey, located.id, null);
+            return new Response(null, { status: 204 });
           }
 
           // API: List saved guides for the current repo (#1112)

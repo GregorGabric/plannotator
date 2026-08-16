@@ -61,9 +61,10 @@
  *    - Removes recognized installer-owned components across supported hosts
  *    - Preserves local data by default; `--purge` removes known local data
  *
- * 14. Guide tools (`plannotator guide list|export`):
+ * 14. Guide tools (`plannotator guide list|export|share|unshare`):
  *    - List saved Guided Reviews; export one (or a snapshot JSON) as a portable
- *      HTML file whose viewer loads from guides.show
+ *      HTML file whose viewer loads from guides.show; share one as a link on
+ *      guides.show (encrypted by default) and remove it again
  *
  * Global flags:
  *   --help             - Show top-level usage information
@@ -1521,9 +1522,12 @@ if (args[0] === "sessions") {
 
 } else if (args[0] === "guide") {
   // ============================================
-  // GUIDE TOOLS: list saved guides, export portable HTML
+  // GUIDE TOOLS: list saved guides, export portable HTML, share links
   // ============================================
-  const result = runGuideCli(args.slice(1));
+  // The guide CLI parses its own flags, and `--json` is one of them; `args`
+  // had the annotate gate flags (`--json` included) stripped above, so hand
+  // it everything after "guide" from the raw argv instead.
+  const result = await runGuideCli(rawArgs.slice(rawArgs.indexOf("guide") + 1));
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exit(result.code);

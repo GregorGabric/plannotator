@@ -8,7 +8,7 @@ Salvage source: branch `guided-review-html-export` (`2cf18cc3`), worktree `/User
 
 Share one Guided Review as a single small HTML file that renders identically to the in-app guide, with the renderer served from `guides.show`. Build the export as a pure function callable from the Plannotator UI and the CLI. Lay the foundation (format, package, domain) for shared feedback and hosted guides without building them.
 
-Non-goals (D11, D12): share links / upload, annotations or PR threads in exports, extra palettes, the standalone agent generator, an embed API for the commercial platform.
+Non-goals (D11, D12) at the time of writing: share links / upload, annotations or PR threads in exports, extra palettes, the standalone agent generator, an embed API for the commercial platform. Share links were built afterwards under their own contract, `adr/implementation/guide-share-hosting.md` (see the hosting phase in §11); the rest stays out.
 
 ## 2. Architecture
 
@@ -200,7 +200,7 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 | D8 immutable/pinned, per-need assets | deploy script refuses overwrite; HTML carries hash+integrity; only detected languages preloaded; fonts served as files |
 | D9 pure export, three callers | `toPortableHtml` has no I/O; UI + CLI both call it; `--snapshot` form works with a hand-written snapshot; `--guide/--patch` form (skill) validates an authored guide against its patch — `guide-cli.test.ts` |
 | D10 release-gated deploy | workflow triggers only on tags; `compat.test.ts` in the job |
-| D11/D12 scope | Share menu single item; no `/g` handler; no embed docs |
+| D11/D12 scope | Share menu single item; no `/g` handler; no embed docs. Superseded for share links by the D11 addendum: the menu now has Download + Create share link and `/g` is served by the share handler; still no embed docs |
 
 ## 9. Salvage from `guided-review-html-export`
 
@@ -225,7 +225,7 @@ Parity gate: existing `GuideView.test.tsx` / `GuideSectionCard.test.tsx` keep pa
 
 ## 11. Task tracker
 
-Status: implemented on branch `portable-guides` (2026-08-15); awaiting the one-time Cloudflare setup + first deploy.
+Status: implemented on branch `portable-guides` (2026-08-15); awaiting the one-time Cloudflare setup + first deploy. Share link hosting built 2026-08-15 (below); its production deploy (bucket + Worker) is also pending.
 
 - [x] Phase 0 — branch, salvage, `core/guide-format` + fixtures + compat test (33 tests)
 - [x] Phase 1 — guide chain carved into `packages/guide-viewer` behind `GuideHost`; `ReviewGuideHost` adapter; `AllFilesCodeView` `readOnly` + `enableKeyboardShortcuts`; parity gate 0/1,440,000 px vs main on the demo guide. Deviation from §4.2: the package injects the diff renderer (host contract) instead of moving `AllFilesCodeView` and its tail into the package; the CDN build imports it from review-editor and stubs annotation-only modules at resolve time (R10 package CSS build deferred — the CDN build reuses the review stylesheet).
@@ -233,3 +233,4 @@ Status: implemented on branch `portable-guides` (2026-08-15); awaiting the one-t
 - [x] Phase 3 — Worker (R2 for `/v1/`, assets for landing, `/g` + `/api` reserved), add-only R2 publish script, deterministic manifest + checked-in `packages/core/guide-viewer-manifest.ts` with sync/check, `guides-show-deploy.yml` on `v*` tags. Verified locally with `wrangler dev` + local R2. **Not yet run against Cloudflare** — needs bucket, domain, secrets (README checklist).
 - [x] Phase 4 — `GuideLaunchReview` captured in `buildCommand`, carried server-side through agent-jobs (Bun + Pi), memoized in `GuideSession`, persisted as `{id}.patch` beside the envelope; `/api/guide/:id/export` + `/export-info` on both servers; `plannotator guide list|export`; `GuideExportButton`; e2e test with a fake engine; docs.
 - [ ] Phase 5 — first tagged viewer deploy to guides.show, then export from a release binary and open on a machine without Plannotator.
+- [x] Hosting phase (guide share hosting, `adr/implementation/guide-share-hosting.md`, 2026-08-15) — built, not deployed. `apps/guides-show/share/` (pure handler + `GuideStore` interface; R2, fs, S3, memory stores) behind the Worker (`GUIDES` R2 binding, optional `RATE_LIMITER`, `MAX_TTL_SECONDS`) and the Bun self-host target (`targets/bun.ts`: `--store`, `--viewer-dir`, `--public-origin` / `--trust-proxy`, `--upload-limit`, `--max-ttl`); core `createGuideShellHtml` + hosted/payload meta + `GUIDE_SHARE_KEY_PARAM`; viewer boot for the hosted encrypted path (fragment key, fetch, decrypt, error cards) and the client-side Download button on hosted pages; `packages/server/guide/guide-share.ts` (`shareGuide` / `unshareGuide`, vendored to Pi); `resolveGuideShareUrl` (`PLANNOTATOR_GUIDE_SHARE_URL` / `guideShareUrl`); `POST|DELETE /api/guide/:jobId/share` + `/share-info` on both servers with the envelope `share` record; `plannotator guide share` / `unshare`; the Share menu + `GuideShareDialog`; `GuideViewportProvider` eager mode. Tests: `share/core/handler.test.ts`, `share/stores/stores.test.ts`, `worker/index.test.ts`, `targets/bun.test.ts`, `guide-share.test.ts`, `guide-cli.test.ts`, guide persistence on both runtimes, `GuideViewportManager.test.tsx`. Smoke against the Bun target (encrypted link renders in headless Chrome with Download present; `--public` page carries `og:title`; `unshare` then 404) done. **Not done:** creating the `guides-show-guides` bucket and deploying the Worker to guides.show; that is a separate, explicit step.

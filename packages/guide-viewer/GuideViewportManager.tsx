@@ -10,6 +10,13 @@ import React, {
 
 const MAX_MOUNTED_CODE_VIEWS = 8;
 const INITIAL_MOUNTED_CODE_VIEWS = 2;
+/**
+ * Guides with at most this many files mount every CodeView up front instead of
+ * running the outer window: the window exists to bound hundreds of shells, and
+ * for a small changeset the eviction/remount churn (and the blank shells it
+ * leaves while scrolling) costs more than the handful of CodeViews it saves.
+ */
+const GUIDE_EAGER_MOUNT_MAX_FILES_LIMIT = 15;
 const OUTER_OVERSCAN_PX = 1_200;
 const FAST_SCROLL_VELOCITY_PX_PER_MS = 1.2;
 const SCROLL_IDLE_MS = 120;
@@ -73,12 +80,40 @@ class GuideViewportManager {
   private fastScrolling = false;
   private lastScrollTop = 0;
   private lastScrollAt = 0;
+  private eager: boolean;
+
+  constructor(eager = false) {
+    this.eager = eager;
+  }
+
+  /**
+   * Eager mode mounts every registered shell and keeps it mounted: no window,
+   * no observer, no scroll tracking. Flipping it at runtime (a refreshed diff
+   * crossing the file threshold) either mounts everything or re-arms the
+   * window machinery against the current host.
+   */
+  setEager = (eager: boolean): void => {
+    if (eager === this.eager) return;
+    this.eager = eager;
+    if (eager) {
+      this.cleanObservers();
+      this.setMounted(new Set(this.entries.keys()));
+      return;
+    }
+    const host = this.host;
+    this.host = null;
+    this.attachHost(host);
+  };
 
   attachHost = (host: HTMLElement | null): void => {
     if (host === this.host) return;
     this.cleanObservers();
     this.host = host;
     if (!host) return;
+    if (this.eager) {
+      this.setMounted(new Set(this.entries.keys()));
+      return;
+    }
 
     this.scrollRoot = findScrollRoot(host);
     this.lastScrollTop = this.readScrollTop();
@@ -126,6 +161,10 @@ class GuideViewportManager {
     const near = typeof IntersectionObserver === 'undefined';
     this.entries.set(id, { element, near });
     this.elementIds.set(element, id);
+    if (this.eager) {
+      this.setMounted(new Set([...this.mounted, id]));
+      return;
+    }
     this.observer?.observe(element);
 
     // Avoid a blank first paint before IntersectionObserver's first delivery.
@@ -154,6 +193,13 @@ class GuideViewportManager {
 
   setPinned = (id: string, pinned: boolean): void => {
     if (pinned === this.pinned.has(id)) return;
+    if (this.eager) {
+      // Everything registered is already mounted; only track the pin so a later
+      // switch back to the window keeps the focused file alive.
+      if (pinned) this.pinned.add(id);
+      else this.pinned.delete(id);
+      return;
+    }
     if (!pinned) {
       this.pinned.delete(id);
       this.scheduleReconcile();
@@ -171,6 +217,10 @@ class GuideViewportManager {
   };
 
   requestMount = (id: string): void => {
+    if (this.eager) {
+      if (this.entries.has(id) && !this.mounted.has(id)) this.setMounted(new Set([...this.mounted, id]));
+      return;
+    }
     this.forcedId = id;
     const next = new Set(this.mounted);
     next.add(id);
@@ -233,6 +283,10 @@ class GuideViewportManager {
   }
 
   private reconcile(): void {
+    if (this.eager) {
+      this.setMounted(new Set(this.entries.keys()));
+      return;
+    }
     const rootRect = this.getRootRect();
     const candidates = [...this.entries.entries()]
       .filter(([id, entry]) => entry.near || id === this.forcedId || this.pinned.has(id))
@@ -331,11 +385,17 @@ const GuideViewportContext = createContext<GuideViewportManager | null>(null);
 export function GuideViewportProvider({
   children,
   className,
+  eager = false,
 }: {
   children: ReactNode;
   className?: string;
+  /** Mount every registered shell immediately and keep it mounted (small guides). */
+  eager?: boolean;
 }) {
-  const [manager] = useState(() => new GuideViewportManager());
+  const [manager] = useState(() => new GuideViewportManager(eager));
+  useEffect(() => {
+    manager.setEager(eager);
+  }, [manager, eager]);
   return (
     <GuideViewportContext.Provider value={manager}>
       <div ref={manager.attachHost} className={className}>
@@ -370,3 +430,4 @@ export function useGuideFileWindow(id: string, pinned = false): {
 }
 
 export const GUIDE_MAX_MOUNTED_CODE_VIEWS = MAX_MOUNTED_CODE_VIEWS;
+export const GUIDE_EAGER_MOUNT_MAX_FILES = GUIDE_EAGER_MOUNT_MAX_FILES_LIMIT;

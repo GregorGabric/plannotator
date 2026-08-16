@@ -150,6 +150,8 @@ export function formatTopLevelHelp(): string {
     "  plannotator archive",
     "  plannotator guide list",
     "  plannotator guide export --id <savedGuideId> | --guide <guide.json> --patch <diff.patch> | --snapshot <snapshot.json> [--out <file.html>]",
+    "  plannotator guide share --id <savedGuideId> | --guide <guide.json> --patch <diff.patch> | --snapshot <snapshot.json> [--public] [--ttl <7d>] [--json]",
+    "  plannotator guide unshare <id> --token <deleteToken>",
     "  plannotator sessions",
     "  plannotator uninstall [--purge] [--yes] [--dry-run]",
     "  plannotator improve-context",

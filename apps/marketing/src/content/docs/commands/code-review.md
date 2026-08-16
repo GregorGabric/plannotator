@@ -188,6 +188,8 @@ Open it with the **Guide** button in the review header (or `Mod+Shift+G`), pick 
 
 The same export is available from the command line — `plannotator guide list` shows saved guides, `plannotator guide export --id <id>` writes the HTML — and `plannotator guide export --guide guide.json --patch guide.patch` wraps a guide an agent wrote itself (the standalone `plannotator-guide` skill; see [portable guide format](/docs/reference/portable-guides/)). Guides generated before this feature have no retained diff and are not exportable.
 
+**Create share link** (in the same Share menu, or `plannotator guide share`) uploads the guide and its diff once to guides.show and gives you a link instead of a file; the upload is encrypted by default with the key carried only in the link, and the one-time delete token (or **Remove link**) takes it down. See [share links](/docs/reference/portable-guides/#share-links).
+
 ## How review agents prompt the CLI
 
 The review agents (Claude, Codex, Code Tour, Guided Review) shell out to external CLIs — Claude and Codex natively, plus Cursor, OpenCode, Pi, and GitHub Copilot CLI as additional engines for review and guide jobs. Plannotator controls the user message and output schema; the CLI's own harness owns the system prompt. See the [Prompts reference](/docs/reference/prompts/) for the full breakdown of what each provider sends, how the pieces join, and which knobs you can tune per job.
@@ -251,6 +253,7 @@ Runtime keys use Plannotator's runtime identifiers. For code review, the current
 | `/api/agents/jobs` | GET/POST/DELETE | Manage agent jobs (review, Code Tour, Guided Review) |
 | `/api/guide/:jobId` | GET | Fetch a completed Guided Review (sections, summaries, file refs) |
 | `/api/guide/:jobId/export` | GET | Download a guide (live id or `saved:{id}`) as one portable HTML file; `/export-info` returns its size and languages |
+| `/api/guide/:jobId/share` | POST/DELETE | Create a share link for a guide on the guide host (`{ public?, ttlSeconds? }`; encrypted unless `public`) or remove the recorded one; `/share-info` reports whether sharing is enabled, the host, and an existing link |
 | `/api/guide/:jobId/reviewed` | PUT | Persist per-section reviewed state |
 | `/api/code-nav/resolve` | POST | Find symbol definitions/references for code navigation |
 | `/api/code-nav/file` | GET | Read a working-tree file for code-nav preview |

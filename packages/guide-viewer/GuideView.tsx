@@ -4,7 +4,7 @@ import type { DiffFile } from './types';
 import { useGuideHost } from './host';
 import { renderInlineMarkdown } from './renderInlineMarkdown';
 import { GuideSectionCard } from './GuideSectionCard';
-import { GuideViewportProvider } from './GuideViewportManager';
+import { GUIDE_EAGER_MOUNT_MAX_FILES, GuideViewportProvider } from './GuideViewportManager';
 
 interface GuideViewProps {
   guide: CodeGuideData;
@@ -131,7 +131,7 @@ export const GuideView: React.FC<GuideViewProps> = ({
   );
 
   return (
-    <GuideViewportProvider className="w-full px-10 py-8">
+    <GuideViewportProvider className="w-full px-10 py-8" eager={host.files.length <= GUIDE_EAGER_MOUNT_MAX_FILES}>
       {headerActions && <div className="float-right ml-6 flex items-center gap-2">{headerActions}</div>}
       <div className="max-w-[72ch]">
         <h1 className="text-[22px] font-semibold tracking-tight text-foreground [text-wrap:balance]">{guide.title}</h1>

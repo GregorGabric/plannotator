@@ -1,6 +1,6 @@
 ---
 title: "Portable guides"
-description: "The portable Guided Review file: what is in it, how it renders from guides.show, and the snapshot format agents and tools can produce."
+description: "The portable Guided Review file: what is in it, how it renders from guides.show, share links, and the snapshot format agents and tools can produce."
 sidebar:
   order: 34
 section: "Reference"
@@ -26,6 +26,26 @@ The file's size is roughly the size of the diff. There is no cap: a huge diff ma
 - From anything else: write a complete snapshot document (below) and run `plannotator guide export --snapshot snapshot.json`.
 
 `PLANNOTATOR_GUIDE_VIEWER_URL` (or `--viewer-url`) points exports at a self-hosted or local viewer build; it must be `https:` (or `http://localhost`).
+
+## Share links
+
+A share link is the same guide and diff, uploaded once to a guide host and opened as a web page instead of a downloaded file: `https://guides.show/g/<id>`. The id is 22 random characters, so the link is unlisted; anyone who has it can open the guide. Links have no expiry unless you set one.
+
+Two ways to store the guide on the host:
+
+- **Encrypted (default).** The guide is compressed and encrypted before upload, and the key is appended to the link after `#` (`#key=...`). Browsers never send the fragment to the server, so the host only ever holds ciphertext it cannot read; the page it serves is a small shell that fetches the ciphertext and decrypts it in your browser. Send the whole link, including the part after `#`: without it the page says the link is missing its key. Chat apps cannot show a preview of an encrypted guide.
+- **Public.** With `--public` (CLI) or **Allow link previews** (dialog) the guide is stored unencrypted, so the page carries the guide's title and `og:` tags and chat apps can unfurl it. Use it when a preview matters more than keeping the code off the host.
+
+Every share returns a **delete token**, shown exactly once. It is the only thing that removes the guide from the host: `plannotator guide unshare <id> --token <token>`. Plannotator also records the link and token on the saved guide, so a guide shared from the app (or with `--id`) offers **Remove link** in the same dialog later, and a guide keeps at most one link at a time (remove it before creating another). A guide shared without a saved copy (guide history off, or `--guide`/`--snapshot`) can only be removed with the token, so keep it.
+
+Producing a link:
+
+- In Plannotator: open a guide, then **Create share link** in the Share menu (top right). The dialog shows what will be uploaded and its size, the encrypted default with the preview checkbox, and after Create the URL and the delete token, each with Copy. Nothing is uploaded until you click Create.
+- From the terminal: `plannotator guide share --id <id>`, `--guide guide.json --patch guide.patch`, or `--snapshot snapshot.json`, with `--public`, `--ttl <7d | 24h | 30m | 3600>` (remove the link automatically after this long), `--service-url <url>`, and `--json` (`{ id, url, deleteToken, expiresAt? }`). The URL prints on stdout; the size and the exact `unshare` command print on stderr.
+
+Hosted pages carry a **Download** button that builds the portable HTML file in your browser, so anyone with the link can keep a copy that works offline. Downloaded files never contain the hosted page's metadata.
+
+The hosted service is guides.show, and it holds guides at most 25 MiB in size. You can run the same service yourself: `apps/guides-show` in the Plannotator repository ships a Cloudflare Worker and a single-process Bun target with the same routes (`POST /api/g`, `GET /g/<id>`, `GET /api/g/<id>`, `DELETE /api/g/<id>`), with filesystem, S3-compatible or R2 storage, a per-address upload limit and a maximum lifetime knob for hosts on the open network. Point Plannotator at it with `PLANNOTATOR_GUIDE_SHARE_URL=https://guides.example.com` (or `"guideShareUrl"` in `~/.plannotator/config.json`; `--service-url` overrides per invocation) and, for downloaded files, `PLANNOTATOR_GUIDE_VIEWER_URL=https://guides.example.com/v1/`. `PLANNOTATOR_SHARE=disabled` turns share links off entirely: the menu item disappears and the CLI refuses. The full recipe is in the `apps/guides-show` README under "Self-hosting".
 
 ## Snapshot format (v1)
 
@@ -57,4 +77,4 @@ Every `diffs[].file` and `unplacedFiles[]` entry should name a file present in `
 
 ## guides.show
 
-`guides.show/v1/…` hosts viewer builds. Files there are content-hashed and never changed or removed; each exported HTML names the exact `viewer.<hash>.js` and `.css` it was made with (with integrity hashes), and preloads only the syntax grammars its diff needs. Nothing about your guide is sent to `guides.show` — the page only fetches the viewer, fonts, and grammars.
+`guides.show/v1/…` hosts viewer builds. Files there are content-hashed and never changed or removed; each exported HTML names the exact `viewer.<hash>.js` and `.css` it was made with (with integrity hashes), and preloads only the syntax grammars its diff needs. An exported file sends nothing about your guide to `guides.show`; the page only fetches the viewer, fonts, and grammars. Only a share link (above) uploads a guide, and by default it uploads ciphertext.

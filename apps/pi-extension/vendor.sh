@@ -8,7 +8,7 @@ rm -rf generated
 mkdir -p generated generated/ai/providers
 
 # Modules that MOVED to @plannotator/core — vendor the real impl from core.
-for f in feedback-templates project favicon code-file annotatable external-annotation agent-jobs agent-terminal source-save open-in-apps diff-paths guide guide-format guide-viewer-manifest; do
+for f in feedback-templates project favicon code-file annotatable external-annotation agent-jobs agent-terminal source-save open-in-apps diff-paths guide guide-format guide-viewer-manifest compress crypto; do
   src="../../packages/core/$f.ts"
   printf '// @generated — DO NOT EDIT. Source: packages/core/%s.ts\n' "$f" | cat - "$src" > "generated/$f.ts"
 done
@@ -91,6 +91,19 @@ for f in guide-review; do
     | sed 's|from "@plannotator/shared/guide"|from "./guide.ts"|' \
     | sed 's|from "@plannotator/shared/guide-format"|from "./guide-format.ts"|' \
     | sed 's|from "@plannotator/shared/data-dir"|from "./data-dir.ts"|' \
+    > "generated/$f.ts"
+done
+
+# guide-share lives in packages/server/guide/ too — the producer half of the
+# guide share hosting contract. Pure Web-API code (fetch, CompressionStream,
+# crypto.subtle) over the shared compress/crypto/guide-format modules, all of
+# which are vendored flat above.
+for f in guide-share; do
+  src="../../packages/server/guide/$f.ts"
+  printf '// @generated — DO NOT EDIT. Source: packages/server/guide/%s.ts\n' "$f" | cat - "$src" \
+    | sed 's|from "@plannotator/shared/compress"|from "./compress.ts"|' \
+    | sed 's|from "@plannotator/shared/crypto"|from "./crypto.ts"|' \
+    | sed 's|from "@plannotator/shared/guide-format"|from "./guide-format.ts"|' \
     > "generated/$f.ts"
 done
 

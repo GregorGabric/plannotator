@@ -20,6 +20,8 @@ import {
   listAllSavedGuides,
   loadGuidePatch,
   saveGuidePatch,
+  updateGuideShare,
+  savedGuideShareServiceUrl,
   type SavedGuideEnvelope,
 } from "./guide-store";
 import type { GuideLaunchReview } from "@plannotator/core/guide-format";
@@ -489,5 +491,60 @@ describe("portable export: the launch review persisted beside the guide", () => 
     expect(findSavedGuideById("3000-none")).toBeNull();
     expect(findSavedGuideById("../escape")).toBeNull();
     expect(listAllSavedGuides().map((g) => g.id)).toEqual(["2000-two", "1000-one"]);
+  });
+});
+
+describe("share record: a saved guide remembers its link", () => {
+  const SHARE = { id: "AbC123_-xyz", url: "https://guides.show/g/AbC123_-xyz#key=k", createdAt: "2026-08-15T00:00:00.000Z", deleteToken: "tok", serviceUrl: "https://guides.show" };
+
+  test("updateGuideShare records, round-trips, and clears the link; the rest of the envelope is untouched", () => {
+    saveGuide(REPO_KEY, "1000-x", envelope({ reviewed: [true, false] }));
+    expect(updateGuideShare(REPO_KEY, "1000-x", SHARE)).toBe(true);
+    const shared = loadGuide(REPO_KEY, "1000-x")!;
+    expect(shared.share).toEqual(SHARE);
+    expect(shared.reviewed).toEqual([true, false]);
+    expect(shared.title).toBe(GUIDE.title);
+    expect(updateGuideShare(REPO_KEY, "1000-x", null)).toBe(true);
+    const cleared = loadGuide(REPO_KEY, "1000-x")!;
+    expect(cleared.share).toBeUndefined();
+    expect("share" in cleared).toBe(false);
+    expect(updateGuideShare(REPO_KEY, "9999-missing", SHARE)).toBe(false);
+  });
+
+  test("removal targets the host the link was created on: the recorded serviceUrl, else the link's origin", () => {
+    expect(savedGuideShareServiceUrl(SHARE)).toBe("https://guides.show");
+    // A record from before serviceUrl existed still points at its own host, never at whatever is configured now.
+    const { serviceUrl: _omitted, ...legacy } = SHARE;
+    expect(savedGuideShareServiceUrl({ ...legacy, url: "https://self.example:8788/g/AbC123_-xyz#key=k" })).toBe("https://self.example:8788");
+    expect(savedGuideShareServiceUrl({ ...legacy, url: "not a url" })).toBeNull();
+    saveGuide(REPO_KEY, "1000-x", envelope({ share: legacy }));
+    expect(loadGuide(REPO_KEY, "1000-x")!.share).toEqual(legacy);
+  });
+
+  test("a malformed share record loads as no link instead of a half record", () => {
+    saveGuide(REPO_KEY, "1000-x", envelope({ share: { id: "x", url: "https://guides.show/g/x" } as unknown as SavedGuideEnvelope["share"] }));
+    expect(loadGuide(REPO_KEY, "1000-x")!.share).toBeUndefined();
+  });
+
+  test("locateEnvelope resolves saved: ids on this shelf and autosaved live jobs, null otherwise", async () => {
+    const s = createGuideStoreSession({
+      runGit: async (args) => (args[0] === "remote" ? "git@github.com:acme/widgets.git\n" : null),
+      getGitCwd: () => "/repo",
+      getPRInfo: () => null,
+      getBranchLabel: () => "feature/locales",
+      getFallbackDir: () => "/repo",
+      writesEnabled: () => true,
+    });
+    saveGuide(REPO_KEY, "1000-x", envelope());
+    expect(await s.locateEnvelope("saved:1000-x")).toEqual({ repoKey: REPO_KEY, id: "1000-x" });
+    expect(await s.locateEnvelope("saved:2000-missing")).toBeNull();
+    expect(await s.locateEnvelope("job-1")).toBeNull();
+    await s.saveForJob({ id: "job-1" }, { ...GUIDE });
+    const located = await s.locateEnvelope("job-1");
+    expect(located?.repoKey).toBe(REPO_KEY);
+    expect(loadGuide(REPO_KEY, located!.id)).not.toBeNull();
+    // A job's autosave that was deleted from disk no longer locates.
+    deleteGuide(REPO_KEY, located!.id);
+    expect(await s.locateEnvelope("job-1")).toBeNull();
   });
 });
