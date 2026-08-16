@@ -31,8 +31,14 @@ export interface Env {
   GUIDE_CREATE_LIMITER?: RateLimit;
 }
 
-/** The `simple.period` the `[[ratelimits]]` block declares, echoed to the client as `Retry-After`. */
-export const GUIDE_CREATE_RATE_LIMIT_PERIOD_SECONDS = 60;
+/**
+ * The `simple.period` the `[[ratelimits]]` block declares, echoed to the client
+ * as `Retry-After`. Not exported: workerd rejects any named export from the
+ * entry module that is not a function or handler ("Incorrect type for map
+ * entry"), and the runtime refuses to start — `wrangler deploy --dry-run` does
+ * not catch that, only running the Worker does.
+ */
+const GUIDE_CREATE_RATE_LIMIT_PERIOD_SECONDS = 60;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',

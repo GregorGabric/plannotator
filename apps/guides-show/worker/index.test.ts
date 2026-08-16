@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { GUIDE_VIEWER_MANIFEST } from '@plannotator/core/guide-viewer-manifest';
 import { FIXTURE_V1_LOCAL } from '@plannotator/core/guide-format-fixtures';
 import { GUIDE_PAYLOAD_META_NAME } from '@plannotator/core/guide-format';
-import worker, { GUIDE_CREATE_RATE_LIMIT_PERIOD_SECONDS, viewerAssetHeaders, viewerKeyFromPath, type Env } from './index';
+import worker, { viewerAssetHeaders, viewerKeyFromPath, type Env } from './index';
 
 /** Enough of R2Bucket for both bindings: /v1 reads (head/get with body) and the guide store (put/get text/delete). */
 class FakeBucket {
@@ -141,7 +141,8 @@ describe('guides.show worker: shared guides', () => {
     expect((await create()).status).toBe(201);
     const refused = await create();
     expect(refused.status).toBe(429);
-    expect(refused.headers.get('Retry-After')).toBe(String(GUIDE_CREATE_RATE_LIMIT_PERIOD_SECONDS));
+    // 60 = the `simple.period` wrangler.toml declares for the limiter.
+    expect(refused.headers.get('Retry-After')).toBe('60');
     // The uploader is a cross-origin client like any other caller of /api/g.
     expect(refused.headers.get('Access-Control-Allow-Origin')).toBe('*');
     // Keyed by the caller, not globally: a different IP still has its budget.

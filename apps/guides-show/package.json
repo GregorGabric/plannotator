@@ -8,7 +8,7 @@
     "dev": "vite --config vite.viewer.config.ts",
     "build:viewer": "vite build --config vite.viewer.config.ts",
     "check:budgets": "bun run build/check-budgets.ts",
-    "dev:worker": "wrangler dev",
+    "dev:worker": "wrangler dev --local --host localhost:8787 --port 8787",
     "deploy:worker": "wrangler deploy",
     "deploy:viewer": "bun run build/deploy-viewer.ts",
     "export:samples": "bun run build/export-sample.ts",

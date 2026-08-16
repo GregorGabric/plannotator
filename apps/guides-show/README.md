@@ -21,7 +21,7 @@ bun run --cwd apps/guides-show export:samples -- --base http://localhost:8787/v1
 open apps/guides-show/dist/samples-local/*.html      # opens from file://, loads the local "CDN"
 ```
 
-Or through the real Worker: `bun run deploy:viewer -- --local` (seeds local R2) then `bun run dev:worker` and export against `http://localhost:8787/v1/`.
+Or through the real Worker: `bun run deploy:viewer -- --local` (seeds local R2) then `bun run dev:worker` and export against `http://localhost:8787/v1/`. `dev:worker` passes `--host localhost:8787` so the URLs the Worker builds from the request (share links, the viewer pin on hosted pages) carry the port; without it wrangler presents the host as bare `localhost` and every link it hands out points at port 80.
 
 `bun run test` runs the worker, share and viewer tests; `bun run typecheck` checks the Worker, share handler and build scripts (strict, `tsconfig.json`). `typecheck:viewer` (`tsconfig.viewer.json`) covers the React viewer, whose own files are clean but which imports `@plannotator/review-editor` and inherits its pre-existing type errors, so it is not a gate.
 
