@@ -336,15 +336,22 @@ describe("guide subcommand through the entrypoint", () => {
   // the JSON record the guide CLI owns rather than the bare URL.
   //
   // The entrypoint imports the built app HTML (`../dist/*.html`) at module
-  // load, so this only runs where the hook has been built (`bun run
-  // build:hook`); the CI test job does not build it.
-  const entryHtmlBuilt = existsSync(resolve(import.meta.dir, "../dist/index.html")) && existsSync(resolve(import.meta.dir, "../dist/review.html"));
-  test.skipIf(!entryHtmlBuilt)("guide share --json prints the JSON record, wherever --json sits", async () => {
-    const { mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
+  // load, so it will not even start without those files, and the CI test job
+  // does not run `bun run build:hook`. The guide subcommand never serves them,
+  // so the test stands in placeholders for whichever one is missing and removes
+  // exactly those again afterwards; a real build is left alone.
+  test("guide share --json prints the JSON record, wherever --json sits", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
     const { FIXTURE_V1_PR } = await import("@plannotator/shared/guide-format-fixtures");
     const workDir = mkdtempSync(join(tmpdir(), "plannotator-guide-entry-"));
+    const distDir = resolve(import.meta.dir, "../dist");
+    const stubbed = ["index.html", "review.html"].map((name) => join(distDir, name)).filter((path) => !existsSync(path));
+    if (stubbed.length > 0) {
+      mkdirSync(distDir, { recursive: true });
+      for (const path of stubbed) writeFileSync(path, "<!doctype html><title>test stub</title>");
+    }
     const host = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -377,6 +384,7 @@ describe("guide subcommand through the entrypoint", () => {
     } finally {
       host.stop(true);
       rmSync(workDir, { recursive: true, force: true });
+      for (const path of stubbed) rmSync(path, { force: true });
     }
   }, 30_000);
 });
