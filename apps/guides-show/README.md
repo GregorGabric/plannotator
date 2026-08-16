@@ -44,7 +44,7 @@ bun run build:viewer && bun run deploy:viewer     # add-only upload of dist/view
 wrangler deploy
 ```
 
-Uploads are anonymous by design (the encrypted default means the host cannot read them); the only brake is the size cap (25 MiB per guide), the same as Plannotator's paste service. Guides stay until whoever shared them removes them, unless the upload asked for a `ttlSeconds`.
+Uploads are anonymous by design (the encrypted default means the host cannot read them); the only brake in code is the size cap (25 MiB per guide). Guides stay until whoever shared them removes them, unless the upload asked for a `ttlSeconds`, and expiry is enforced on read: an expired guide is deleted the next time any route touches it, so one nobody opens stays in the bucket until then. If you want a brake beyond the cap, add a Cloudflare WAF rate-limiting rule on `POST /api/g` in your account; the Worker needs no change.
 
 ### Pointing Plannotator at your host
 

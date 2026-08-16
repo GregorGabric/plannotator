@@ -53,7 +53,7 @@ Stores: `stores/r2.ts` (objects `g/<id>` body + `g/<id>.meta` JSON; the meta obj
 | `OPTIONS /api/g*` | — | CORS preflight (`*`, `POST, GET, DELETE, OPTIONS`, `Content-Type, Authorization`). |
 | `GET /healthz` | — | unchanged. |
 
-No rate limiting and no operator lifetime ceiling: like Plannotator's paste service, the only brake on anonymous uploads is the size cap. Expiry is per upload (`ttlSeconds`), never imposed by the host.
+No rate limiting and no operator lifetime ceiling in code: the only brake on anonymous uploads is the size cap. (Plannotator's paste service is the precedent for anonymous, unauthenticated uploads, but its guards are stricter — 5 MB and a 7-day TTL; a review link that dies in a week is a worse product than a file, so guides keep by default.) Expiry is per upload (`ttlSeconds`), never imposed by the host, and it is enforced on read: an expired guide is deleted the next time any route touches it, so an expired guide nobody opens stays in the bucket. An operator who wants a brake beyond the cap adds a Cloudflare WAF rate-limiting rule on `POST /api/g` — configuration, not code.
 
 Store failures answer `500 { error: 'internal error' }` (API) or the styled error page; the store's own message is logged host-side (`GuideShareContext.logError`, default `console.error`) and never returned. Error pages name the serving host (`url.host`), not guides.show, and reuse core's exported `FALLBACK_STYLE` (`.pgr-fallback`).
 

@@ -334,7 +334,9 @@ function bad(message: string): Response {
 function htmlPage(html: string | null, status: number, headers: Record<string, string> = {}): Response {
   return new Response(html, {
     status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff', ...headers },
+    // A plain guide's id is the whole capability; never let a click on the
+    // guide's PR link (or any outbound link) hand it to a third party as Referer.
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', ...headers },
   });
 }
 

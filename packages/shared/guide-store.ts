@@ -202,7 +202,20 @@ function coerceReviewed(value: unknown, sectionCount: number): boolean[] {
   return out;
 }
 
-/** Minimal shape check — anything that fails loads as "no saved guide". */
+/** Top-level envelope keys this version reads. Anything else is carried through untouched (see `parseEnvelope`). */
+const KNOWN_ENVELOPE_KEYS = new Set<string>([
+  "version", "savedAt", "label", "title", "engine", "model", "headSha", "prUrl", "generatedAt",
+  "customInstructions", "review", "share", "guide", "reviewed",
+]);
+
+/**
+ * Minimal shape check — anything that fails loads as "no saved guide".
+ * Top-level keys this version does not know are passed through rather than
+ * dropped: every write rebuilds the file from the parsed envelope, so a
+ * binary that skews behind the one that wrote the file must not destroy
+ * data it cannot read — the `share` record is the only copy of a link's
+ * delete token, and losing it strands a published diff.
+ */
 function parseEnvelope(raw: string): SavedGuideEnvelope | null {
   let parsed: unknown;
   try {
@@ -220,7 +233,12 @@ function parseEnvelope(raw: string): SavedGuideEnvelope | null {
   const sectionCount = guide.sections.length;
   const review = parseSavedReview(obj.review);
   const share = parseSavedShare(obj.share);
+  const unknown: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (!KNOWN_ENVELOPE_KEYS.has(key)) unknown[key] = value;
+  }
   return {
+    ...unknown,
     version: 1,
     savedAt: typeof obj.savedAt === "number" ? obj.savedAt : 0,
     label: typeof obj.label === "string" ? obj.label : "",

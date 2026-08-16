@@ -89,6 +89,14 @@ async function describeHttpError(res: Response, verb: string): Promise<GuideShar
   return new GuideShareError(`Could not ${verb} the guide: ${detail}`, res.status);
 }
 
+/**
+ * Upper bound on one round trip to the guide host. Uploads carry the whole
+ * (compressed) guide, so this is generous; it exists so a blackholing proxy or
+ * an offline machine turns into a clear error rather than a hung request —
+ * `DELETE /api/guides/:id` awaits the unshare before the local delete.
+ */
+export const GUIDE_SHARE_REQUEST_TIMEOUT_MS = 60_000;
+
 async function callService(
   doFetch: typeof fetch,
   serviceUrl: string,
@@ -98,9 +106,9 @@ async function callService(
 ): Promise<Response> {
   const target = `${serviceUrl}${path}`;
   try {
-    return await doFetch(target, init);
+    return await doFetch(target, { ...init, signal: init.signal ?? AbortSignal.timeout(GUIDE_SHARE_REQUEST_TIMEOUT_MS) });
   } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
+    const reason = e instanceof Error ? (e.name === "TimeoutError" ? `no response within ${GUIDE_SHARE_REQUEST_TIMEOUT_MS / 1000}s` : e.message) : String(e);
     throw new GuideShareError(`Guide share service unreachable at ${serviceUrl}: ${reason}`);
   }
 }

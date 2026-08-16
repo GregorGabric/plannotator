@@ -16,7 +16,7 @@ const INITIAL_MOUNTED_CODE_VIEWS = 2;
  * for a small changeset the eviction/remount churn (and the blank shells it
  * leaves while scrolling) costs more than the handful of CodeViews it saves.
  */
-const GUIDE_EAGER_MOUNT_MAX_FILES_LIMIT = 15;
+export const GUIDE_EAGER_MOUNT_MAX_FILES = 15;
 const OUTER_OVERSCAN_PX = 1_200;
 const FAST_SCROLL_VELOCITY_PX_PER_MS = 1.2;
 const SCROLL_IDLE_MS = 120;
@@ -430,4 +430,3 @@ export function useGuideFileWindow(id: string, pinned = false): {
 }
 
 export const GUIDE_MAX_MOUNTED_CODE_VIEWS = MAX_MOUNTED_CODE_VIEWS;
-export const GUIDE_EAGER_MOUNT_MAX_FILES = GUIDE_EAGER_MOUNT_MAX_FILES_LIMIT;

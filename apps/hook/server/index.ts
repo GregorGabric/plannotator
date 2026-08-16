@@ -1527,7 +1527,7 @@ if (args[0] === "sessions") {
   // The guide CLI parses its own flags, and `--json` is one of them; `args`
   // had the annotate gate flags (`--json` included) stripped above, so hand
   // it everything after "guide" from the raw argv instead.
-  const result = await runGuideCli(rawArgs.slice(rawArgs.indexOf("guide") + 1));
+  const result = await runGuideCli(rawArgs.slice(rawArgs.indexOf("guide") + 1), process.env, process.env.PLANNOTATOR_CWD || process.cwd());
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exit(result.code);

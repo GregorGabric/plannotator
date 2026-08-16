@@ -130,6 +130,18 @@ describe("save / load / list / delete", () => {
     expect(loaded!.reviewed).toEqual([false, false]);
   });
 
+  test("top-level keys this version does not know survive a rewrite", () => {
+    // Forward compatibility across version skew: a newer binary may add a
+    // top-level record this one cannot read (the way `share` was added, whose
+    // only copy of the delete token would otherwise be destroyed by any
+    // reviewed-state write from an older binary).
+    saveGuide(REPO_KEY, "1000-test", { ...envelope(), futureRecord: { token: "keep-me" } } as never);
+    expect(updateGuideReviewed(REPO_KEY, "1000-test", [true, false])).toBe(true);
+    const raw = JSON.parse(readFileSync(join(dataDir, "guides", REPO_KEY, "1000-test.json"), "utf-8"));
+    expect(raw.futureRecord).toEqual({ token: "keep-me" });
+    expect(raw.reviewed).toEqual([true, false]);
+  });
+
   test("atomic write leaves no .tmp file behind", () => {
     saveGuide(REPO_KEY, "1000-test", envelope());
     const files = readdirSync(join(dataDir, "guides", REPO_KEY));

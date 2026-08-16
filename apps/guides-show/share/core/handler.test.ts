@@ -141,6 +141,10 @@ describe('share handler: pages', () => {
     expect(res.headers.get('Cache-Control')).toBe('public, max-age=300');
     const html = await res.text();
     expect(html).toContain(`<meta property="og:title" content="${FIXTURE_V1_LOCAL.guide.title}">`);
+    // The id of a plain guide is the whole capability: no outbound click may leak the page URL as Referer.
+    expect(res.headers.get('Referrer-Policy')).toBe('no-referrer');
+    // og:site_name is the serving host, so a self-host does not unfurl as guides.show.
+    expect(html).toContain(`<meta property="og:site_name" content="${new URL(ORIGIN).host}">`);
     expect(html).toContain(`<meta name="${GUIDE_HOSTED_META_NAME}" content="${created.url}">`);
     expect(html).toContain(`<link rel="canonical" href="${created.url}">`);
     expect(html).not.toContain(GUIDE_PAYLOAD_META_NAME);

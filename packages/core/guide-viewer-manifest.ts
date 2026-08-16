@@ -4,12 +4,10 @@
 // exported guides (paths relative to the viewer base URL, plus SRI hashes).
 import type { GuideViewerAssets } from "./guide-format";
 
-export const GUIDE_VIEWER_MANIFEST_VERSION = 1 as const;
-
 export const GUIDE_VIEWER_MANIFEST: Omit<GuideViewerAssets, "baseUrl"> = {
-  js: "viewer.C0tJsZen.js",
+  js: "viewer.CCWV6YrF.js",
   css: "viewer.CnPJebib.css",
-  jsIntegrity: "sha384-cYBc4rJ5EJU3LCRJghWFWNPl7gTnbuct1SIsdJGx8v8jEoRBytVsaG69qq/A99j2",
+  jsIntegrity: "sha384-+QJQ4AriCrqr8btn36u+tlIFrHuyGLfgdQ2Ja7Q1a/g/NwAL3dhEAV55Q/lDkzP6",
   cssIntegrity: "sha384-dUTTm5EHtTlokz2EF7LWKAAPDxY3zVboluRdRiXZxvpaq1mhVXV51JRV0OR9HRoL",
   langs: {
     "astro": "chunks/astro.BykyiR6i.js",
