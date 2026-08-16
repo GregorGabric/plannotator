@@ -3,24 +3,132 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>guides.show</title>
-<meta name="description" content="Portable Guided Reviews from Plannotator — one small HTML file, the full diff walkthrough.">
+<title>guides.show · portable Guided Reviews</title>
+<meta name="description" content="guides.show hosts the viewer and share links for Plannotator Guided Reviews: a chaptered walkthrough of a diff as one small HTML file, or as an encrypted link.">
+<link rel="canonical" href="https://guides.show/">
+<meta name="theme-color" content="#0b0d0f">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="guides.show">
+<meta property="og:title" content="guides.show · portable Guided Reviews">
+<meta property="og:description" content="A chaptered walkthrough of a diff as one small HTML file, or as an encrypted link. Made by Plannotator or by an agent skill.">
+<meta property="og:url" content="https://guides.show/">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0d0f'/%3E%3Cpath d='M9 11h14M9 21h14' stroke='%23f85149' stroke-width='2.5' stroke-linecap='round'/%3E%3Cpath d='M16 5v22' stroke='%233fb950' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
-  :root{color-scheme:light dark;--bg:#f5f7f6;--ink:#1c2421;--muted:#5b6a64;--accent:#2b7f6c}
-  @media (prefers-color-scheme:dark){:root{--bg:#121815;--ink:#dbe4df;--muted:#93a39c;--accent:#63c8b0}}
-  html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  main{max-width:60ch;margin:14vh auto 0;padding:0 1.25rem}
-  h1{font-size:2rem;letter-spacing:-.01em;margin:0 0 .5rem}
-  p{margin:.5rem 0;color:var(--muted)}
-  a{color:var(--accent)}
-  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em}
+  @font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url(/v1/fonts/inter-latin-wght-normal.Dx4kXJAl.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+  @font-face{font-family:"Geist Mono";font-style:normal;font-weight:100 900;font-display:swap;src:url(/v1/fonts/geist-mono-latin-wght-normal.Cjtb1TV-.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+2000-206F,U+2074,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+
+  :root{
+    color-scheme:dark;
+    --bg:#0b0d0f;--surface:#0f1215;--border:#1e2429;--border-strong:#2b333b;
+    --text:#a9b3bc;--heading:#f1f4f6;--muted:#6b7681;
+    --add:#3fb950;--add-bg:rgba(63,185,80,.09);--del:#f85149;--del-bg:rgba(248,81,73,.09);
+    --sans:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:"Geist Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 var(--sans);font-feature-settings:"cv11","ss01"}
+  main{max-width:64ch;margin:0 auto;padding:6vh 1.25rem 12vh}
+  a{color:var(--heading);text-decoration:underline;text-decoration-color:var(--border-strong);text-underline-offset:3px}
+  a:hover{text-decoration-color:var(--add)}
+  a:focus-visible{outline:1px solid var(--add);outline-offset:3px;border-radius:2px}
+  h1,h2{color:var(--heading);letter-spacing:-.01em;text-wrap:balance}
+  h1{font-size:1.65rem;font-weight:600;line-height:1.25;margin:2.5rem 0 .75rem}
+  h2{font-size:.8rem;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:3.25rem 0 .75rem}
+  p{margin:.65rem 0}
+  code,pre,kbd{font-family:var(--mono);font-size:.86em}
+  code{color:var(--heading);background:#161b20;border-radius:4px;padding:.08em .35em}
+  pre{margin:1rem 0;padding:.85rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow-x:auto;line-height:1.6}
+  pre code{background:none;border:0;padding:0;color:var(--text)}
+  pre .c{color:var(--muted)}
+  pre .k{color:var(--heading)}
+  ul{padding-left:1.1rem;margin:.65rem 0}
+  li{margin:.35rem 0}
+  li::marker{color:var(--muted)}
+
+  header{display:flex;align-items:center;gap:.6rem;font-family:var(--mono);font-size:.85rem}
+  header .name{color:var(--heading)}
+  .add{color:var(--add)}.del{color:var(--del)}
+
+  /* A guide, the way the viewer lays one out: chapters, an overview each, the files under it. */
+  figure{margin:1.75rem 0 0;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;font-size:.84rem}
+  figure .title{padding:.8rem 1rem .7rem;border-bottom:1px solid var(--border)}
+  figure .title b{display:block;color:var(--heading);font-weight:600;font-size:.95rem}
+  figure .title span{color:var(--muted)}
+  figure .ch{display:grid;grid-template-columns:3.2rem 1fr;gap:.15rem 0;padding:.7rem 1rem;border-bottom:1px solid var(--border)}
+  figure .ch:last-of-type{border-bottom:0}
+  figure .ch .n{grid-row:1/3;font-family:var(--mono);font-size:.72rem;color:var(--muted);padding-top:.15rem}
+  figure .ch h3{margin:0;font-size:.88rem;font-weight:500;color:var(--heading)}
+  figure .ch p{margin:0;color:var(--text)}
+  figure .ch .files{grid-column:2;display:flex;flex-wrap:wrap;gap:.35rem .8rem;margin-top:.35rem;font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+  figure .ch .files b{color:var(--text);font-weight:500}
+  figure .ch .files .add,figure .ch .files .del{margin-left:.35ch}
+  /* An abstract diff under a chapter: rows of bars, no code. */
+  figure .diff{grid-column:2;margin:.55rem 0 .1rem;padding:.4rem 0;border:1px solid var(--border);border-radius:5px;background:var(--bg)}
+  figure .diff i{display:flex;align-items:center;gap:.6rem;height:1.05rem;padding:0 .6rem 0 .5rem}
+  figure .diff i::before{content:"";width:1.6ch;height:1px;background:var(--border-strong);flex:none}
+  figure .diff i::after{content:"";height:5px;border-radius:2px;background:var(--border-strong);width:var(--w)}
+  figure .diff i.a{background:var(--add-bg)}figure .diff i.a::after{background:var(--add);opacity:.8}
+  figure .diff i.d{background:var(--del-bg)}figure .diff i.d::after{background:var(--del);opacity:.8}
+  .cmd{display:flex;align-items:center;gap:.75rem;margin:1rem 0;padding:.55rem .6rem .55rem .9rem;border:1px solid var(--border);border-radius:6px;background:var(--surface);overflow-x:auto}
+  .cmd code{flex:1;background:none;border:0;padding:0;color:var(--heading);white-space:nowrap}
+  .cmd button{flex:none;font:inherit;font-family:var(--mono);font-size:.74rem;color:var(--text);background:none;border:1px solid var(--border-strong);border-radius:4px;padding:.15rem .55rem;cursor:pointer}
+  .cmd button:hover{color:var(--heading);border-color:var(--muted)}
+  .cmd button:focus-visible{outline:1px solid var(--add);outline-offset:2px}
+  .cmd button.done{color:var(--add);border-color:var(--add)}
+  .banner{display:block;width:100%;height:auto;margin:1.5rem 0 0;border:1px solid var(--border);border-radius:8px}
+  footer{margin-top:4rem;padding-top:1.25rem;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:.4rem 1.25rem}
+  footer a{color:var(--text)}
+  @media (prefers-reduced-motion:no-preference){a{transition:text-decoration-color .15s}}
 </style>
 </head>
 <body>
 <main>
-  <h1>guides.show</h1>
-  <p>Hosts the viewer behind portable <a href="https://plannotator.ai/docs/commands/code-review#guided-review">Plannotator Guided Reviews</a>: a guide you were sent is one small HTML file that loads its renderer from here.</p>
-  <p>Viewer builds live under <code>/v1/</code> and never change once published, so a guide exported today keeps opening.</p>
+  <header>
+    <span class="name">guides.show</span>
+  </header>
+
+  <img class="banner" src="/banner.webp" alt="guides.show, by Plannotator" width="1774" height="887" decoding="async" fetchpriority="high">
+
+  <h1>A code walkthrough you can send as a file.</h1>
+  <p>A <a href="https://plannotator.ai/docs/commands/code-review#guided-review">Guided Review</a> takes a diff and explains it in order: chapters, a short overview for each, and the files that belong to it, with the changes shown alongside. Exported, it is one HTML file. This site serves what displays it, and hosts guides shared as links.</p>
+
+  <figure aria-label="The shape of a guide">
+    <div class="title"><b>Rate limit guide creation</b><span>One brake on anonymous uploads: creation only, per IP, fails open.</span></div>
+    <div class="ch"><span class="n">01</span><h3>The binding</h3><p>Where the limiter comes from and why it is optional.</p><div class="files"><span><b>wrangler.toml</b><span class="add">+15</span></span><span><b>worker/index.ts</b><span class="add">+59</span></span></div><div class="diff" aria-hidden="true"><i style="--w:38%"></i><i style="--w:54%"></i><i class="d" style="--w:47%"></i><i class="a" style="--w:61%"></i><i class="a" style="--w:29%"></i><i class="a" style="--w:44%"></i><i style="--w:33%"></i></div></div>
+    <div class="ch"><span class="n">02</span><h3>Only the create route</h3><p>Reads and deletes stay untouched; the 429 carries a Retry-After.</p><div class="files"><span><b>share/core/handler.ts</b><span class="add">+7</span></span></div></div>
+    <div class="ch"><span class="n">03</span><h3>What the tests pin</h3><p>Per-IP, never for reads, and open when there is no binding.</p><div class="files"><span><b>worker/index.test.ts</b><span class="add">+71</span><span class="del">−2</span></span></div></div>
+  </figure>
+
+  <h2>Making one</h2>
+  <p>Ask your coding agent for a guide of a branch, PR, or commit with the <a href="https://github.com/plannotator/guides"><code>plannotator-guide</code></a> skill; it writes the chapters and hands you the file. <a href="https://plannotator.ai">Plannotator</a> users get the same from <em>Download portable guide</em> after a Guided Review.</p>
+  <div class="cmd">
+    <code id="install">npx skills add plannotator/guides</code>
+    <button type="button" data-copy="install" aria-label="Copy install command">Copy</button>
+  </div>
+
+  <h2>Share links</h2>
+  <p>A guide can be uploaded here instead of downloaded. It is encrypted before it leaves your machine, and the key stays in the link after <code>#</code>, which browsers never send to a server. This host only ever holds bytes it cannot read; anyone with the full link can open the guide, nobody else can. Links don't expire unless asked, and the delete token you get at upload removes one.</p>
+
+  <h2>This host</h2>
+  <p>Viewer builds live under <code>/v1/</code> and never change once published, so a guide from last year opens the same way. A downloaded file sends nothing about your code here. It is a small Cloudflare Worker (<a href="https://github.com/backnotprop/plannotator/tree/main/apps/guides-show"><code>apps/guides-show</code></a>) you can run yourself.</p>
+
+  <footer>
+    <a href="https://plannotator.ai/docs/reference/portable-guides/">File format</a>
+    <a href="https://github.com/backnotprop/plannotator">Plannotator</a>
+    <a href="https://github.com/plannotator/guides">Agent skill</a>
+  </footer>
 </main>
+<script>
+for (const b of document.querySelectorAll('button[data-copy]')) {
+  b.addEventListener('click', async () => {
+    const text = document.getElementById(b.dataset.copy).textContent;
+    try { await navigator.clipboard.writeText(text); } catch { return; }
+    b.textContent = 'Copied'; b.classList.add('done');
+    setTimeout(() => { b.textContent = 'Copy'; b.classList.remove('done'); }, 1500);
+  });
+}
+</script>
 </body>
 </html>

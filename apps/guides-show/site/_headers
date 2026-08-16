@@ -3,3 +3,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
 /index.html
   Cache-Control: public, max-age=300
+/
+  Cache-Control: public, max-age=300
+/banner.webp
+  Cache-Control: public, max-age=86400
