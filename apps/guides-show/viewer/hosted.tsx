@@ -243,7 +243,7 @@ export function HostedDownloadButton({ snapshot, scriptUrl }: { snapshot: GuideS
     <button
       type="button"
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[11.5px] text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+      className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[11.5px] text-muted-foreground transition-colors hover:border-border hover:text-foreground pointer-coarse:px-3.5 pointer-coarse:py-2.5"
       title={
         failed
           ? 'The portable file could not be built from this page.'

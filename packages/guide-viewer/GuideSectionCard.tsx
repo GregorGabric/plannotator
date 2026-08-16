@@ -42,7 +42,7 @@ function FileChip({
     <button
       type="button"
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors ${
+      className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-left transition-colors pointer-coarse:py-2.5 ${
         active ? 'border-primary/40 bg-primary/10' : 'border-border/50 bg-background hover:border-border'
       }`}
       title={summary ? `${filePath}\n\n${summary}` : filePath}
@@ -136,7 +136,7 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
             type="button"
             onClick={handleToggleReviewed}
             aria-label={reviewed ? 'Un-mark as reviewed' : 'Mark as reviewed'}
-            className="flex-shrink-0 rounded"
+            className="flex-shrink-0 rounded relative pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5 pointer-coarse:before:content-['']"
           >
             <Checkbox checked={reviewed} />
           </button>
@@ -172,8 +172,9 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
               <button
                 type="button"
                 onClick={() => setCollapsedOverride(true)}
-                className="mt-0.5 flex-shrink-0 rounded p-0.5 text-muted-foreground/40 transition-colors hover:text-foreground"
+                className="mt-0.5 flex-shrink-0 rounded p-0.5 text-muted-foreground/40 transition-colors hover:text-foreground relative pointer-coarse:before:absolute pointer-coarse:before:-inset-3.5 pointer-coarse:before:content-['']"
                 title="Collapse section"
+                aria-label="Collapse section"
               >
                 <ChevronDown className="rotate-180" size={13} />
               </button>
@@ -184,7 +185,7 @@ export const GuideSectionCard: React.FC<GuideSectionCardProps> = ({
                 <button
                   type="button"
                   onClick={handleToggleReviewed}
-                  className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+                  className="flex items-center gap-1.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground pointer-coarse:-my-3 pointer-coarse:py-3"
                   title={reviewed ? 'Un-mark as reviewed' : 'Mark as reviewed'}
                 >
                   <Checkbox checked={reviewed} />

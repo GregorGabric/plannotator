@@ -83,6 +83,12 @@
   footer{margin-top:4rem;padding-top:1.25rem;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:.4rem 1.25rem}
   footer a{color:var(--text)}
   @media (prefers-reduced-motion:no-preference){a{transition:text-decoration-color .15s}}
+  button,a{touch-action:manipulation}
+  @media (pointer:coarse){
+    header .gh{padding:.55rem .85rem}
+    .cmd{padding:.5rem .5rem .5rem .9rem}
+    .cmd button{padding:.55rem .85rem;font-size:.8rem}
+  }
 </style>
 </head>
 <body>
