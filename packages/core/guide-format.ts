@@ -605,7 +605,28 @@ export interface GuideViewerAssets {
 
 export interface GuideHtmlOptions {
   readonly viewer: GuideViewerAssets;
+  /**
+   * Set when the document is served by a guide host (guides.show `/g/<id>` or a
+   * self-hosted origin) rather than downloaded as a file. Adds a canonical URL,
+   * Open Graph metadata (title + intent) so links unfurl, and the
+   * `plannotator-guided-review-hosted` meta the viewer reads to offer a
+   * "Download this guide" affordance. Never set on the portable file.
+   */
+  readonly hosted?: GuideHostedPage;
 }
+
+/** Where a hosted guide page lives. */
+export interface GuideHostedPage {
+  /** Canonical URL of the page (no fragment). */
+  readonly url: string;
+}
+
+/** `<meta name>` on hosted pages carrying the canonical URL; absent on downloaded files. */
+export const GUIDE_HOSTED_META_NAME = "plannotator-guided-review-hosted";
+/** `<meta name>` on an encrypted hosted page: the URL the viewer fetches the ciphertext from. */
+export const GUIDE_PAYLOAD_META_NAME = "plannotator-guided-review-payload";
+/** URL-fragment parameter carrying the AES-256-GCM key of an encrypted hosted guide (`#key=…`), as plan share links do. */
+export const GUIDE_SHARE_KEY_PARAM = "key";
 
 /**
  * The viewer build a producer pins into exports. Producers embed the
@@ -759,52 +780,149 @@ body.pgr-fallback-body{margin:0;background:#f5f7f6}
  * Throws only when `viewer.baseUrl` is not an https URL (or http localhost).
  */
 export function createGuideHtml(snapshot: GuideSnapshotV1, options: GuideHtmlOptions): string {
-  const base = normalizeGuideViewerBaseUrl(options.viewer.baseUrl);
-  if (!base) throw new Error(`Refusing to embed a non-https viewer base URL: ${options.viewer.baseUrl}`);
+  const head = buildGuideHead({
+    viewer: options.viewer,
+    title: snapshot.guide.title,
+    description: snapshot.guide.intent,
+    languages: detectGuideLanguages(snapshot.review.rawPatch),
+    hosted: options.hosted,
+  });
+  const serialized = escapeJsonForHtmlScript(JSON.stringify(snapshot));
+  return `<!doctype html>
+<html lang="en">
+<head>
+${head.head}
+</head>
+<body class="pgr-fallback-body">
+<div id="root">${renderGuideFallbackHtml(snapshot)}</div>
+<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">${serialized}</script>
+${head.script}
+</body>
+</html>
+`;
+}
+
+export interface GuideShellHtmlOptions {
+  readonly viewer: GuideViewerAssets;
+  readonly hosted: GuideHostedPage;
+  /** Same-origin URL the viewer fetches the encrypted payload from (e.g. `/api/g/<id>`). */
+  readonly payloadUrl: string;
+}
+
+/**
+ * The page a guide host serves for an ENCRYPTED shared guide: the pinned
+ * viewer and nothing else — no title, no snapshot, no fallback prose, because
+ * the host cannot read the guide. The viewer fetches `payloadUrl`, decrypts
+ * with the key in the URL fragment (`#key=…`), and renders exactly as it would
+ * an embedded snapshot. Same head (stylesheet, SRI, CSP, fallback style) as
+ * `createGuideHtml`, so hosted and downloaded pages never drift.
+ */
+export function createGuideShellHtml(options: GuideShellHtmlOptions): string {
+  const head = buildGuideHead({
+    viewer: options.viewer,
+    title: "Guided Review",
+    description: "A Plannotator Guided Review. The guide is end-to-end encrypted; the key travels in the link.",
+    languages: [],
+    hosted: options.hosted,
+    payloadUrl: options.payloadUrl,
+  });
+  return `<!doctype html>
+<html lang="en">
+<head>
+${head.head}
+</head>
+<body class="pgr-fallback-body">
+<div id="root"><article class="pgr-fallback"><header><h1>Guided Review</h1><p class="meta">This guide is encrypted. Open the full link (including the part after <code>#</code>) in a browser with JavaScript enabled to read it.</p></header></article></div>
+${head.script}
+</body>
+</html>
+`;
+}
+
+interface GuideHeadInput {
+  readonly viewer: GuideViewerAssets;
+  readonly title: string;
+  readonly description: string;
+  readonly languages: readonly string[];
+  readonly hosted?: GuideHostedPage;
+  readonly payloadUrl?: string;
+}
+
+/** Shared `<head>` + viewer `<script>` for exported and hosted guide pages. */
+function buildGuideHead(input: GuideHeadInput): { head: string; script: string } {
+  const base = normalizeGuideViewerBaseUrl(input.viewer.baseUrl);
+  if (!base) throw new Error(`Refusing to embed a non-https viewer base URL: ${input.viewer.baseUrl}`);
   const origin = base.origin;
-  const jsUrl = new URL(options.viewer.js, base).href;
-  const cssUrl = new URL(options.viewer.css, base).href;
+  const jsUrl = new URL(input.viewer.js, base).href;
+  const cssUrl = new URL(input.viewer.css, base).href;
   const integrityAttr = (value?: string) => (value ? ` integrity="${escapeHtmlAttribute(value)}"` : "");
-  const langs = options.viewer.langs ?? {};
-  const preloads = detectGuideLanguages(snapshot.review.rawPatch)
+  const langs = input.viewer.langs ?? {};
+  const preloads = input.languages
     .map((lang) => langs[lang])
     .filter((path): path is string => typeof path === "string")
     .map((path) => `<link rel="modulepreload" href="${escapeHtmlAttribute(new URL(path, base).href)}" crossorigin="anonymous">`)
     .join("\n");
-  const serialized = escapeJsonForHtmlScript(JSON.stringify(snapshot));
+  // A hosted page fetches its payload from its own origin; a downloaded file
+  // only ever talks to the viewer origin.
+  const hostedOrigin = input.hosted ? safeOrigin(input.hosted.url) : null;
+  const connectSrc = hostedOrigin && hostedOrigin !== origin ? `${origin} ${hostedOrigin}` : origin;
   const csp = [
     "default-src 'none'",
     `script-src ${origin} 'wasm-unsafe-eval' blob:`,
     `style-src ${origin} 'unsafe-inline'`,
     `font-src ${origin}`,
     "img-src data: blob:",
-    `connect-src ${origin}`,
-    "worker-src blob:",
+    `connect-src ${connectSrc}`,
+    "worker-src blob: data:",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'none'",
     "frame-src 'none'",
   ].join("; ");
+  const hostedMeta = input.hosted
+    ? [
+        `<link rel="canonical" href="${escapeHtmlAttribute(input.hosted.url)}">`,
+        `<meta name="${GUIDE_HOSTED_META_NAME}" content="${escapeHtmlAttribute(input.hosted.url)}">`,
+        `<meta property="og:type" content="article">`,
+        `<meta property="og:site_name" content="guides.show">`,
+        `<meta property="og:title" content="${escapeHtmlAttribute(input.title)}">`,
+        `<meta property="og:description" content="${escapeHtmlAttribute(truncateForMeta(input.description))}">`,
+        `<meta property="og:url" content="${escapeHtmlAttribute(input.hosted.url)}">`,
+        `<meta name="twitter:card" content="summary">`,
+        `<meta name="robots" content="noindex">`,
+      ].join("\n")
+    : "";
+  const payloadMeta = input.payloadUrl ? `<meta name="${GUIDE_PAYLOAD_META_NAME}" content="${escapeHtmlAttribute(input.payloadUrl)}">` : "";
+  const head = [
+    `<meta charset="utf-8">`,
+    `<meta name="viewport" content="width=device-width,initial-scale=1">`,
+    `<meta name="${GUIDE_EXPORT_META_NAME}" content="v${GUIDE_SNAPSHOT_VERSION}">`,
+    `<meta http-equiv="Content-Security-Policy" content="${csp}">`,
+    `<title>${escapeHtmlText(input.title)} · Guided Review</title>`,
+    hostedMeta,
+    payloadMeta,
+    `<link rel="stylesheet" href="${escapeHtmlAttribute(cssUrl)}"${integrityAttr(input.viewer.cssIntegrity)} crossorigin="anonymous">`,
+    preloads,
+    `<style>${FALLBACK_STYLE}</style>`,
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+  const script = `<script type="module" src="${escapeHtmlAttribute(jsUrl)}"${integrityAttr(input.viewer.jsIntegrity)} crossorigin="anonymous"></script>`;
+  return { head, script };
+}
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="${GUIDE_EXPORT_META_NAME}" content="v${GUIDE_SNAPSHOT_VERSION}">
-<meta http-equiv="Content-Security-Policy" content="${csp}">
-<title>${escapeHtmlText(snapshot.guide.title)} · Guided Review</title>
-<link rel="stylesheet" href="${escapeHtmlAttribute(cssUrl)}"${integrityAttr(options.viewer.cssIntegrity)} crossorigin="anonymous">
-${preloads}
-<style>${FALLBACK_STYLE}</style>
-</head>
-<body class="pgr-fallback-body">
-<div id="root">${renderGuideFallbackHtml(snapshot)}</div>
-<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">${serialized}</script>
-<script type="module" src="${escapeHtmlAttribute(jsUrl)}"${integrityAttr(options.viewer.jsIntegrity)} crossorigin="anonymous"></script>
-</body>
-</html>
-`;
+function safeOrigin(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+function truncateForMeta(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > 300 ? `${flat.slice(0, 297)}…` : flat;
 }
 
 /** Read the snapshot back out of an exported document's DOM (viewer boot). */
