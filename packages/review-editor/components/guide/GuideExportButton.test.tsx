@@ -17,6 +17,9 @@ afterEach(async () => {
 });
 
 async function render(jobId: string) {
+  // A second render inside one test replaces the previous tree instead of leaking it into document.body.
+  if (root) await act(async () => root?.unmount());
+  host?.remove();
   host = document.createElement('div');
   document.body.appendChild(host);
   root = createRoot(host);
@@ -79,7 +82,7 @@ describe('GuideExportButton', () => {
   test.skipIf(!hasDom)('offers the download with the server-reported size when the guide is exportable', async () => {
     const calls = stubFetch({});
     await render('saved:1000-x');
-    expect(calls.map((c) => c.url)).toEqual([
+    expect(calls.map((c) => c.url).sort()).toEqual([
       '/api/guide/saved%3A1000-x/export-info',
       '/api/guide/saved%3A1000-x/share-info',
     ]);
@@ -136,10 +139,10 @@ describe('GuideExportButton', () => {
     expect(shareButton()!.textContent).toContain('Share link');
   });
 
-  test.skipIf(!hasDom)('a link the server could not record is never offered for removal here', async () => {
+  test.skipIf(!hasDom)('a link the server could not record is neither offered for removal nor re-created', async () => {
     // Guide history off: the upload succeeds but no envelope holds the token,
     // so the server answers recorded: false and DELETE would 404.
-    stubFetch({
+    const calls = stubFetch({
       share: (method) =>
         method === 'POST'
           ? Response.json({ id: 'abc', url: 'https://guides.show/g/abc#key=k1', deleteToken: 'tok-1', bytes: 1, recorded: false })
@@ -149,13 +152,15 @@ describe('GuideExportButton', () => {
     await click(shareButton());
     await click(document.querySelector('[data-testid="guide-share-create"]'));
     expect(document.querySelector('[data-testid="guide-share-delete-token"]')?.textContent).toBe('tok-1');
-    expect(dialog()!.textContent).toContain('only way to remove it');
-    // The header keeps offering Create rather than a Remove that cannot work.
-    expect(shareButton()!.textContent).toContain('Create share link');
+    expect(document.querySelector('[data-testid="guide-share-remove"]')).toBeNull();
+    // Close and reopen: the same link and its one-time token are shown again; a
+    // second Create would orphan the first upload, whose token is unrecoverable.
     await click(document.querySelector('[data-testid="guide-share-dialog"] button[data-pn-touch-target]'));
     await click(shareButton());
+    expect(document.querySelector('[data-testid="guide-share-delete-token"]')?.textContent).toBe('tok-1');
     expect(document.querySelector('[data-testid="guide-share-remove"]')).toBeNull();
-    expect(document.querySelector('[data-testid="guide-share-create"]')).not.toBeNull();
+    expect(document.querySelector('[data-testid="guide-share-create"]')).toBeNull();
+    expect(calls.filter((c) => c.url.endsWith('/share'))).toHaveLength(1);
   });
 
   test.skipIf(!hasDom)('"Allow link previews" sends public: true', async () => {

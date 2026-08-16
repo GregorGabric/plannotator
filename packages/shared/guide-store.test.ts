@@ -21,7 +21,6 @@ import {
   loadGuidePatch,
   saveGuidePatch,
   updateGuideShare,
-  savedGuideShareServiceUrl,
   type SavedGuideEnvelope,
 } from "./guide-store";
 import type { GuideLaunchReview } from "@plannotator/core/guide-format";
@@ -455,8 +454,22 @@ describe("portable export: the launch review persisted beside the guide", () => 
     expect(snapshot?.review.rawPatch).toBe(PATCH);
     expect(snapshot?.guide.reviewed).toEqual([true, false]);
     expect(snapshot?.generator).toEqual({ engine: "claude", model: "sonnet", generatedAt: new Date(5000).toISOString(), customInstructions: "Keep it short." });
-    expect(await s.getJobGuideSnapshot("job-1")).toEqual(snapshot);
+    // `exportedAt` is stamped per build, so compare with it normalized.
+    expect({ ...(await s.getJobGuideSnapshot("job-1"))!, exportedAt: snapshot!.exportedAt }).toEqual(snapshot!);
     expect(await s.getJobGuideSnapshot("job-unknown")).toBeNull();
+  });
+
+  test("a re-save of a live job keeps its recorded share link and review", async () => {
+    const s = session();
+    const share = { id: "AbC", url: "https://guides.show/g/AbC#key=k", createdAt: "2026-08-15T00:00:00.000Z", deleteToken: "tok", serviceUrl: "https://guides.show" };
+    await s.saveForJob({ id: "job-1" }, { ...GUIDE }, undefined, LAUNCH_REVIEW);
+    const [entry] = listGuides(REPO_KEY);
+    expect(updateGuideShare(REPO_KEY, entry.id, share)).toBe(true);
+    await s.saveForJob({ id: "job-1" }, { ...GUIDE, reviewed: [true, true] });
+    const again = loadGuide(REPO_KEY, entry.id)!;
+    expect(again.share).toEqual(share);
+    expect(again.review).toEqual(entry.envelope.review);
+    expect(again.reviewed).toEqual([true, true]);
   });
 
   test("a guide saved without a launch review is not exportable", async () => {
@@ -511,19 +524,13 @@ describe("share record: a saved guide remembers its link", () => {
     expect(updateGuideShare(REPO_KEY, "9999-missing", SHARE)).toBe(false);
   });
 
-  test("removal targets the host the link was created on: the recorded serviceUrl, else the link's origin", () => {
-    expect(savedGuideShareServiceUrl(SHARE)).toBe("https://guides.show");
-    // A record from before serviceUrl existed still points at its own host, never at whatever is configured now.
-    const { serviceUrl: _omitted, ...legacy } = SHARE;
-    expect(savedGuideShareServiceUrl({ ...legacy, url: "https://self.example:8788/g/AbC123_-xyz#key=k" })).toBe("https://self.example:8788");
-    expect(savedGuideShareServiceUrl({ ...legacy, url: "not a url" })).toBeNull();
-    saveGuide(REPO_KEY, "1000-x", envelope({ share: legacy }));
-    expect(loadGuide(REPO_KEY, "1000-x")!.share).toEqual(legacy);
-  });
-
   test("a malformed share record loads as no link instead of a half record", () => {
     saveGuide(REPO_KEY, "1000-x", envelope({ share: { id: "x", url: "https://guides.show/g/x" } as unknown as SavedGuideEnvelope["share"] }));
     expect(loadGuide(REPO_KEY, "1000-x")!.share).toBeUndefined();
+    // Removal goes to the host the link was created on, so a record without one is not a usable link.
+    const { serviceUrl: _omitted, ...noHost } = SHARE;
+    saveGuide(REPO_KEY, "1000-y", envelope({ share: noHost as unknown as SavedGuideEnvelope["share"] }));
+    expect(loadGuide(REPO_KEY, "1000-y")!.share).toBeUndefined();
   });
 
   test("locateEnvelope resolves saved: ids on this shelf and autosaved live jobs, null otherwise", async () => {
@@ -536,7 +543,7 @@ describe("share record: a saved guide remembers its link", () => {
       writesEnabled: () => true,
     });
     saveGuide(REPO_KEY, "1000-x", envelope());
-    expect(await s.locateEnvelope("saved:1000-x")).toEqual({ repoKey: REPO_KEY, id: "1000-x" });
+    expect(await s.locateEnvelope("saved:1000-x")).toEqual({ repoKey: REPO_KEY, id: "1000-x", envelope: loadGuide(REPO_KEY, "1000-x")! });
     expect(await s.locateEnvelope("saved:2000-missing")).toBeNull();
     expect(await s.locateEnvelope("job-1")).toBeNull();
     await s.saveForJob({ id: "job-1" }, { ...GUIDE });

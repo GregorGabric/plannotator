@@ -13,8 +13,9 @@
     "deploy:viewer": "bun run build/deploy-viewer.ts",
     "export:samples": "bun run build/export-sample.ts",
     "serve:local": "bun run build/serve-local.ts",
-    "serve": "bun run targets/bun.ts",
-    "test": "bun test worker share targets",
+    "test": "bun test worker share viewer",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:viewer": "tsc --noEmit -p tsconfig.viewer.json",
     "sync:manifest": "bun run build/sync-manifest.ts",
     "check:manifest": "bun run build/sync-manifest.ts --check"
   },

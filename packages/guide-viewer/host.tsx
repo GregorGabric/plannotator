@@ -64,8 +64,6 @@ export interface GuideHostValue<P extends object = Record<string, unknown>> {
   onRevealFile?: (path: string) => void;
   /** Host-owned global search: the active match is routed to its chapter so an offscreen file mounts first. */
   activeSearchMatch?: GuideActiveSearchMatch | null;
-  /** True in portable/read-only hosts; hides in-app-only affordances. */
-  readOnly?: boolean;
 }
 
 // The context erases the renderer's extra-prop generic; hosts recover typing at the provider site.

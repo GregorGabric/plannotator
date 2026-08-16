@@ -6,12 +6,8 @@
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 
-/** The raw request body as text, for endpoints where an empty body is meaningful (all-optional JSON). */
-export function readRawBody(req: IncomingMessage): Promise<string> {
-	return readBody(req);
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
+/** The raw request body as text (for endpoints where an empty body is meaningful, e.g. all-optional JSON). */
+export function readBody(req: IncomingMessage): Promise<string> {
 	return new Promise((resolve, reject) => {
 		let data = "";
 		req.on("data", (chunk: string) => (data += chunk));

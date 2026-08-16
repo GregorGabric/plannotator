@@ -22,18 +22,19 @@ import workerUrl from '@pierre/diffs/worker/worker.js?worker&url';
  * mismatch as "cross-origin redirects of the top-level worker script"), and
  * that refusal is asynchronous — the constructor succeeds and the worker dies
  * with an `error` event. So each strategy is probed with a one-line script
- * that must post a message back; the first that answers is used for the real
- * pool. Nothing answers → main-thread highlighting, exactly like the app when
+ * that must post a message back; the most preferred one that answers is used
+ * for the real pool. Nothing answers → main-thread highlighting, exactly like the app when
  * its pool never initializes. The worker bundle is import-free
  * (`inlineDynamicImports`; enforced by check-budgets), so it runs unchanged as
  * a classic worker.
  */
 type WorkerStrategy = { kind: 'blob' | 'data'; type: 'module' | 'classic' };
 
-// Classic first: the bundle needs no module semantics (check-budgets asserts
-// it stays import-free), classic blob workers are the most widely permitted,
-// and probing a blob *module* worker first would log Chrome's refusal on
-// every file:// open even though the next strategy succeeds.
+// Preference order (probes run concurrently, the first success in this order
+// wins): classic first because the bundle needs no module semantics
+// (check-budgets asserts it stays import-free) and classic blob workers are
+// the most widely permitted; blob before data because a data: URL carries the
+// whole bundle as base64.
 const STRATEGIES: readonly WorkerStrategy[] = [
   { kind: 'blob', type: 'classic' },
   { kind: 'blob', type: 'module' },
@@ -55,9 +56,10 @@ function workerOptions(strategy: WorkerStrategy): WorkerOptions | undefined {
   return strategy.type === 'module' ? { type: 'module' } : undefined;
 }
 
-/** True when a trivial worker built this way starts and answers. */
-function probeStrategy(strategy: WorkerStrategy): Promise<boolean> {
-  return new Promise((resolve) => {
+/** A trivial worker built this way; `done` is true when it starts and answers. `cancel` settles it as false and terminates it. */
+function probeStrategy(strategy: WorkerStrategy): { done: Promise<boolean>; cancel(): void } {
+  let cancel = () => {};
+  const done = new Promise<boolean>((resolve) => {
     let worker: Worker | undefined;
     let settled = false;
     const finish = (ok: boolean) => {
@@ -68,6 +70,7 @@ function probeStrategy(strategy: WorkerStrategy): Promise<boolean> {
       resolve(ok);
     };
     const timer = setTimeout(() => finish(false), PROBE_TIMEOUT_MS);
+    cancel = () => finish(false);
     try {
       worker = new Worker(toWorkerUrl('self.postMessage(1)', strategy.kind), workerOptions(strategy));
       worker.onmessage = () => finish(true);
@@ -76,6 +79,7 @@ function probeStrategy(strategy: WorkerStrategy): Promise<boolean> {
       finish(false);
     }
   });
+  return { done, cancel };
 }
 
 export async function preparePortableWorkerFactory(): Promise<(() => Worker) | null> {
@@ -85,14 +89,20 @@ export async function preparePortableWorkerFactory(): Promise<(() => Worker) | n
     const response = await fetch(resolved, { mode: 'cors' });
     if (!response.ok) return null;
     const source = await response.text();
-    for (const strategy of STRATEGIES) {
-      if (!(await probeStrategy(strategy))) continue;
-      const url = toWorkerUrl(source, strategy.kind);
-      const options = workerOptions(strategy);
-      document.documentElement.dataset.pgrWorker = `${strategy.kind}-${strategy.type}`;
-      return () => new Worker(url, options);
+    // The probes are independent, so they all start at once; the first that
+    // answers in STRATEGIES order wins and the rest are terminated. Worst case
+    // is one PROBE_TIMEOUT_MS before the first paint, not one per strategy.
+    const probes = STRATEGIES.map(probeStrategy);
+    let strategy: WorkerStrategy | undefined;
+    for (const [i, probe] of probes.entries()) {
+      if (await probe.done) { strategy = STRATEGIES[i]; break; }
     }
-    return null;
+    for (const probe of probes) probe.cancel();
+    if (!strategy) return null;
+    const url = toWorkerUrl(source, strategy.kind);
+    const options = workerOptions(strategy);
+    document.documentElement.dataset.pgrWorker = `${strategy.kind}-${strategy.type}`;
+    return () => new Worker(url, options);
   } catch {
     return null;
   }

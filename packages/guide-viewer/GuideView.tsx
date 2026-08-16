@@ -73,6 +73,8 @@ export const GuideView: React.FC<GuideViewProps> = ({
 }) => {
   const host = useGuideHost();
   const resolved = useMemo(() => resolveGuideSectionFiles(guide, host.files), [guide, host.files]);
+  // Only the guide's own files register shells; in-app the review may hold many more.
+  const guideFileCount = resolved.sectionFiles.reduce((n, files) => n + files.length, 0) + resolved.unplacedFiles.length;
   const hasUnplaced = (guide.unplacedFiles?.length ?? 0) > 0;
   const cardTotal = guide.sections.length + (hasUnplaced ? 1 : 0);
   const reviewedCount = reviewed.filter(Boolean).length;
@@ -131,7 +133,7 @@ export const GuideView: React.FC<GuideViewProps> = ({
   );
 
   return (
-    <GuideViewportProvider className="w-full px-10 py-8" eager={host.files.length <= GUIDE_EAGER_MOUNT_MAX_FILES}>
+    <GuideViewportProvider className="w-full px-10 py-8" eager={guideFileCount <= GUIDE_EAGER_MOUNT_MAX_FILES}>
       {headerActions && <div className="float-right ml-6 flex items-center gap-2">{headerActions}</div>}
       <div className="max-w-[72ch]">
         <h1 className="text-[22px] font-semibold tracking-tight text-foreground [text-wrap:balance]">{guide.title}</h1>

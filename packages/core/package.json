@@ -5,6 +5,7 @@
   "exports": {
     "./agents": "./agents.ts",
     "./diff-paths": "./diff-paths.ts",
+    "./diff-files": "./diff-files.ts",
     "./guide": "./guide.ts",
     "./guide-format": "./guide-format.ts",
     "./annotatable": "./annotatable.ts",

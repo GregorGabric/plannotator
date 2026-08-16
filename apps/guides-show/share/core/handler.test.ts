@@ -63,11 +63,10 @@ describe('share handler: create', () => {
     // The token is stored hashed, never in the clear.
     const stored = await ctx.store.get(created.id);
     expect(stored?.meta.deleteTokenHash).toBe(await sha256Hex(created.deleteToken));
-    expect(stored?.meta.title).toBe(FIXTURE_V1_LOCAL.guide.title);
     expect(stored?.meta.bytes).toBe(new TextEncoder().encode(JSON.stringify(FIXTURE_V1_LOCAL)).byteLength);
   });
 
-  test('encrypted: the body round-trips as opaque text and decrypts back to the snapshot with the uploader-held key; no title is recorded', async () => {
+  test('encrypted: the body round-trips as opaque text and decrypts back to the snapshot with the uploader-held key', async () => {
     const ctx = context();
     const created = await createEncrypted(ctx);
     const body = await call(ctx, `/api/g/${created.id}`);
@@ -75,7 +74,6 @@ describe('share handler: create', () => {
     expect(body.headers.get('Content-Type')).toBe('text/plain; charset=utf-8');
     const snapshot = parseGuideSnapshot(await decompress(await decrypt(await body.text(), created.key)));
     expect(snapshot.ok && snapshot.value.guide.title).toBe(FIXTURE_V1_PR.guide.title);
-    expect((await ctx.store.get(created.id))?.meta.title).toBeUndefined();
   });
 
   test('rejects malformed requests with 400 and a reason', async () => {
@@ -117,30 +115,6 @@ describe('share handler: create', () => {
     const early = await call(ctx, '/api/g', { method: 'POST', body: '{}', headers: { 'Content-Length': String(MAX_SHARED_GUIDE_BYTES * 3) } });
     expect(early.status).toBe(413);
     expect(ctx.store.size).toBe(0);
-  });
-
-  test('rate limiter, when present, gates uploads only and answers 429', async () => {
-    const seen: string[] = [];
-    const ctx = context({ rateLimit: { limit: async ({ key }) => ({ success: (seen.push(key), false) }) } });
-    const res = await post(ctx, { mode: 'encrypted', data: 'abc' }, { 'CF-Connecting-IP': '203.0.113.9' });
-    expect(res.status).toBe(429);
-    expect(seen).toEqual(['203.0.113.9']);
-    // Reads never consult the limiter.
-    const other = context();
-    const created = await createEncrypted(other);
-    const limited = { ...other, rateLimit: { limit: async () => ({ success: false }) } };
-    expect((await call(limited, `/api/g/${created.id}`)).status).toBe(200);
-    expect((await call(limited, `/g/${created.id}`)).status).toBe(200);
-  });
-
-  test('maxTtlSeconds (operator ceiling): default lifetime when none is asked for, clamps longer requests, leaves shorter ones alone', async () => {
-    const now = Date.parse('2026-08-15T12:00:00.000Z');
-    const ctx: GuideShareContext = { store: new MemoryGuideStore(() => now), viewerManifest: MANIFEST, now: () => new Date(now), maxTtlSeconds: 7 * 24 * 3600 };
-    expect((await createPlain(ctx)).expiresAt).toBe('2026-08-22T12:00:00.000Z');
-    expect((await createPlain(ctx, { ttlSeconds: 30 * 24 * 3600 })).expiresAt).toBe('2026-08-22T12:00:00.000Z');
-    expect((await createPlain(ctx, { ttlSeconds: 3600 })).expiresAt).toBe('2026-08-15T13:00:00.000Z');
-    // Without the ceiling the contract default holds: no expiry unless asked.
-    expect((await createPlain(context())).expiresAt).toBeUndefined();
   });
 
   test('ttlSeconds sets expiresAt; an expired guide is gone from every route', async () => {

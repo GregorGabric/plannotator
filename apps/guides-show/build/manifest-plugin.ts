@@ -15,9 +15,7 @@ export interface ViewerManifest {
   css: string;
   jsIntegrity: string;
   cssIntegrity: string;
-  worker?: string;
   langs: Record<string, string>;
-  themes: Record<string, string>;
 }
 
 const sri = (source: string | Uint8Array) => `sha384-${createHash('sha384').update(source).digest('base64')}`;
@@ -34,18 +32,14 @@ export function viewerManifestPlugin(opts: { version: number }): Plugin {
     writeBundle(options, bundle) {
       const outDir = options.dir ?? path.dirname(options.file ?? '');
       const bytes = (fileName: string) => readFileSync(path.join(outDir, fileName));
-      let js: string | undefined, jsIntegrity = '', css: string | undefined, cssIntegrity = '', worker: string | undefined;
+      let js: string | undefined, jsIntegrity = '', css: string | undefined, cssIntegrity = '';
       const langs: Record<string, string> = {};
-      const themes: Record<string, string> = {};
       for (const [fileName, output] of Object.entries(bundle)) {
         if (output.type === 'chunk') {
           if (output.isEntry && output.name === 'viewer') { js = fileName; jsIntegrity = sri(bytes(fileName)); continue; }
           const ids = [output.facadeModuleId ?? '', ...output.moduleIds];
           const lang = ids.map((id) => /@shikijs\/langs\/dist\/([^/]+)\.mjs$/.exec(id)?.[1]).find(Boolean);
-          if (lang) { langs[lang] = fileName; continue; }
-          const theme = ids.map((id) => /@shikijs\/themes\/dist\/([^/]+)\.mjs$/.exec(id)?.[1]).find(Boolean);
-          if (theme) { themes[theme] = fileName; continue; }
-          if (/(^|\/)worker[-.]/.test(fileName) && ids.some((id) => id.includes('@pierre/diffs/dist/worker/worker'))) worker = fileName;
+          if (lang) langs[lang] = fileName;
         } else if (output.type === 'asset' && fileName.endsWith('.css')) {
           if (css) throw new Error(`viewer manifest: multiple css assets (${css}, ${fileName})`);
           css = fileName; cssIntegrity = sri(bytes(fileName));
@@ -53,7 +47,7 @@ export function viewerManifestPlugin(opts: { version: number }): Plugin {
       }
       if (!js || !css) throw new Error(`viewer manifest: missing entry (js=${js}, css=${css})`);
       // Deterministic on purpose (no timestamps): the checked-in copy must equal a fresh build's output.
-      const manifest: ViewerManifest = { version: opts.version, js, css, jsIntegrity, cssIntegrity, worker, langs, themes };
+      const manifest: ViewerManifest = { version: opts.version, js, css, jsIntegrity, cssIntegrity, langs };
       writeFileSync(path.join(outDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     },
   };

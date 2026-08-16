@@ -34,7 +34,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Format compatibility (every shipped fixture parses) + worker tests
-        run: bun test ./packages/core/guide-format.test.ts ./apps/guides-show/worker ./apps/guides-show/share ./apps/guides-show/targets ./apps/guides-show/viewer
+        run: bun test ./packages/core/guide-format.test.ts ./apps/guides-show/worker ./apps/guides-show/share ./apps/guides-show/viewer
 
       - name: Build viewer
         run: bun run --cwd apps/guides-show build:viewer

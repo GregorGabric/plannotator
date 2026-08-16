@@ -20,22 +20,6 @@ bucket_name = "guides-show-viewer"
 binding = "GUIDES"
 bucket_name = "guides-show-guides"
 
-# Optional: per-IP rate limit on guide uploads (POST /api/g); reads and pages
-# are never limited. The handler is a no-op when the binding is absent, so
-# removing this block only removes the limit. `namespace_id` is any integer
-# unique within the account; `period` must be 10 or 60 (seconds).
-[[ratelimits]]
-name = "RATE_LIMITER"
-namespace_id = "1001"
-simple = { limit = 30, period = 60 }
-
-# Optional: keep no shared guide longer than this many seconds. Uploads without
-# a ttl get this lifetime and longer requests are clamped; leave it out to keep
-# guides until whoever shared them removes them (the contract default). This is
-# the operator's brake on storage growth from anonymous uploads.
-# [vars]
-# MAX_TTL_SECONDS = "7776000"   # 90 days
-
 # Landing page only. Assets are a per-deploy snapshot, which is why the viewer
 # is NOT served from here.
 [assets]

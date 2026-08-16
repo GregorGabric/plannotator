@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { parseDiffToFiles } from "./diffParser";
+import { parseDiffToFiles } from "./diff-files";
 
 describe("parseDiffToFiles", () => {
   it("uses file header lines so paths containing separator text stay intact", () => {

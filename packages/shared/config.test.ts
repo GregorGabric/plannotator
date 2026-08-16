@@ -340,16 +340,14 @@ describe("resolveGuideShareUrl", () => {
     expect(resolveGuideShareUrl({}, {})).toBe(DEFAULT_GUIDE_SHARE_URL);
     expect(resolveGuideShareUrl({ guideShareUrl: "https://guides.example.test" }, {})).toBe("https://guides.example.test");
     expect(resolveGuideShareUrl({ guideShareUrl: "https://guides.example.test" }, { PLANNOTATOR_GUIDE_SHARE_URL: "http://localhost:8788" })).toBe("http://localhost:8788");
+    // An empty (but set) env var counts as unset.
+    expect(resolveGuideShareUrl({ guideShareUrl: "https://guides.example.test" }, { PLANNOTATOR_GUIDE_SHARE_URL: "" })).toBe("https://guides.example.test");
   });
 
   test("trailing slashes, query and fragment are trimmed so /api/g can be appended", () => {
     expect(resolveGuideShareUrl({}, { PLANNOTATOR_GUIDE_SHARE_URL: "https://guides.example.test/" })).toBe("https://guides.example.test");
     expect(resolveGuideShareUrl({}, { PLANNOTATOR_GUIDE_SHARE_URL: "https://guides.example.test/sub/dir//?x=1#frag" })).toBe("https://guides.example.test/sub/dir");
     expect(resolveGuideShareUrl({}, { PLANNOTATOR_GUIDE_SHARE_URL: "  https://guides.example.test  " })).toBe("https://guides.example.test");
-  });
-
-  test("an empty (but set) env var counts as unset", () => {
-    expect(resolveGuideShareUrl({ guideShareUrl: "https://guides.example.test" }, { PLANNOTATOR_GUIDE_SHARE_URL: "" })).toBe("https://guides.example.test");
   });
 
   test("non-http(s) or unparsable values warn once and fall back to the default", () => {

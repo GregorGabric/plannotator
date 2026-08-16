@@ -2,8 +2,8 @@
  * Shared-guide request handling (contract: adr/implementation/guide-share-hosting.md §1, §2, §4).
  *
  * Pure `(Request, context) → Response`: no bindings, no runtime globals beyond
- * WebCrypto and `URL`, so the Cloudflare Worker and the Bun self-host target
- * run this exact function over their own store. Routes:
+ * WebCrypto and `URL`, so the Cloudflare Worker runs it over an R2 store and
+ * the tests over an in-memory one. Routes:
  *
  *   POST    /api/g          create  → 201 { id, url, deleteToken, expiresAt? }
  *   GET     /api/g/<id>     body    → ciphertext (text/plain) or snapshot JSON
@@ -17,8 +17,10 @@
  */
 
 import {
+  FALLBACK_STYLE,
   createGuideHtml,
   createGuideShellHtml,
+  escapeHtmlText,
   parseGuideSnapshotJson,
   type GuideSnapshotV1,
   type GuideViewerAssets,
@@ -31,27 +33,10 @@ export const MAX_SHARED_GUIDE_BYTES = 25 * 1024 * 1024;
 /** Longest `ttlSeconds` accepted at create (10 years). Absent = never expires; this only keeps the arithmetic sane. */
 export const MAX_SHARED_GUIDE_TTL_SECONDS = 10 * 365 * 24 * 60 * 60;
 
-/** Same shape as Cloudflare's rate-limiting binding (`env.RATE_LIMITER.limit({ key })`); absent = no limiting (Bun target, tests). */
-export interface GuideShareRateLimiter {
-  limit(options: { key: string }): Promise<{ success: boolean }>;
-}
-
 export interface GuideShareContext {
   readonly store: GuideStore;
   /** The host's own bundled viewer build, used when an upload carries no pin. */
   readonly viewerManifest: Omit<GuideViewerAssets, 'baseUrl'>;
-  /** Uploads only. */
-  readonly rateLimit?: GuideShareRateLimiter;
-  /** Client address for the rate-limit key when the host knows it better than the headers do (Bun: `server.requestIP`). Defaults to `CF-Connecting-IP`, then the first `X-Forwarded-For` hop. */
-  readonly clientIp?: string;
-  /**
-   * Operator ceiling on how long any guide is kept, in seconds. When set, an
-   * upload without `ttlSeconds` expires after this long instead of never, and
-   * a longer request is clamped to it (the uploader learns the real
-   * `expiresAt` from the response). Absent = the contract default: no expiry
-   * unless the uploader asks for one.
-   */
-  readonly maxTtlSeconds?: number;
   /** Where store failures are reported (default `console.error`); the response never carries the store's own message. */
   readonly logError?: (message: string, error: unknown) => void;
   /** Injectable clock for expiry tests. */
@@ -127,10 +112,6 @@ interface CreateBody {
 }
 
 async function handleCreate(req: Request, url: URL, ctx: GuideShareContext): Promise<Response> {
-  if (ctx.rateLimit) {
-    const outcome = await ctx.rateLimit.limit({ key: clientIpFor(req, ctx) });
-    if (!outcome.success) return json({ error: 'rate limited' }, 429, { ...CORS_HEADERS, 'Retry-After': '60' });
-  }
   // Refuse to read a body that cannot possibly fit before buffering it. The
   // JSON envelope around `data` is small, so twice the cap is a generous bound.
   const declared = Number(req.headers.get('Content-Length'));
@@ -152,16 +133,14 @@ async function handleCreate(req: Request, url: URL, ctx: GuideShareContext): Pro
   const bytes = new TextEncoder().encode(data).byteLength;
   if (bytes > MAX_SHARED_GUIDE_BYTES) return json({ error: 'too large', maxBytes: MAX_SHARED_GUIDE_BYTES }, 413, CORS_HEADERS);
 
-  const ttl = parseTtl(body.ttlSeconds, ctx.maxTtlSeconds);
+  const ttl = parseTtl(body.ttlSeconds);
   if (!ttl.ok) return bad(ttl.error);
   const viewer = parseViewerPin(body.viewer);
   if (!viewer.ok) return bad(viewer.error);
 
-  let title: string | undefined;
   if (mode === 'plain') {
     const parsed = parseGuideSnapshotJson(data);
     if (!parsed.ok) return json({ error: 'invalid snapshot', path: parsed.error.path, message: parsed.error.message }, 400, CORS_HEADERS);
-    title = parsed.value.guide.title;
   } else if (!BASE64URL_PATTERN.test(data)) {
     return bad('encrypted data must be base64url');
   }
@@ -177,7 +156,6 @@ async function handleCreate(req: Request, url: URL, ctx: GuideShareContext): Pro
     deleteTokenHash: await sha256Hex(deleteToken),
     ...(viewer.value !== undefined && { viewer: viewer.value }),
     bytes,
-    ...(title !== undefined && { title }),
   };
   await ctx.store.put(id, data, meta);
   return json(
@@ -268,15 +246,12 @@ async function lookup(id: string, ctx: GuideShareContext): Promise<{ body: strin
 
 type Validated<T> = { ok: true; value: T } | { ok: false; error: string };
 
-function parseTtl(input: unknown, maxTtlSeconds: number | undefined): Validated<number | undefined> {
-  const ceiling = maxTtlSeconds !== undefined && Number.isFinite(maxTtlSeconds) && maxTtlSeconds >= 1 ? Math.floor(maxTtlSeconds) : undefined;
-  if (input === undefined || input === null) return { ok: true, value: ceiling };
+function parseTtl(input: unknown): Validated<number | undefined> {
+  if (input === undefined || input === null) return { ok: true, value: undefined };
   if (typeof input !== 'number' || !Number.isFinite(input) || input < 1) return { ok: false, error: 'ttlSeconds must be a positive number of seconds' };
   const seconds = Math.floor(input);
   if (seconds > MAX_SHARED_GUIDE_TTL_SECONDS) return { ok: false, error: `ttlSeconds must be at most ${MAX_SHARED_GUIDE_TTL_SECONDS}` };
-  // The operator ceiling clamps rather than rejects: the uploader cannot know
-  // it, and the response carries the real expiresAt.
-  return { ok: true, value: ceiling !== undefined ? Math.min(seconds, ceiling) : seconds };
+  return { ok: true, value: seconds };
 }
 
 function isViewerPath(value: unknown): value is string {
@@ -313,15 +288,6 @@ function bearerToken(req: Request): string | null {
   if (!header) return null;
   const match = header.match(/^Bearer\s+(\S+)\s*$/i);
   return match ? match[1] : null;
-}
-
-function clientIpFor(req: Request, ctx: GuideShareContext): string {
-  if (ctx.clientIp) return ctx.clientIp;
-  const cf = req.headers.get('CF-Connecting-IP');
-  if (cf) return cf;
-  const forwarded = req.headers.get('X-Forwarded-For');
-  if (forwarded) return forwarded.split(',')[0].trim();
-  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -377,36 +343,26 @@ function notFoundPage(url: URL, headOnly = false): Response {
   return htmlPage(headOnly ? null : html, 404, { 'Cache-Control': 'public, max-age=60' });
 }
 
-/** Same look as the no-JavaScript fallback body inside exported guides (`.pgr-fallback`), so a missing guide reads as part of the same product. */
-const ERROR_PAGE_STYLE = [
-  'html{color-scheme:light dark}',
-  'body.pgr-fallback-body{margin:0;background:#f5f7f6}',
-  '.pgr-fallback{max-width:72ch;margin:4rem auto;padding:0 1.25rem;font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2421}',
-  '.pgr-fallback h1{font-size:1.75rem;line-height:1.2;margin:0 0 .5rem}',
-  '.pgr-fallback .meta{color:#5b6a64;font-size:.9rem;margin:.25rem 0}',
-  '.pgr-fallback a{color:#2b7f6c}',
-  '@media (prefers-color-scheme:dark){body.pgr-fallback-body{background:#121815}.pgr-fallback{color:#dbe4df}.pgr-fallback .meta{color:#93a39c}.pgr-fallback a{color:#63c8b0}}',
-].join('');
-
-/** The failure page names the host it is served from (`url.host`): a self-host is not guides.show. */
+/**
+ * The failure page names the host it is served from (`url.host`): a self-host
+ * is not guides.show. It wears core's `.pgr-fallback` styling so a missing
+ * guide reads as part of the same product; the fallback's delayed reveal is
+ * overridden because there is no viewer coming to replace this article.
+ */
 function errorPage(url: URL, title: string, message: string): string {
-  const host = escapeHtml(url.host);
+  const host = escapeHtmlText(url.host);
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex">
-<title>${escapeHtml(title)} · ${host}</title>
-<style>${ERROR_PAGE_STYLE}</style>
+<title>${escapeHtmlText(title)} · ${host}</title>
+<style>${FALLBACK_STYLE}.pgr-fallback{opacity:1;animation:none}</style>
 </head>
 <body class="pgr-fallback-body">
-<div id="root"><article class="pgr-fallback"><header><h1>${escapeHtml(title)}</h1><p class="meta">${escapeHtml(message)}</p><p class="meta"><a href="/">${host}</a> hosts portable Plannotator Guided Reviews.</p></header></article></div>
+<div id="root"><article class="pgr-fallback"><header><h1>${escapeHtmlText(title)}</h1><p class="meta">${escapeHtmlText(message)}</p><p class="meta"><a href="/">${host}</a> hosts portable Plannotator Guided Reviews.</p></header></article></div>
 </body>
 </html>
 `;
-}
-
-function escapeHtml(input: string): string {
-  return input.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

@@ -164,9 +164,9 @@ describe('GuideViewportProvider eager mode', () => {
 });
 
 describe('GuideView eager threshold', () => {
-  function renderGuide(files: DiffFile[]) {
+  function renderGuide(files: DiffFile[], hostFiles: DiffFile[] = files) {
     return render(
-      <GuideHostProvider value={makeHost(files)}>
+      <GuideHostProvider value={makeHost(hostFiles)}>
         <GuideView
           guide={makeGuide(files)}
           reviewed={[false]}
@@ -178,9 +178,11 @@ describe('GuideView eager threshold', () => {
     );
   }
 
-  test.skipIf(!hasDom)('a guide at the file limit mounts every CodeView up front', async () => {
-    const files = Array.from({ length: GUIDE_EAGER_MOUNT_MAX_FILES }, (_, index) => makeFile(`src/file-${index}.ts`));
-    await renderGuide(files);
+  test.skipIf(!hasDom)('a guide at the file limit mounts every CodeView up front, however large the review', async () => {
+    // The threshold counts the guide's own files, not the whole review behind the host.
+    const review = Array.from({ length: GUIDE_EAGER_MOUNT_MAX_FILES + 10 }, (_, index) => makeFile(`src/file-${index}.ts`));
+    const files = review.slice(0, GUIDE_EAGER_MOUNT_MAX_FILES);
+    await renderGuide(files, review);
 
     expect(host!.querySelectorAll('[data-guide-file-shell]')).toHaveLength(files.length);
     expect(host!.querySelectorAll('[data-testid="file-code-view"]')).toHaveLength(files.length);

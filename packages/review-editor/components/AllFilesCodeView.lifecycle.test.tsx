@@ -233,6 +233,9 @@ describe('AllFilesCodeView readOnly (portable guide host)', () => {
   // LOOKS like: selection affordances, the window keydown handler, and the
   // /api/file-content augmentation fetch.
   async function mount(overrides: Partial<React.ComponentProps<typeof AllFilesCodeView>>) {
+    // A second mount inside one test replaces the previous tree instead of leaking it.
+    if (root) await act(async () => root?.unmount());
+    host?.remove();
     host = document.createElement('div');
     host.style.height = '400px';
     document.body.appendChild(host);
@@ -240,16 +243,15 @@ describe('AllFilesCodeView readOnly (portable guide host)', () => {
     await render(overrides);
   }
 
-  test.skipIf(!hasDom)('turns off line and gutter selection', async () => {
+  test.skipIf(!hasDom)('turns off line and gutter selection only in read-only mode', async () => {
     await mount({ readOnly: true });
-    const options = lastCodeViewProps?.options as Record<string, unknown>;
+    let options = lastCodeViewProps?.options as Record<string, unknown>;
     expect(options.enableLineSelection).toBe(false);
     expect(options.enableGutterUtility).toBe(false);
-  });
 
-  test.skipIf(!hasDom)('keeps selection on by default', async () => {
+    // The default-on half catches an inverted `!readOnly` breaking the in-app reviewer.
     await mount({});
-    const options = lastCodeViewProps?.options as Record<string, unknown>;
+    options = lastCodeViewProps?.options as Record<string, unknown>;
     expect(options.enableLineSelection).toBe(true);
     expect(options.enableGutterUtility).toBe(true);
   });

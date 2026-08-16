@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { FIXTURE_V1_PR } from '@plannotator/core/guide-format-fixtures';
-import { GUIDE_HOSTED_META_NAME, GUIDE_PAYLOAD_META_NAME, readEmbeddedGuideSnapshot } from '@plannotator/core/guide-format';
+import { GUIDE_HOSTED_META_NAME, GUIDE_PAYLOAD_META_NAME, guideExportFilename, readEmbeddedGuideSnapshot } from '@plannotator/core/guide-format';
 import { compress } from '@plannotator/core/compress';
 import { encrypt } from '@plannotator/core/crypto';
 import { buildPortableGuideFile, loadHostedEncryptedSnapshot, readShareKey, readViewerAssetsFromDocument, type ViewerDocumentLike } from './hosted';
@@ -111,7 +111,7 @@ describe('readViewerAssetsFromDocument + buildPortableGuideFile', () => {
   test('the client-built file is a plain export: embedded snapshot, pinned viewer, no host metas', () => {
     const viewer = readViewerAssetsFromDocument(hostedDocument(), SCRIPT_URL)!;
     const file = buildPortableGuideFile(FIXTURE_V1_PR, viewer)!;
-    expect(file.filename).toBe('guided-review-pr-auth-token-refresh.html');
+    expect(file.filename).toBe(guideExportFilename(FIXTURE_V1_PR.guide.title));
     expect(file.html).toContain(`src="${SCRIPT_URL}" integrity="sha384-js"`);
     expect(file.html).toContain('href="https://guides.show/v1/viewer.def456.css" integrity="sha384-css"');
     expect(file.html).not.toContain(GUIDE_HOSTED_META_NAME);

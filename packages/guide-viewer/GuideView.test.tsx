@@ -131,6 +131,9 @@ async function renderView(
     );
   };
 
+  // A second render inside one test replaces the previous tree instead of leaking it into document.body.
+  if (root !== null) await act(async () => root?.unmount());
+  host?.remove();
   host = document.createElement('div');
   document.body.appendChild(host);
   await act(async () => {
@@ -158,13 +161,11 @@ describe('resolveGuideSectionFiles', () => {
 });
 
 describe('GuideView persistence affordances (#1112)', () => {
-  test.skipIf(!hasDom)('renders no Saved chip and no outdated hint by default', async () => {
+  test.skipIf(!hasDom)('renders the Saved chip only when persisted, and no outdated hint either way', async () => {
     await renderView(makeGuide());
     expect(host!.textContent).not.toContain('Saved');
     expect(host!.textContent).not.toContain('Generated on a different version');
-  });
 
-  test.skipIf(!hasDom)('renders the Saved chip when the guide is persisted', async () => {
     await renderView(makeGuide({ saved: true }));
     expect(host!.textContent).toContain('Saved');
     expect(host!.textContent).not.toContain('Generated on a different version');

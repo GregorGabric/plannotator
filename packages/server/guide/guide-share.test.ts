@@ -91,9 +91,6 @@ describe("shareGuide", () => {
     expect(tooLarge.status).toBe(413);
     expect(tooLarge.message).toContain("25 MB");
 
-    const limited = await attempt(() => Response.json({ error: "rate limited" }, { status: 429 })).catch((e) => e);
-    expect(limited.status).toBe(429);
-
     const bad = await attempt(() => Response.json({ error: "invalid guide", path: "$.guide.title", message: "must be a string" }, { status: 400 })).catch((e) => e);
     expect(bad.status).toBe(400);
     expect(bad.message).toContain("invalid guide");
@@ -127,15 +124,5 @@ describe("unshareGuide", () => {
     expect(svc.calls[0].method).toBe("DELETE");
     expect(svc.calls[0].url).toBe(`${SERVICE}/api/g/AbCdEfGhIjKlMnOpQrStUv`);
     expect(svc.calls[0].headers.authorization).toBe("Bearer tok-1");
-  });
-
-  test("404, 401 and unreachable hosts map to distinct GuideShareErrors", async () => {
-    const gone = await unshareGuide("x", "t", { serviceUrl: SERVICE, fetch: fakeService(() => Response.json({ error: "not found" }, { status: 404 })).fetch }).catch((e) => e);
-    expect(gone.status).toBe(404);
-    const denied = await unshareGuide("x", "t", { serviceUrl: SERVICE, fetch: fakeService(() => new Response(null, { status: 401 })).fetch }).catch((e) => e);
-    expect(denied.status).toBe(401);
-    const down = await unshareGuide("x", "t", { serviceUrl: SERVICE, fetch: (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch }).catch((e) => e);
-    expect(down).toBeInstanceOf(GuideShareError);
-    expect(down.status).toBeUndefined();
   });
 });

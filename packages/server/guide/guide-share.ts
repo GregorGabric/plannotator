@@ -1,6 +1,6 @@
 /**
  * Guide share — upload a portable Guided Review snapshot to a guide host
- * (guides.show or a self-hosted `apps/guides-show`) and remove it again.
+ * (guides.show, or your own deployment of its Worker) and remove it again.
  * Implements the producer half of the guide share hosting contract
  * (`adr/implementation/guide-share-hosting.md`, §1, §2, §4, §7).
  *
@@ -80,9 +80,6 @@ async function describeHttpError(res: Response, verb: string): Promise<GuideShar
   if (res.status === 413) {
     const max = typeof body.maxBytes === "number" ? ` (limit ${(body.maxBytes / (1024 * 1024)).toFixed(0)} MB)` : "";
     return new GuideShareError(`Guide is too large for the share service${max}. Download the portable file instead.`, 413);
-  }
-  if (res.status === 429) {
-    return new GuideShareError("The share service is rate limiting uploads from here. Try again in a minute.", 429);
   }
   const detail = hostMessage
     ? typeof body.path === "string" && typeof body.message === "string"
@@ -187,4 +184,25 @@ export async function unshareGuide(id: string, deleteToken: string, opts: Unshar
   if (res.status === 404) throw new GuideShareError("No shared guide with that id (already removed or expired)", 404);
   if (res.status === 401) throw new GuideShareError("The share service rejected the delete token", 401);
   throw await describeHttpError(res, "remove");
+}
+
+/**
+ * Remove a saved guide's link right before the guide itself is deleted — the
+ * envelope is the only copy of the delete token, so this is the last chance.
+ * Best effort: a host that already forgot the link is fine, and any other
+ * failure is logged with the manual `unshare` command instead of blocking
+ * the delete.
+ */
+export async function unshareBeforeDelete(
+  share: { id: string; url: string; deleteToken: string; serviceUrl: string } | undefined,
+  doFetch?: typeof fetch,
+): Promise<void> {
+  if (!share) return;
+  try {
+    await unshareGuide(share.id, share.deleteToken, { serviceUrl: share.serviceUrl, fetch: doFetch });
+  } catch (e) {
+    if (e instanceof GuideShareError && e.status === 404) return;
+    const reason = e instanceof Error ? e.message : String(e);
+    console.error(`[guide] Could not remove the share link ${share.url} (${reason}). Remove it with: plannotator guide unshare ${share.id} --token ${share.deleteToken}`);
+  }
 }

@@ -11,13 +11,18 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { GUIDE_LANGUAGE_IDS } from '../../../packages/core/guide-format';
 import type { ViewerManifest } from './manifest-plugin';
 
 const built = path.resolve(import.meta.dirname, '../dist/viewer/manifest.json');
 const target = path.resolve(import.meta.dirname, '../../../packages/core/guide-viewer-manifest.ts');
 const manifest = JSON.parse(readFileSync(built, 'utf8')) as ViewerManifest;
 
+// Every grammar chunk is built and published, but the pin only lists the ids
+// `detectGuideLanguages` can produce: those are the only modulepreload hints an
+// export can ever emit, and the rest would just bloat this file.
 const langs = Object.entries(manifest.langs)
+  .filter(([lang]) => GUIDE_LANGUAGE_IDS.includes(lang))
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([lang, file]) => `    ${JSON.stringify(lang)}: ${JSON.stringify(file)},`)
   .join('\n');

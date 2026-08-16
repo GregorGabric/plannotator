@@ -3,8 +3,7 @@
  *
  * One text body per guide plus a small metadata record. The body is opaque to
  * the store: base64url ciphertext for encrypted guides, snapshot JSON for
- * plain ones. Implementations: `stores/r2.ts` (Worker), `stores/fs.ts` and
- * `stores/s3.ts` (Bun self-host target), `stores/memory.ts` (tests).
+ * plain ones. Implementations: `stores/r2.ts` (Worker), `stores/memory.ts` (tests).
  */
 
 export type SharedGuideMode = 'encrypted' | 'plain';
@@ -29,8 +28,6 @@ export interface StoredGuideMeta {
   readonly viewer?: StoredGuideViewerPin;
   /** UTF-8 byte length of the stored body. */
   readonly bytes: number;
-  /** Plain guides only (listings later); never recorded for encrypted guides, whose title the host cannot read. */
-  readonly title?: string;
 }
 
 export interface GuideStore {

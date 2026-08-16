@@ -24,11 +24,20 @@ const VIEWER = {
   langs: { typescript: "langs/typescript.ab12.js", json: "langs/json.cd34.js", python: "langs/python.ef56.js" },
 };
 
-/** Extract the embedded snapshot from an exported document the way the viewer does. */
+/**
+ * Read the embedded snapshot back the way the viewer boots: through
+ * `readEmbeddedGuideSnapshot` over a document that resolves elements by id, so a
+ * writer/reader script-id divergence fails every export test below.
+ */
 function snapshotFromHtml(html: string): GuideSnapshotV1 {
-  const match = new RegExp(`<script id="${GUIDE_SNAPSHOT_SCRIPT_ID}" type="application/json">([\\s\\S]*?)</script>`).exec(html);
-  if (!match) throw new Error("snapshot script missing");
-  const parsed = parseGuideSnapshotJson(match[1]);
+  const doc = {
+    getElementById(id: string) {
+      const match = new RegExp(`<script id="${id}" type="application/json">([\\s\\S]*?)</script>`).exec(html);
+      return match ? { textContent: match[1] } : null;
+    },
+  };
+  const parsed = readEmbeddedGuideSnapshot(doc);
+  if (!parsed) throw new Error("snapshot script missing");
   if (!parsed.ok) throw new Error(`${parsed.error.path}: ${parsed.error.message}`);
   return parsed.value;
 }
@@ -158,15 +167,6 @@ describe("createGuideHtml", () => {
     expect(() => createGuideHtml(FIXTURE_V1_LOCAL, { viewer: { ...VIEWER, baseUrl: "http://evil.example/v1/" } })).toThrow();
     expect(() => createGuideHtml(FIXTURE_V1_LOCAL, { viewer: { ...VIEWER, baseUrl: "http://localhost:5173/" } })).not.toThrow();
   });
-
-  test("readEmbeddedGuideSnapshot reads back what createGuideHtml wrote", () => {
-    const html = createGuideHtml(FIXTURE_V1_PR, { viewer: VIEWER });
-    const text = /type="application\/json">([\s\S]*?)<\/script>/.exec(html)![1];
-    const doc = { getElementById: (id: string) => (id === GUIDE_SNAPSHOT_SCRIPT_ID ? { textContent: text } : null) };
-    const parsed = readEmbeddedGuideSnapshot(doc);
-    expect(parsed?.ok).toBe(true);
-    if (parsed?.ok) expect(parsed.value.source.pr?.number).toBe(42);
-  });
 });
 
 describe("normalizeGuideViewerBaseUrl", () => {
@@ -185,7 +185,7 @@ describe("language detection", () => {
     expect(guideLanguageForPath("src/a.ts")).toBe("typescript");
     expect(guideLanguageForPath("src/a.tsx")).toBe("tsx");
     expect(guideLanguageForPath("Dockerfile")).toBe("docker");
-    expect(guideLanguageForPath("build/Makefile")).toBe("makefile");
+    expect(guideLanguageForPath("build/Makefile")).toBe("make");
     expect(guideLanguageForPath("README")).toBeUndefined();
     expect(guideLanguageForPath("weird.unknownext")).toBeUndefined();
   });

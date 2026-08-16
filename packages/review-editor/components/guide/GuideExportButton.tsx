@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Link2 } from 'lucide-react';
-import { GuideShareDialog, formatShareBytes, type GuideShareExisting } from './GuideShareDialog';
+import { GuideShareDialog, formatShareBytes, type GuideShareCreated, type GuideShareExisting } from './GuideShareDialog';
 
 interface GuideExportButtonProps {
   /** Live guide job id or `saved:{id}`. */
@@ -38,8 +38,6 @@ function parseShareInfo(input: unknown): ShareInfo | null {
   return { enabled: r.enabled, serviceUrl: r.serviceUrl, existing };
 }
 
-const formatBytes = formatShareBytes;
-
 const HEADER_CONTROL_CLASS =
   'inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 py-1.5 text-[11.5px] text-muted-foreground transition-colors hover:border-border hover:text-foreground';
 
@@ -59,11 +57,17 @@ const HEADER_CONTROL_CLASS =
  * (`PLANNOTATOR_SHARE=disabled`) or that preflight fails. When the server
  * already remembers a link for this guide the control reads "Share link"
  * and the dialog offers Remove link.
+ *
+ * The result of a Create is held here for the life of this guide view, so
+ * reopening the dialog shows the same link and one-time delete token instead
+ * of offering a second upload — an unrecorded link (guide history off) can
+ * only ever be removed with that token, so it must never be silently orphaned.
  */
 export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) => {
   const [info, setInfo] = useState<ExportInfo | null>(null);
   const [share, setShare] = useState<ShareInfo | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [created, setCreated] = useState<GuideShareCreated | null>(null);
   const encoded = encodeURIComponent(jobId);
 
   useEffect(() => {
@@ -71,6 +75,7 @@ export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) =
     setInfo(null);
     setShare(null);
     setShareOpen(false);
+    setCreated(null);
     fetch(`/api/guide/${encoded}/export-info`)
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -97,6 +102,7 @@ export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) =
   if (!info) return null;
 
   const shareEnabled = share !== null && share.enabled;
+  const hasLink = shareEnabled && (share.existing !== null || created !== null);
 
   return (
     <>
@@ -109,7 +115,7 @@ export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) =
       >
         <Download size={13} />
         <span>Download portable guide</span>
-        <span className="font-mono text-[10px] text-muted-foreground/60">{formatBytes(info.bytes)}</span>
+        <span className="font-mono text-[10px] text-muted-foreground/60">{formatShareBytes(info.bytes)}</span>
       </a>
       {shareEnabled && (
         <button
@@ -117,14 +123,14 @@ export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) =
           onClick={() => setShareOpen(true)}
           className={HEADER_CONTROL_CLASS}
           title={
-            share.existing
+            hasLink
               ? 'This guide has a share link. Open to copy or remove it.'
               : 'Upload this guide and its diff to the share service and get a link anyone can open'
           }
           data-testid="guide-share"
         >
           <Link2 size={13} />
-          <span>{share.existing ? 'Share link' : 'Create share link'}</span>
+          <span>{hasLink ? 'Share link' : 'Create share link'}</span>
         </button>
       )}
       {shareEnabled && (
@@ -135,15 +141,20 @@ export const GuideExportButton: React.FC<GuideExportButtonProps> = ({ jobId }) =
           bytes={info.bytes}
           serviceUrl={share.serviceUrl}
           existing={share.existing}
-          onCreated={(created) => {
-            // Only a link the server recorded can be removed from here; a
-            // header that claims one otherwise would offer a Remove that 404s.
-            if (!created.recorded) return;
+          created={created}
+          onCreated={(next) => {
+            setCreated(next);
+            // Only a link the server recorded can be removed from here; an
+            // `existing` entry otherwise would offer a Remove that 404s.
+            if (!next.recorded) return;
             setShare((prev) =>
-              prev ? { ...prev, existing: { url: created.url, createdAt: new Date().toISOString() } } : prev,
+              prev ? { ...prev, existing: { url: next.url, createdAt: new Date().toISOString() } } : prev,
             );
           }}
-          onRemoved={() => setShare((prev) => (prev ? { ...prev, existing: null } : prev))}
+          onRemoved={() => {
+            setCreated(null);
+            setShare((prev) => (prev ? { ...prev, existing: null } : prev));
+          }}
         />
       )}
     </>

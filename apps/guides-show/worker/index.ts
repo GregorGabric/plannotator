@@ -5,7 +5,7 @@
  * landing page, and shared guides: /g/<id> pages plus the /api/g* create,
  * fetch and delete routes (contract: adr/implementation/guide-share-hosting.md).
  * The share routes are the pure handler in ../share/core/handler.ts over an R2
- * store; the Bun self-host target runs the same handler over fs or S3.
+ * store.
  *
  * Why R2 for /v1 and not Workers Static Assets: assets are a per-deploy
  * snapshot, so a file missing from the next deploy disappears — but every HTML
@@ -20,22 +20,7 @@ export interface Env {
   VIEWER: R2Bucket;
   /** Shared guides: `g/<id>` bodies + `g/<id>.meta` records (see share/stores/r2.ts). */
   GUIDES: R2Bucket;
-  /** Optional Cloudflare rate-limiting binding; uploads only. Absent = no limiting. */
-  RATE_LIMITER?: RateLimit;
-  /**
-   * Optional operator ceiling on how long any shared guide is kept, in
-   * seconds (`[vars]` in wrangler.toml). Uploads without a ttl get this
-   * lifetime and longer requests are clamped; absent or unparsable = the
-   * contract default, kept until unshared. The kill switch for storage growth.
-   */
-  MAX_TTL_SECONDS?: string;
   ASSETS: Fetcher;
-}
-
-/** `MAX_TTL_SECONDS` as a positive integer, or undefined when unset/unusable. */
-export function maxTtlSecondsFrom(env: Pick<Env, 'MAX_TTL_SECONDS'>): number | undefined {
-  const n = Number(env.MAX_TTL_SECONDS);
-  return env.MAX_TTL_SECONDS !== undefined && env.MAX_TTL_SECONDS !== '' && Number.isSafeInteger(n) && n >= 1 ? n : undefined;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -91,14 +76,14 @@ export function viewerKeyFromPath(pathname: string): string | null {
 async function serveViewerAsset(req: Request, key: string, bucket: R2Bucket): Promise<Response> {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: viewerAssetHeaders(key) });
   if (req.method !== 'GET' && req.method !== 'HEAD') return new Response('method not allowed', { status: 405, headers: { Allow: 'GET, HEAD, OPTIONS' } });
-  const object = req.method === 'HEAD' ? await bucket.head(key) : await bucket.get(key);
-  if (!object) return new Response('not found', { status: 404, headers: { 'Cache-Control': 'public, max-age=60' } });
-  const headers = viewerAssetHeaders(key, {
-    ETag: object.httpEtag,
-    'Content-Length': String(object.size),
-  });
-  if (req.method === 'HEAD' || !('body' in object)) return new Response(null, { status: 200, headers });
-  return new Response(object.body, { status: 200, headers });
+  const notFound = () => new Response('not found', { status: 404, headers: { 'Cache-Control': 'public, max-age=60' } });
+  const headersFor = (object: R2Object) => viewerAssetHeaders(key, { ETag: object.httpEtag, 'Content-Length': String(object.size) });
+  if (req.method === 'HEAD') {
+    const object = await bucket.head(key);
+    return object ? new Response(null, { status: 200, headers: headersFor(object) }) : notFound();
+  }
+  const object = await bucket.get(key);
+  return object ? new Response(object.body, { status: 200, headers: headersFor(object) }) : notFound();
 }
 
 export default {
@@ -114,13 +99,7 @@ export default {
     if (isGuideShareRoute(path)) {
       // Shared guides. The handler pins this Worker's own /v1/ as the viewer
       // base and this origin as the canonical page URL, both taken from req.url.
-      const maxTtlSeconds = maxTtlSecondsFrom(env);
-      return handleGuideShareRequest(req, {
-        store: new R2GuideStore(env.GUIDES),
-        viewerManifest: GUIDE_VIEWER_MANIFEST,
-        rateLimit: env.RATE_LIMITER,
-        ...(maxTtlSeconds !== undefined && { maxTtlSeconds }),
-      });
+      return handleGuideShareRequest(req, { store: new R2GuideStore(env.GUIDES), viewerManifest: GUIDE_VIEWER_MANIFEST });
     }
     if (path.startsWith('/api/')) return json({ error: 'not found' }, 404);
     if (path === '/healthz') return json({ ok: true });

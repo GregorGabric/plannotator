@@ -387,8 +387,9 @@ for (const serverCase of serverCases) {
         expect(((await publicRes.json()) as { url: string }).url).not.toContain("#key=");
 
         // Removal goes to the host the link was created on, not the configured
-        // one: a record from another shell (CLI --service-url) still deletes on
-        // its own host, and a 404 from the wrong host must not forget the link.
+        // one: a record from another shell (a different PLANNOTATOR_GUIDE_SHARE_URL)
+        // still deletes on its own host, and a 404 from the wrong host must not
+        // forget the link.
         const otherDeletes: string[] = [];
         const otherHost = Bun.serve({
           port: 0,
@@ -423,6 +424,19 @@ for (const serverCase of serverCases) {
         deleteStatus = 404;
         expect((await fetch(`${server.url}/api/guide/saved:1000-exportable/share`, { method: "DELETE" })).status).toBe(204);
         expect(loadGuide(repoKey, "1000-exportable")!.share).toBeUndefined();
+        deleteStatus = 204;
+
+        // Deleting a saved guide takes its link down with it (the envelope
+        // held the only copy of the delete token).
+        expect((await fetch(`${server.url}/api/guide/saved:1000-exportable/share`, { method: "POST", headers: jsonHeaders, body: "{}" })).status).toBe(200);
+        const deletesBefore = deletes.length;
+        expect((await fetch(`${server.url}/api/guides/1000-exportable`, { method: "DELETE" })).status).toBe(200);
+        expect(deletes.slice(deletesBefore)).toEqual([{ id: "HostId0123456789abcdef", auth: "Bearer host-del-tok" }]);
+        expect(loadGuide(repoKey, "1000-exportable")).toBeNull();
+        saveGuidePatch(repoKey, "1000-exportable", patch);
+        saveGuide(repoKey, "1000-exportable", envelope({
+          review: { gitRef: "HEAD", source: { kind: "local", repo: "acme/demo" }, patchFile: "1000-exportable.patch" },
+        }));
 
         // Sharing disabled: share-info says so, POST is 403 and nothing is uploaded.
         const uploadsBefore = uploads.length;

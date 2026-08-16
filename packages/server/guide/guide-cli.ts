@@ -31,9 +31,9 @@ import {
   type GuideSnapshotSource,
 } from "@plannotator/shared/guide-format";
 import { GUIDE_VIEWER_MANIFEST } from "@plannotator/shared/guide-viewer-manifest";
-import { buildSavedGuideSnapshot, findSavedGuideById, listAllSavedGuides, savedGuideShareServiceUrl, updateGuideShare, type SavedGuideShare } from "@plannotator/shared/guide-store";
+import { buildSavedGuideSnapshot, findSavedGuideById, listAllSavedGuides, updateGuideShare, type SavedGuideShare } from "@plannotator/shared/guide-store";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
-import { loadConfig, normalizeGuideShareUrl, resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
+import { loadConfig, resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
 import { validateGuideOutput } from "./guide-review";
 import { GuideShareError, shareGuide, unshareGuide } from "./guide-share";
 
@@ -50,11 +50,12 @@ export const GUIDE_CLI_USAGE = [
   "  plannotator guide export --guide <guide.json> --patch <diff.patch | -> [--out <file.html> | --out -]",
   "  plannotator guide export --snapshot <snapshot.json> [--out <file.html> | --out -]",
   "  plannotator guide share --id <savedGuideId> | --guide <guide.json> --patch <diff.patch | -> | --snapshot <snapshot.json>",
-  "                          [--public] [--ttl <7d | 24h | 30m | 3600>] [--service-url <url>] [--json]",
-  "  plannotator guide unshare <id> --token <deleteToken> [--service-url <url>]",
+  "                          [--public] [--ttl <7d | 24h | 30m | 3600>] [--json]",
+  "  plannotator guide unshare <id> --token <deleteToken>",
   "",
   "Export a Guided Review as one portable HTML file (the viewer loads from guides.show),",
-  "or share it as a link on guides.show (or a self-hosted guide host).",
+  "or share it as a link on guides.show (or your own deployment of it: PLANNOTATOR_GUIDE_SHARE_URL,",
+  "or `guideShareUrl` in ~/.plannotator/config.json).",
   "",
   "Options:",
   "  --id <id>          A guide Plannotator saved (see `plannotator guide list`)",
@@ -73,8 +74,6 @@ export const GUIDE_CLI_USAGE = [
   "                     only in the link (the part after #).",
   "  --ttl <duration>   Remove the link automatically after this long: seconds, or 30m / 24h / 7d.",
   "                     Default: the link stays until you unshare it.",
-  "  --service-url <u>  Guide host to upload to (default https://guides.show; also PLANNOTATOR_GUIDE_SHARE_URL",
-  "                     or `guideShareUrl` in ~/.plannotator/config.json)",
   "  --json             Print { id, url, deleteToken, expiresAt? } instead of the bare URL",
   "  --token <t>        (unshare) The delete token printed when the guide was shared",
   "",
@@ -359,16 +358,6 @@ export function runGuideExport(argv: string[], env: NodeJS.ProcessEnv = process.
   return { code: 0, stdout: `${outPath}\n`, stderr: `Exported ${snapshot.guide.title} (${(Buffer.byteLength(html, "utf8") / 1024).toFixed(0)} KB)\n` };
 }
 
-/** `--service-url` wins over env/config, but must be an http(s) URL like the rest. */
-function resolveServiceUrl(override: string | undefined, env: NodeJS.ProcessEnv): { url: string } | { error: string } {
-  if (override !== undefined) {
-    const normalized = normalizeGuideShareUrl(override);
-    if (!normalized) return { error: `--service-url must be an http(s) URL, got ${JSON.stringify(override)}` };
-    return { url: normalized };
-  }
-  return { url: resolveGuideShareUrl(loadConfig(), env) };
-}
-
 /**
  * `plannotator guide share`: upload the guide (encrypted unless `--public`)
  * and print its link. The delete token is printed ONCE, on stderr, with the
@@ -380,20 +369,16 @@ export async function runGuideShare(argv: string[], env: NodeJS.ProcessEnv = pro
   const jsonFlag = takeFlag(publicFlag.rest, "--json");
   const ttlOpt = takeOption(jsonFlag.rest, "--ttl");
   if ("error" in ttlOpt) return { code: 2, stderr: `${ttlOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  const serviceOpt = takeOption(ttlOpt.rest, "--service-url");
-  if ("error" in serviceOpt) return { code: 2, stderr: `${serviceOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
   let ttlSeconds: number | undefined;
   if (ttlOpt.value !== undefined) {
     const parsed = parseGuideShareTtl(ttlOpt.value);
     if (parsed === null) return { code: 2, stderr: `--ttl must be a positive duration: seconds, or 30m / 24h / 7d (got ${JSON.stringify(ttlOpt.value)}).\n\n${GUIDE_CLI_USAGE}\n` };
     ttlSeconds = parsed;
   }
-  const service = resolveServiceUrl(serviceOpt.value, env);
-  if ("error" in service) return { code: 2, stderr: `${service.error}\n\n${GUIDE_CLI_USAGE}\n` };
 
   // Every argument is validated before the sharing gate so usage mistakes
   // still read as usage (exit 2), the same as `export`.
-  const parsedSource = parseSourceArgs(serviceOpt.rest);
+  const parsedSource = parseSourceArgs(ttlOpt.rest);
   if (!parsedSource.ok) return parsedSource.result;
   if (parsedSource.args.rest.length > 0) return { code: 2, stderr: `Unknown argument: ${parsedSource.args.rest[0]}\n\n${GUIDE_CLI_USAGE}\n` };
 
@@ -417,9 +402,10 @@ export async function runGuideShare(argv: string[], env: NodeJS.ProcessEnv = pro
   }
 
   const mode = publicFlag.present ? "plain" : "encrypted";
+  const serviceUrl = resolveGuideShareUrl(loadConfig(), env);
   let shared;
   try {
-    shared = await shareGuide(source.snapshot, { serviceUrl: service.url, mode, ttlSeconds, viewer: GUIDE_VIEWER_MANIFEST, fetch: io.fetch });
+    shared = await shareGuide(source.snapshot, { serviceUrl, mode, ttlSeconds, viewer: GUIDE_VIEWER_MANIFEST, fetch: io.fetch });
   } catch (e) {
     if (e instanceof GuideShareError) return { code: 1, stderr: `${e.message}\n` };
     throw e;
@@ -430,7 +416,7 @@ export async function runGuideShare(argv: string[], env: NodeJS.ProcessEnv = pro
       url: shared.url,
       createdAt: io.now ?? new Date().toISOString(),
       deleteToken: shared.deleteToken,
-      serviceUrl: service.url,
+      serviceUrl,
     });
   }
 
@@ -451,26 +437,22 @@ export async function runGuideShare(argv: string[], env: NodeJS.ProcessEnv = pro
 
 /**
  * `plannotator guide unshare <id> --token <t>`: remove the link on the host;
- * forget it on any saved envelope that recorded it. Without `--service-url`,
- * a link some saved guide remembers is removed from the host it was created
- * on, whatever the configured share URL is now.
+ * forget it on any saved envelope that recorded it. A link some saved guide
+ * remembers is removed from the host it was created on, whatever the
+ * configured share URL is now; otherwise the configured host is used.
  */
 export async function runGuideUnshare(argv: string[], env: NodeJS.ProcessEnv = process.env, io: GuideCliIo = {}): Promise<GuideCliResult> {
   const tokenOpt = takeOption(argv, "--token");
   if ("error" in tokenOpt) return { code: 2, stderr: `${tokenOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  const serviceOpt = takeOption(tokenOpt.rest, "--service-url");
-  if ("error" in serviceOpt) return { code: 2, stderr: `${serviceOpt.error}\n\n${GUIDE_CLI_USAGE}\n` };
-  const [id, ...extra] = serviceOpt.rest;
+  const [id, ...extra] = tokenOpt.rest;
   if (!id || id.startsWith("--")) return { code: 2, stderr: `unshare needs the shared guide id.\n\n${GUIDE_CLI_USAGE}\n` };
   if (extra.length > 0) return { code: 2, stderr: `Unknown argument: ${extra[0]}\n\n${GUIDE_CLI_USAGE}\n` };
   if (!tokenOpt.value) return { code: 2, stderr: `unshare needs --token <deleteToken>.\n\n${GUIDE_CLI_USAGE}\n` };
-  const service = resolveServiceUrl(serviceOpt.value, env);
-  if ("error" in service) return { code: 2, stderr: `${service.error}\n\n${GUIDE_CLI_USAGE}\n` };
   const remembered = listAllSavedGuides().filter(({ envelope }) => envelope.share?.id === id);
-  const recordedHost = serviceOpt.value === undefined ? remembered.map(({ envelope }) => savedGuideShareServiceUrl(envelope.share!)).find((u) => u) : undefined;
+  const serviceUrl = remembered[0]?.envelope.share?.serviceUrl ?? resolveGuideShareUrl(loadConfig(), env);
 
   try {
-    await unshareGuide(id, tokenOpt.value, { serviceUrl: recordedHost ?? service.url, fetch: io.fetch });
+    await unshareGuide(id, tokenOpt.value, { serviceUrl, fetch: io.fetch });
   } catch (e) {
     if (e instanceof GuideShareError) return { code: 1, stderr: `${e.message}\n` };
     throw e;

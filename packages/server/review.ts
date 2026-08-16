@@ -86,8 +86,8 @@ import {
 } from "./claude-review";
 import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "./tour/tour-review";
 import { createGuideSession, GUIDE_EMPTY_OUTPUT_ERROR } from "./guide/guide-review";
-import { GuideShareError, shareGuide, unshareGuide } from "./guide/guide-share";
-import { createGuideStoreSession, loadGuide, SAVED_GUIDE_ID_PREFIX, savedGuideShareServiceUrl, updateGuideShare } from "@plannotator/shared/guide-store";
+import { GuideShareError, shareGuide, unshareBeforeDelete, unshareGuide } from "./guide/guide-share";
+import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX, updateGuideShare } from "@plannotator/shared/guide-store";
 import { resolveGuideShareUrl, resolveSharingEnabled } from "@plannotator/shared/config";
 import {
   buildGuideSnapshot,
@@ -1255,7 +1255,7 @@ export async function startReviewServer(
             : {
                 kind: commitSha ? "commit" : "local",
                 ...(repoInfo?.display && { repo: repoInfo.display }),
-                ...(gitContext?.currentBranch && { branch: gitContext.currentBranch }),
+                ...(clientGitContext?.currentBranch && { branch: clientGitContext.currentBranch }),
                 ...(guideContext.headSha && { headSha: guideContext.headSha }),
                 ...(commitSha && { commitSha }),
               };
@@ -1731,8 +1731,7 @@ export async function startReviewServer(
           if (guideShareMatch && guideShareMatch[2] === "share-info" && req.method === "GET") {
             const jobId = decodeURIComponent(guideShareMatch[1]);
             const config = loadConfig();
-            const located = await guideStore.locateEnvelope(jobId);
-            const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+            const existing = (await guideStore.locateEnvelope(jobId))?.envelope.share;
             return Response.json({
               enabled: resolveSharingEnabled(config),
               serviceUrl: resolveGuideShareUrl(config),
@@ -1766,7 +1765,7 @@ export async function startReviewServer(
               // token lives, so a second upload would orphan the first on the
               // host. Remove the existing link before creating another.
               const located = await guideStore.locateEnvelope(jobId);
-              const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+              const existing = located?.envelope.share;
               if (existing) {
                 return Response.json({ error: "This guide already has a share link. Remove it before creating another.", url: existing.url }, { status: 409 });
               }
@@ -1806,10 +1805,10 @@ export async function startReviewServer(
             // created the link), and a 404 from the wrong host would forget a
             // link that is still live.
             const located = await guideStore.locateEnvelope(jobId);
-            const record = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+            const record = located?.envelope.share;
             if (!located || !record) return Response.json({ error: "No share link for this guide" }, { status: 404 });
             try {
-              await unshareGuide(record.id, record.deleteToken, { serviceUrl: savedGuideShareServiceUrl(record) ?? serviceUrl });
+              await unshareGuide(record.id, record.deleteToken, { serviceUrl: record.serviceUrl });
             } catch (e) {
               // Already gone on the host (expired or removed elsewhere): the
               // link is dead either way, so forget it here too.
@@ -1827,10 +1826,13 @@ export async function startReviewServer(
             return Response.json(await guideStore.listSaved());
           }
 
-          // API: Delete a saved guide (#1112)
+          // API: Delete a saved guide (#1112). Its share link goes with it,
+          // best effort: the envelope is the only copy of the delete token.
           const savedGuideDeleteMatch = url.pathname.match(/^\/api\/guides\/([^/]+)$/);
           if (savedGuideDeleteMatch && req.method === "DELETE") {
-            const ok = await guideStore.deleteSaved(decodeURIComponent(savedGuideDeleteMatch[1]));
+            const savedId = decodeURIComponent(savedGuideDeleteMatch[1]);
+            await unshareBeforeDelete((await guideStore.locateEnvelope(`${SAVED_GUIDE_ID_PREFIX}${savedId}`))?.envelope.share);
+            const ok = await guideStore.deleteSaved(savedId);
             if (!ok) return Response.json({ error: "Guide not found" }, { status: 404 });
             return Response.json({ ok: true });
           }

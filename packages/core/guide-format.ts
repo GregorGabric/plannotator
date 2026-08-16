@@ -9,7 +9,7 @@
  * Decision record: adr/decisions/007-portable-guided-reviews-20260815.md (D1, D5, D9).
  */
 
-import { parseDiffFilePathLines, parseDiffGitHeader, parseDiffMetadataPathLines } from "./diff-paths";
+import { parseDiffToFiles } from "./diff-files";
 import type { CodeGuideOutput, GuideDiffRef, GuideSection } from "./guide";
 
 /** Discriminator for a portable guided-review snapshot. */
@@ -254,9 +254,6 @@ function parseSection(input: unknown, path: string): Parsed<GuideSection> {
   const overview = str(s.value.overview, `${path}.overview`);
   if (isFail(overview)) return overview;
   if (!Array.isArray(s.value.diffs)) return fail(`${path}.diffs`, "Expected an array");
-  if (s.value.diffs.length > MAX_GUIDE_DIFF_REFS) {
-    return fail(`${path}.diffs`, `Section exceeds the ${MAX_GUIDE_DIFF_REFS}-file-reference limit`);
-  }
   const diffs: GuideDiffRef[] = [];
   for (let i = 0; i < s.value.diffs.length; i++) {
     const ref = parseDiffRef(s.value.diffs[i], `${path}.diffs[${i}]`);
@@ -308,9 +305,6 @@ function parseGuide(input: unknown): Parsed<GuideSnapshotGuide> {
   }
 
   if (!Array.isArray(s.value.reviewed)) return fail(`${path}.reviewed`, "Expected an array");
-  if (s.value.reviewed.length > MAX_GUIDE_SECTIONS) {
-    return fail(`${path}.reviewed`, `Reviewed state exceeds the ${MAX_GUIDE_SECTIONS}-section limit`);
-  }
   // Normalize to sections.length: pad with false, drop extras.
   const reviewed = new Array<boolean>(sections.length).fill(false);
   for (let i = 0; i < s.value.reviewed.length; i++) {
@@ -513,30 +507,9 @@ export interface GuidePatchFile {
   readonly patch: string;
 }
 
-function splitDiffChunks(rawPatch: string): string[] {
-  const matches = [...rawPatch.matchAll(/^diff --git /gm)];
-  return matches.map((match, index) => {
-    const start = match.index ?? 0;
-    const end = matches[index + 1]?.index ?? rawPatch.length;
-    return rawPatch.slice(start, end).replace(/\n+$/, "");
-  });
-}
-
-/** Split a unified diff into per-file chunks with their resolved (post-image) path. */
+/** Per-file chunks of a unified diff with their resolved (post-image) path. */
 export function listGuidePatchFiles(rawPatch: string): GuidePatchFile[] {
-  const files: GuidePatchFile[] = [];
-  for (const patch of splitDiffChunks(rawPatch)) {
-    const lines = patch.split("\n");
-    const filePaths = parseDiffFilePathLines(lines);
-    const metadataPaths = parseDiffMetadataPathLines(lines);
-    const headerPaths = parseDiffGitHeader(lines[0] ?? "");
-    const oldPath = filePaths.oldPath ?? metadataPaths.oldPath ?? headerPaths.oldPath;
-    const newPath = filePaths.newPath ?? metadataPaths.newPath ?? headerPaths.newPath;
-    const path = newPath ?? oldPath;
-    if (!path) continue;
-    files.push({ path, patch });
-  }
-  return files;
+  return parseDiffToFiles(rawPatch).map((file) => ({ path: file.path, patch: file.patch }));
 }
 
 /**
@@ -558,14 +531,17 @@ const EXTENSION_LANGUAGES: Readonly<Record<string, string>> = {
   sql: "sql", graphql: "graphql", gql: "graphql", proto: "proto", lua: "lua", php: "php", dart: "dart",
   ex: "elixir", exs: "elixir", erl: "erlang", hs: "haskell", scala: "scala", clj: "clojure", r: "r",
   pl: "perl", tf: "terraform", hcl: "hcl", zig: "zig", nix: "nix", ml: "ocaml", mli: "ocaml",
-  dockerfile: "docker", makefile: "makefile", cmake: "cmake", tex: "latex", diff: "diff", patch: "diff",
+  dockerfile: "docker", makefile: "make", cmake: "cmake", tex: "latex", diff: "diff", patch: "diff",
 };
 
 const BASENAME_LANGUAGES: Readonly<Record<string, string>> = {
   dockerfile: "docker",
-  makefile: "makefile",
+  makefile: "make",
   cmakelists: "cmake",
 };
+
+/** Every grammar id `guideLanguageForPath` can return — the only chunks an export's `viewer.langs` pin can ever reference. */
+export const GUIDE_LANGUAGE_IDS: readonly string[] = [...new Set([...Object.values(EXTENSION_LANGUAGES), ...Object.values(BASENAME_LANGUAGES)])].sort();
 
 /** Shiki grammar id for a path, or undefined when the viewer should render plain text. */
 export function guideLanguageForPath(path: string): string | undefined {
@@ -651,7 +627,7 @@ export function resolveGuideViewerAssets(
 /** Where published viewer builds live (decision record D7/D8). */
 export const DEFAULT_GUIDE_VIEWER_BASE_URL = "https://guides.show/v1/";
 
-function escapeHtmlText(input: string): string {
+export function escapeHtmlText(input: string): string {
   return input.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
@@ -763,7 +739,7 @@ ${unplaced}
 // for the first moments and reveals itself only if nothing has replaced it
 // (CSS-only, no script needed). The body ground paints in the right theme
 // immediately.
-const FALLBACK_STYLE = `
+export const FALLBACK_STYLE = `
 html{color-scheme:light dark}
 body.pgr-fallback-body{margin:0;background:#f5f7f6}
 @keyframes pgr-reveal{to{opacity:1}}
@@ -936,11 +912,6 @@ export function readEmbeddedGuideSnapshot(doc: {
   const el = doc.getElementById(GUIDE_SNAPSHOT_SCRIPT_ID);
   if (!el) return null;
   return parseGuideSnapshotJson(el.textContent ?? "");
-}
-
-/** UTF-8 byte length of the exported document. */
-export function estimateGuideHtmlBytes(snapshot: GuideSnapshotV1, options: GuideHtmlOptions): number {
-  return new TextEncoder().encode(createGuideHtml(snapshot, options)).byteLength;
 }
 
 /** Bounded, filesystem-safe filename derived from the guide title. */

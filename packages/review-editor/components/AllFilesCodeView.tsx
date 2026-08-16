@@ -291,12 +291,6 @@ export interface AllFilesCodeViewProps {
    * See adr/decisions/007-portable-guided-reviews-20260815.md (D2, D4).
    */
   readOnly?: boolean;
-  /**
-   * The `[ ] z c v a x` window keydown handler. Defaults to `!readOnly`; a
-   * host embedding this view in a larger page can turn it off independently
-   * of read-only rendering (the handler is global to the window).
-   */
-  enableKeyboardShortcuts?: boolean;
   /** EXPERIMENTAL flag-gated edit-to-suggestion mode. Only the plain all-files
    * dock panel passes this — Guided Review surfaces deliberately do NOT (the
    * GuideViewportManager evicts CodeViews beyond ~8 mounted, which would
@@ -546,7 +540,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   leadingContent,
   isActive = true,
   readOnly = false,
-  enableKeyboardShortcuts,
   aiAvailable = false,
   onAskAIForFile,
   isAILoading = false,
@@ -2055,9 +2048,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollTargetAnnotation, filePathToItemId]);
 
-  const shortcutsEnabled = enableKeyboardShortcuts ?? !readOnly;
   useEffect(() => {
-    if (!isActive || !shortcutsEnabled) return;
+    if (!isActive || readOnly) return;
     const handler = (e: KeyboardEvent) => {
       // composedPath()[0] pierces shadow DOM: window-level e.target retargets
       // to the shadow HOST (e.g. <diffs-container>), which would hide a
@@ -2148,7 +2140,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     return () => window.removeEventListener('keydown', handler);
   }, [
     isActive,
-    shortcutsEnabled,
+    readOnly,
     orderedItemIds,
     filePathToItemId,
     itemIdToFilePath,

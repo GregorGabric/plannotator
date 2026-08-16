@@ -68,7 +68,6 @@ describe("plannotator guide", () => {
     expect(lines[1]).toContain("no ");
     expect(lines[2]).toContain("1000-exportable");
     expect(lines[2]).toContain("yes");
-    expect((await runGuideCli(["list"], {}, workDir)).stdout).not.toBe("No saved guides.\n");
     rmSync(dataDir, { recursive: true, force: true });
     expect((await runGuideCli(["list"])).stdout).toBe("No saved guides.\n");
   });
@@ -279,29 +278,29 @@ describe("plannotator guide", () => {
       expect(loadGuide("shelf-a", "1000-exportable")!.share?.deleteToken).toBe("del-tok");
     });
 
-    test("unshare without --service-url removes a remembered link from the host it was created on, not the configured one", async () => {
+    test("unshare removes a remembered link from the host it was created on, not the configured one", async () => {
       seedExportable();
       const svc = fakeService((call) => call.method === "POST"
         ? Response.json({ id: "SelfId", url: "https://self.example/g/SelfId", deleteToken: "t-self" }, { status: 201 })
         : new Response(null, { status: 204 }));
-      expect((await runGuideCli(["share", "--id", "1000-exportable", "--service-url", "https://self.example"], {}, workDir, { fetch: svc.fetch })).code).toBe(0);
+      expect((await runGuideCli(["share", "--id", "1000-exportable"], { PLANNOTATOR_GUIDE_SHARE_URL: "https://self.example" }, workDir, { fetch: svc.fetch })).code).toBe(0);
       expect(loadGuide("shelf-a", "1000-exportable")!.share?.serviceUrl).toBe("https://self.example");
       // Configured host is guides.show now; the record still knows where the upload lives.
       const res = await runGuideCli(["unshare", "SelfId", "--token", "t-self"], { PLANNOTATOR_GUIDE_SHARE_URL: "https://guides.show" }, workDir, { fetch: svc.fetch });
       expect(res.code).toBe(0);
       expect(svc.calls[1].url).toBe("https://self.example/api/g/SelfId");
       expect(loadGuide("shelf-a", "1000-exportable")!.share).toBeUndefined();
-      // An explicit --service-url still wins.
-      const explicit = fakeService();
-      await runGuideCli(["unshare", "SelfId", "--token", "t-self", "--service-url", "https://other.example"], {}, workDir, { fetch: explicit.fetch });
-      expect(explicit.calls[0].url).toBe("https://other.example/api/g/SelfId");
+      // No record → the configured host.
+      const configured = fakeService();
+      await runGuideCli(["unshare", "SelfId", "--token", "t-self"], { PLANNOTATOR_GUIDE_SHARE_URL: "https://other.example" }, workDir, { fetch: configured.fetch });
+      expect(configured.calls[0].url).toBe("https://other.example/api/g/SelfId");
     });
 
-    test("share --public --ttl --json --service-url: plain upload with ttlSeconds to the given host, JSON record on stdout", async () => {
+    test("share --public --ttl --json: plain upload with ttlSeconds to the configured host, JSON record on stdout", async () => {
       const file = join(workDir, "snap.json");
       writeFileSync(file, JSON.stringify(FIXTURE_V1_PR));
       const svc = fakeService(() => Response.json({ id: "PubId", url: "http://localhost:8788/g/PubId", deleteToken: "t2", expiresAt: "2026-08-22T00:00:00.000Z" }, { status: 201 }));
-      const res = await runGuideCli(["share", "--snapshot", "snap.json", "--public", "--ttl", "7d", "--json", "--service-url", "http://localhost:8788/"], {}, workDir, { fetch: svc.fetch });
+      const res = await runGuideCli(["share", "--snapshot", "snap.json", "--public", "--ttl", "7d", "--json"], { PLANNOTATOR_GUIDE_SHARE_URL: "http://localhost:8788/" }, workDir, { fetch: svc.fetch });
       expect(res.code).toBe(0);
       expect(svc.calls[0].url).toBe("http://localhost:8788/api/g");
       const body = svc.calls[0].body as { mode: string; data: string; ttlSeconds?: number };
@@ -310,7 +309,7 @@ describe("plannotator guide", () => {
       expect(JSON.parse(body.data)).toEqual(FIXTURE_V1_PR);
       expect(JSON.parse(res.stdout!)).toEqual({ id: "PubId", url: "http://localhost:8788/g/PubId", deleteToken: "t2", expiresAt: "2026-08-22T00:00:00.000Z" });
       expect(res.stderr).toContain("expires 2026-08-22T00:00:00.000Z");
-      // Env var picks the host when --service-url is absent.
+      // A sub-path host keeps its path.
       const viaEnv = fakeService();
       await runGuideCli(["share", "--snapshot", "snap.json"], { PLANNOTATOR_GUIDE_SHARE_URL: "https://guides.example.test/sub/" }, workDir, { fetch: viaEnv.fetch });
       expect(viaEnv.calls[0].url).toBe("https://guides.example.test/sub/api/g");
@@ -342,11 +341,10 @@ describe("plannotator guide", () => {
       expect(svc.calls.length).toBe(1);
     });
 
-    test("share exit codes: usage 2 (bad ttl, bad service url, unknown arg, no source), 1 for missing guide and service errors", async () => {
+    test("share exit codes: usage 2 (bad ttl, unknown arg, no source), 1 for missing guide and service errors", async () => {
       seedExportable();
       const svc = fakeService(() => Response.json({ error: "too large", maxBytes: 25 * 1024 * 1024 }, { status: 413 }));
       expect((await runGuideCli(["share", "--id", "1000-exportable", "--ttl", "soon"], {}, workDir, { fetch: svc.fetch })).code).toBe(2);
-      expect((await runGuideCli(["share", "--id", "1000-exportable", "--service-url", "ftp://x"], {}, workDir, { fetch: svc.fetch })).code).toBe(2);
       expect((await runGuideCli(["share", "--id", "1000-exportable", "--bogus"], {}, workDir, { fetch: svc.fetch })).code).toBe(2);
       expect((await runGuideCli(["share"], {}, workDir, { fetch: svc.fetch })).code).toBe(2);
       // Usage problems never reach the host, even when sharing is disabled.

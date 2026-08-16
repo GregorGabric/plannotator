@@ -88,7 +88,7 @@ import {
 	readDraftGenerationFromUrl,
 	handleUploadRequest,
 } from "./handlers.ts";
-import { handleApiNotFound, html, json, parseBody, parseJsonBody, readRawBody, requestUrl, send } from "./helpers.ts";
+import { handleApiNotFound, html, json, parseBody, parseJsonBody, readBody, requestUrl, send } from "./helpers.ts";
 import { createPiAIRuntime, handlePiAIRequest } from "./ai-runtime.ts";
 
 import { buildAdvertisedUrl, isRemoteSession, listenOnPort } from "./network.ts";
@@ -124,8 +124,8 @@ import {
 } from "../generated/claude-review.ts";
 import { createTourSession, TOUR_EMPTY_OUTPUT_ERROR } from "../generated/tour-review.ts";
 import { createGuideSession, GUIDE_EMPTY_OUTPUT_ERROR } from "../generated/guide-review.ts";
-import { GuideShareError, shareGuide, unshareGuide } from "../generated/guide-share.ts";
-import { createGuideStoreSession, loadGuide, SAVED_GUIDE_ID_PREFIX, savedGuideShareServiceUrl, updateGuideShare } from "../generated/guide-store.ts";
+import { GuideShareError, shareGuide, unshareBeforeDelete, unshareGuide } from "../generated/guide-share.ts";
+import { createGuideStoreSession, SAVED_GUIDE_ID_PREFIX, updateGuideShare } from "../generated/guide-store.ts";
 import {
 	buildGuideSnapshot,
 	createGuideHtml,
@@ -1670,13 +1670,22 @@ export async function startReviewServer(options: {
 		const guideExportMatch = url.pathname.match(/^\/api\/guide\/([^/]+)\/(export|export-info)$/);
 		if (guideExportMatch && req.method === "GET") {
 			const jobId = decodeURIComponent(guideExportMatch[1]);
-			const snapshot = await resolveGuideSnapshotForExport(jobId);
-			if (!snapshot) {
-				json(res, { error: "This guide cannot be exported: its diff was not retained." }, 404);
+			// Unlike Bun.serve, node:http does not turn a thrown error into a
+			// 500 — an unguarded throw here would take the extension host down.
+			let snapshot: GuideSnapshot | null;
+			let html: string;
+			try {
+				snapshot = await resolveGuideSnapshotForExport(jobId);
+				if (!snapshot) {
+					json(res, { error: "This guide cannot be exported: its diff was not retained." }, 404);
+					return;
+				}
+				const viewer = resolveGuideViewerAssets(GUIDE_VIEWER_MANIFEST, { baseUrl: process.env.PLANNOTATOR_GUIDE_VIEWER_URL });
+				html = createGuideHtml(snapshot, { viewer });
+			} catch {
+				json(res, { error: "internal error" }, 500);
 				return;
 			}
-			const viewer = resolveGuideViewerAssets(GUIDE_VIEWER_MANIFEST, { baseUrl: process.env.PLANNOTATOR_GUIDE_VIEWER_URL });
-			const html = createGuideHtml(snapshot, { viewer });
 			const filename = guideExportFilename(snapshot.guide.title);
 			if (guideExportMatch[2] === "export-info") {
 				json(res, {
@@ -1704,8 +1713,7 @@ export async function startReviewServer(options: {
 		if (guideShareMatch && guideShareMatch[2] === "share-info" && req.method === "GET") {
 			const jobId = decodeURIComponent(guideShareMatch[1]);
 			const config = loadConfig();
-			const located = await guideStore.locateEnvelope(jobId);
-			const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+			const existing = (await guideStore.locateEnvelope(jobId))?.envelope.share;
 			json(res, {
 				enabled: resolveSharingEnabled(config),
 				serviceUrl: resolveGuideShareUrl(config),
@@ -1729,7 +1737,7 @@ export async function startReviewServer(options: {
 				// Every body field is optional, so no body at all means the defaults.
 				let body: { public?: unknown; ttlSeconds?: unknown };
 				try {
-					const raw = await readRawBody(req);
+					const raw = await readBody(req);
 					const parsed: unknown = raw.trim() === "" ? {} : JSON.parse(raw);
 					if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
 					body = parsed as { public?: unknown; ttlSeconds?: unknown };
@@ -1749,17 +1757,17 @@ export async function startReviewServer(options: {
 				// token lives, so a second upload would orphan the first on the
 				// host. Remove the existing link before creating another.
 				const located = await guideStore.locateEnvelope(jobId);
-				const existing = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+				const existing = located?.envelope.share;
 				if (existing) {
 					json(res, { error: "This guide already has a share link. Remove it before creating another.", url: existing.url }, 409);
 					return;
 				}
-				const snapshot = await resolveGuideSnapshotForExport(jobId);
-				if (!snapshot) {
-					json(res, { error: "This guide cannot be shared: its diff was not retained." }, 404);
-					return;
-				}
 				try {
+					const snapshot = await resolveGuideSnapshotForExport(jobId);
+					if (!snapshot) {
+						json(res, { error: "This guide cannot be shared: its diff was not retained." }, 404);
+						return;
+					}
 					const shared = await shareGuide(snapshot, {
 						serviceUrl,
 						mode: body.public === true ? "plain" : "encrypted",
@@ -1781,11 +1789,9 @@ export async function startReviewServer(options: {
 						: false;
 					json(res, { ...shared, recorded });
 				} catch (e) {
-					if (e instanceof GuideShareError) {
-						json(res, { error: e.message }, 502);
-						return;
-					}
-					throw e;
+					// node:http does not convert a throw into a 500 the way Bun.serve
+					// does; an unguarded throw would take the extension host down.
+					json(res, { error: e instanceof GuideShareError ? e.message : "internal error" }, e instanceof GuideShareError ? 502 : 500);
 				}
 				return;
 			}
@@ -1795,22 +1801,19 @@ export async function startReviewServer(options: {
 			// the link), and a 404 from the wrong host would forget a link that
 			// is still live.
 			const located = await guideStore.locateEnvelope(jobId);
-			const record = located ? loadGuide(located.repoKey, located.id)?.share : undefined;
+			const record = located?.envelope.share;
 			if (!located || !record) {
 				json(res, { error: "No share link for this guide" }, 404);
 				return;
 			}
 			try {
-				await unshareGuide(record.id, record.deleteToken, { serviceUrl: savedGuideShareServiceUrl(record) ?? serviceUrl });
+				await unshareGuide(record.id, record.deleteToken, { serviceUrl: record.serviceUrl });
 			} catch (e) {
 				// Already gone on the host (expired or removed elsewhere): the
 				// link is dead either way, so forget it here too.
 				if (!(e instanceof GuideShareError && e.status === 404)) {
-					if (e instanceof GuideShareError) {
-						json(res, { error: e.message }, 502);
-						return;
-					}
-					throw e;
+					json(res, { error: e instanceof GuideShareError ? e.message : "internal error" }, e instanceof GuideShareError ? 502 : 500);
+					return;
 				}
 			}
 			updateGuideShare(located.repoKey, located.id, null);
@@ -1825,10 +1828,13 @@ export async function startReviewServer(options: {
 			return;
 		}
 
-		// API: Delete a saved guide (#1112)
+		// API: Delete a saved guide (#1112). Its share link goes with it, best
+		// effort: the envelope is the only copy of the delete token.
 		const savedGuideDeleteMatch = url.pathname.match(/^\/api\/guides\/([^/]+)$/);
 		if (savedGuideDeleteMatch && req.method === "DELETE") {
-			const ok = await guideStore.deleteSaved(decodeURIComponent(savedGuideDeleteMatch[1]));
+			const savedId = decodeURIComponent(savedGuideDeleteMatch[1]);
+			await unshareBeforeDelete((await guideStore.locateEnvelope(`${SAVED_GUIDE_ID_PREFIX}${savedId}`))?.envelope.share);
+			const ok = await guideStore.deleteSaved(savedId);
 			if (!ok) {
 				json(res, { error: "Guide not found" }, 404);
 				return;

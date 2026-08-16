@@ -19,7 +19,6 @@ export interface GuideShareCreated {
   id: string;
   url: string;
   deleteToken: string;
-  expiresAt?: string;
   bytes: number;
   /**
    * Whether the server wrote the link (and its delete token) to the saved
@@ -40,6 +39,8 @@ interface GuideShareDialogProps {
   serviceUrl: string;
   /** Link the server already remembers for this guide, if any. */
   existing: GuideShareExisting | null;
+  /** Result of a Create earlier in this guide view; owned by the caller so it outlives close/reopen. */
+  created: GuideShareCreated | null;
   onCreated: (share: GuideShareCreated) => void;
   onRemoved: () => void;
 }
@@ -66,7 +67,6 @@ function parseCreated(input: unknown): GuideShareCreated | null {
     id: r.id,
     url: r.url,
     deleteToken: r.deleteToken,
-    expiresAt: typeof r.expiresAt === 'string' ? r.expiresAt : undefined,
     bytes: typeof r.bytes === 'number' && Number.isFinite(r.bytes) ? r.bytes : 0,
     recorded: r.recorded === true,
   };
@@ -129,8 +129,10 @@ function LinkRow({ label, value, testId, mono = true }: LinkRowProps) {
  * the guide unencrypted (`{ public: true }`) so the hosted page can carry a
  * title and og: tags. After Create the URL and the delete token are shown,
  * each with Copy; the token is returned by the server exactly once, so this
- * dialog is the only place it can be copied from. When the server already
- * remembers a link for this guide the dialog shows it with Remove link.
+ * dialog is the only place it can be copied from, and the caller keeps that
+ * result so a reopen shows it again instead of a second Create. When the
+ * server already remembers a link for this guide the dialog shows it with
+ * Remove link.
  */
 export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
   isOpen,
@@ -139,28 +141,26 @@ export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
   bytes,
   serviceUrl,
   existing,
+  created,
   onCreated,
   onRemoved,
 }) => {
   const [publicPreview, setPublicPreview] = useState(false);
   const [busy, setBusy] = useState<'create' | 'remove' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<GuideShareCreated | null>(null);
   const encoded = encodeURIComponent(jobId);
   // An existing link names its own host (it may have been created against a
   // different share URL than the one configured now); a new upload goes to
   // the configured one.
   const host = serviceHost(existing && !created ? existing.url : serviceUrl);
 
-  // A fresh open starts from the server's view of the guide (existing link
-  // or none). The one-time token from a previous Create is not kept around.
   useEffect(() => {
     if (!isOpen) return;
-    setPublicPreview(false);
     setBusy(null);
     setError(null);
-    setCreated(null);
-  }, [isOpen]);
+    // The checkbox describes the link once created, so it only resets with the form.
+    if (!created) setPublicPreview(false);
+  }, [isOpen, created]);
 
   const handleCreate = async () => {
     if (busy) return;
@@ -181,7 +181,6 @@ export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
         setError('The server returned an unexpected response.');
         return;
       }
-      setCreated(share);
       onCreated(share);
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not reach the review server.');
@@ -200,7 +199,6 @@ export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
         setError(await readServerError(res));
         return;
       }
-      setCreated(null);
       onRemoved();
     } catch (err) {
       setError(err instanceof Error && err.message ? err.message : 'Could not reach the review server.');
@@ -239,10 +237,7 @@ export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
           {created ? (
             <div className="flex flex-col gap-4">
               <DialogDescription>
-                {created.expiresAt
-                  ? `Anyone with this link can open the guide until ${formatDate(created.expiresAt)}.`
-                  : 'Anyone with this link can open the guide.'}
-                {' '}
+                Anyone with this link can open the guide.{' '}
                 {publicPreview
                   ? 'The guide is stored unencrypted so link previews can show its title.'
                   : 'The key that opens it is the part after # and never leaves this link.'}
@@ -323,7 +318,7 @@ export const GuideShareDialog: React.FC<GuideShareDialogProps> = ({
             >
               {created || showExisting ? 'Close' : 'Cancel'}
             </button>
-            {showExisting && (
+            {(showExisting || created?.recorded) && (
               <button
                 type="button"
                 data-pn-touch-target

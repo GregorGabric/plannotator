@@ -1,34 +1,20 @@
 {
+  // The Worker, the share handler and the build scripts: strict, no DOM.
+  // `bunx tsc --noEmit -p apps/guides-show` (package script `typecheck`).
+  // The React viewer half has its own config, tsconfig.viewer.json.
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "lib": [
-      "ES2022",
-      "DOM",
-      "DOM.Iterable"
-    ],
+    "lib": ["ES2022"],
+    "strict": true,
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
     "noEmit": true,
-    "types": [
-      "vite/client",
-      "@cloudflare/workers-types"
-    ]
+    "types": ["@cloudflare/workers-types", "node", "bun-types"]
   },
-  "include": [
-    "viewer/**/*.ts",
-    "viewer/**/*.tsx",
-    "build/**/*.ts",
-    "worker/**/*.ts",
-    "vite.viewer.config.ts"
-  ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "**/*.test.ts"
-  ]
+  "include": ["worker/**/*.ts", "share/**/*.ts", "build/**/*.ts", "vite.viewer.config.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
 }

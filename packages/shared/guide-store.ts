@@ -89,12 +89,11 @@ export interface SavedGuideShare {
   /** Bearer token that deletes the link on the host. Returned once by the host; only this file remembers it. */
   deleteToken: string;
   /**
-   * The guide host the link was created on (`https://guides.show` or a
-   * self-host), so removal goes to the host that holds the upload even when
-   * the configured share URL has changed since. Absent on records written
-   * before this field existed; callers fall back to the origin of `url`.
+   * The guide host the link was created on (`https://guides.show` or your own
+   * deployment), so removal goes to the host that holds the upload even when
+   * the configured share URL has changed since.
    */
-  serviceUrl?: string;
+  serviceUrl: string;
 }
 
 export interface SavedGuideReview {
@@ -219,6 +218,8 @@ function parseEnvelope(raw: string): SavedGuideEnvelope | null {
   if (typeof guide.title !== "string") return null;
   if (!Array.isArray(guide.sections) || guide.sections.length === 0) return null;
   const sectionCount = guide.sections.length;
+  const review = parseSavedReview(obj.review);
+  const share = parseSavedShare(obj.share);
   return {
     version: 1,
     savedAt: typeof obj.savedAt === "number" ? obj.savedAt : 0,
@@ -230,8 +231,8 @@ function parseEnvelope(raw: string): SavedGuideEnvelope | null {
     ...(typeof obj.prUrl === "string" && obj.prUrl ? { prUrl: obj.prUrl } : {}),
     ...(typeof obj.generatedAt === "number" ? { generatedAt: obj.generatedAt } : {}),
     ...(typeof obj.customInstructions === "string" && obj.customInstructions ? { customInstructions: obj.customInstructions } : {}),
-    ...(parseSavedReview(obj.review) ? { review: parseSavedReview(obj.review)! } : {}),
-    ...(parseSavedShare(obj.share) ? { share: parseSavedShare(obj.share)! } : {}),
+    ...(review ? { review } : {}),
+    ...(share ? { share } : {}),
     guide: guide as unknown as CodeGuideOutput,
     reviewed: coerceReviewed(obj.reviewed, sectionCount),
   };
@@ -262,27 +263,14 @@ function parseSavedShare(value: unknown): SavedGuideShare | null {
   if (typeof r.id !== "string" || !r.id) return null;
   if (typeof r.url !== "string" || !r.url) return null;
   if (typeof r.deleteToken !== "string" || !r.deleteToken) return null;
+  if (typeof r.serviceUrl !== "string" || !r.serviceUrl) return null;
   return {
     id: r.id,
     url: r.url,
     createdAt: typeof r.createdAt === "string" ? r.createdAt : new Date(0).toISOString(),
     deleteToken: r.deleteToken,
-    ...(typeof r.serviceUrl === "string" && r.serviceUrl ? { serviceUrl: r.serviceUrl } : {}),
+    serviceUrl: r.serviceUrl,
   };
-}
-
-/**
- * Where a recorded share link lives: the host it was created on, or, for
- * records without one, the origin of the link itself (the host answers
- * `<origin>/g/<id>`, so the origin is the host).
- */
-export function savedGuideShareServiceUrl(share: SavedGuideShare): string | null {
-  if (share.serviceUrl) return share.serviceUrl;
-  try {
-    return new URL(share.url).origin;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -544,7 +532,7 @@ export interface GuideStoreSession {
    * when nothing is persisted. Backs the share-link bookkeeping
    * (`updateGuideShare`) so a saved guide remembers its link.
    */
-  locateEnvelope(jobId: string): Promise<{ repoKey: string; id: string } | null>;
+  locateEnvelope(jobId: string): Promise<{ repoKey: string; id: string; envelope: SavedGuideEnvelope } | null>;
 }
 
 export function createGuideStoreSession(options: GuideStoreSessionOptions): GuideStoreSession {
@@ -625,6 +613,10 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
           ?? (pr?.url ? deriveGuideRepoKeyFromPRUrl(pr.url) : null)
           ?? (await resolveRepoKey());
         const id = existingId?.id ?? makeGuideId(guide.title);
+        // A re-save rewrites the whole file: carry the stored share link (the
+        // only copy of its delete token) and, absent a fresh launch review,
+        // the stored review over.
+        const previous = existingId ? loadGuide(existingId.repoKey, existingId.id) : null;
         // Patch first, then the envelope that references it — never the reverse.
         const patchFile = `${id}.patch`;
         const patchSaved = launchReview ? saveGuidePatch(repoKey, id, launchReview.rawPatch) : false;
@@ -649,7 +641,8 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
                   patchFile,
                 },
               }
-            : {}),
+            : previous?.review ? { review: previous.review } : {}),
+          ...(previous?.share ? { share: previous.share } : {}),
           guide: guide as CodeGuideOutput,
           reviewed: coerceReviewed(reviewed, guide.sections.length),
         };
@@ -724,14 +717,12 @@ export function createGuideStoreSession(options: GuideStoreSessionOptions): Guid
     },
 
     async locateEnvelope(jobId) {
-      if (jobId.startsWith(SAVED_GUIDE_ID_PREFIX)) {
-        const id = jobId.slice(SAVED_GUIDE_ID_PREFIX.length);
-        const repoKey = await resolveRepoKey();
-        return loadGuide(repoKey, id) ? { repoKey, id } : null;
-      }
-      const saved = savedIdByJob.get(jobId);
+      const saved = jobId.startsWith(SAVED_GUIDE_ID_PREFIX)
+        ? { repoKey: await resolveRepoKey(), id: jobId.slice(SAVED_GUIDE_ID_PREFIX.length) }
+        : savedIdByJob.get(jobId);
       if (!saved) return null;
-      return loadGuide(saved.repoKey, saved.id) ? saved : null;
+      const envelope = loadGuide(saved.repoKey, saved.id);
+      return envelope ? { ...saved, envelope } : null;
     },
   };
 }
