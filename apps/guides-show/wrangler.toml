@@ -20,6 +20,21 @@ bucket_name = "guides-show-viewer"
 binding = "GUIDES"
 bucket_name = "guides-show-guides"
 
+# The brake on anonymous guide creation (POST /api/g only), on top of the
+# handler's 25 MiB size cap. Cloudflare's native rate limiting binding, keyed
+# by CF-Connecting-IP in worker/index.ts. `period` may only be 10 or 60.
+# 20 creates per minute per IP is far above what a person does (a few shares an
+# hour), so a compliant user never meets it; over it the Worker answers 429
+# with Retry-After: 60. The binding is optional in the Env type: delete this
+# block and the Worker simply stops limiting.
+[[ratelimits]]
+name = "GUIDE_CREATE_LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
 # Landing page only. Assets are a per-deploy snapshot, which is why the viewer
 # is NOT served from here.
 [assets]

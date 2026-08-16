@@ -44,7 +44,23 @@ bun run build:viewer && bun run deploy:viewer     # add-only upload of dist/view
 wrangler deploy
 ```
 
-Uploads are anonymous by design (the encrypted default means the host cannot read them); the only brake in code is the size cap (25 MiB per guide). Guides stay until whoever shared them removes them, unless the upload asked for a `ttlSeconds`, and expiry is enforced on read: an expired guide is deleted the next time any route touches it, so one nobody opens stays in the bucket until then. If you want a brake beyond the cap, add a Cloudflare WAF rate-limiting rule on `POST /api/g` in your account; the Worker needs no change.
+Uploads are anonymous by design (the encrypted default means the host cannot read them). Two brakes exist in code: the size cap (25 MiB per guide) and a per-IP rate limit on **creation only**. `POST /api/g` runs through Cloudflare's native rate limiting binding, keyed on `CF-Connecting-IP`, and answers `429 { "error": "too many requests" }` with `Retry-After: 60` past 20 creates per minute. That ceiling is far above what a person does (a few shares an hour), so a compliant user never meets it and only a script does. Reads, `DELETE` (already gated by the delete token issued at create), preflights and the `/v1/` assets are never limited.
+
+The binding is declared in `wrangler.toml`:
+
+```toml
+[[ratelimits]]
+name = "GUIDE_CREATE_LIMITER"
+namespace_id = "1001"        # any id you have not used for another limiter in this account
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60                # only 10 or 60 are accepted
+```
+
+It is **optional** in the Worker's `Env`: delete the block, or run `wrangler dev` / the local stand-in, and creation is simply not limited. The limiter also fails open when it throws and when there is no `CF-Connecting-IP` to key on (nothing is in front of the Worker), because a broken brake must never be what stops people sharing guides.
+
+Guides are kept indefinitely. That is a deliberate decision, not an oversight: a review link that dies on a timer is a worse product than a downloaded file, so the host imposes no TTL and nothing prunes the bucket. Expiry happens only when an upload asks for one (`ttlSeconds`), and it is enforced on read: an expired guide is deleted the next time any route touches it, so one nobody opens stays in the bucket until then. Retention is worth revisiting with the lean sharing refactor.
 
 ### Pointing Plannotator at your host
 
@@ -60,7 +76,7 @@ Guides are encrypted by default: the uploader keeps the key in the URL fragment 
 
 | Route | Request | Response |
 |---|---|---|
-| `POST /api/g` | JSON `{ mode: "encrypted" \| "plain", data: string, viewer?: { js, css, jsIntegrity?, cssIntegrity?, langs? }, ttlSeconds?: number }` | `201 { id, url, deleteToken, expiresAt? }`; `url = <origin>/g/<id>` (the uploader appends `#key=...` for encrypted). `400` bad shape or a plain snapshot that fails validation (`{ error, path, message }`), `413 { error: "too large", maxBytes }` over 25 MiB. `expiresAt` is present only when the upload asked for a `ttlSeconds`. |
+| `POST /api/g` | JSON `{ mode: "encrypted" \| "plain", data: string, viewer?: { js, css, jsIntegrity?, cssIntegrity?, langs? }, ttlSeconds?: number }` | `201 { id, url, deleteToken, expiresAt? }`; `url = <origin>/g/<id>` (the uploader appends `#key=...` for encrypted). `400` bad shape or a plain snapshot that fails validation (`{ error, path, message }`), `413 { error: "too large", maxBytes }` over 25 MiB, `429 { error: "too many requests" }` with `Retry-After` past the per-IP create limit. `expiresAt` is present only when the upload asked for a `ttlSeconds`. |
 | `GET /g/<id>` | | `200 text/html`: plain guides render the full page with the pinned viewer; encrypted guides get the shell that fetches `/api/g/<id>` and decrypts in the browser. `Cache-Control: public, max-age=300`. `404`: a small "not found" page. |
 | `GET /api/g/<id>` | | The stored body: `text/plain` ciphertext (encrypted) or `application/json` (plain). `Access-Control-Allow-Origin: *`, `Cache-Control: public, max-age=300`. `404 { error: "not found" }`. |
 | `DELETE /api/g/<id>` | `Authorization: Bearer <deleteToken>` | `204`; `401` missing or wrong token; `404` unknown or expired. |

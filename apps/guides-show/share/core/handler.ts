@@ -55,6 +55,13 @@ const CORS_HEADERS: Readonly<Record<string, string>> = {
   'Access-Control-Max-Age': '86400',
 };
 
+/**
+ * The CORS headers every `/api/g*` response carries, exported so a host can
+ * answer for the handler with the same contract when it refuses a request
+ * before dispatch (the Worker's rate-limited create).
+ */
+export const GUIDE_SHARE_CORS_HEADERS = CORS_HEADERS;
+
 /** Guide ids are 16 random bytes as unpadded base64url: exactly 22 URL-safe characters. Anything else is unknown, not malformed. */
 const ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
