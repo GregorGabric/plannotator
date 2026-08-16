@@ -74,6 +74,14 @@ export const GUIDE_SCHEMA_JSON = JSON.stringify({
   additionalProperties: false,
 });
 
+/**
+ * The Guided Review methodology. MIRRORED VERBATIM into the standalone
+ * `plannotator-guide` agent skill (github.com/plannotator/guides,
+ * skills/plannotator-guide/SKILL.md, section "2. Write the guide"), where only
+ * the mechanics differ (the diff is guide.patch, the output is guide.json).
+ * When this text changes, update the skill in the same change: a guide made by
+ * an agent must follow the same rules as one made in-app.
+ */
 export const GUIDE_REVIEW_PROMPT = `# Guided Review Organizer
 
 ## Identity
