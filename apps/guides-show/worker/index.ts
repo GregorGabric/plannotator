@@ -89,9 +89,9 @@ function json(body: unknown, status = 200, extra?: Record<string, string>): Resp
  *
  * Fails open in every direction it cannot resolve: no binding (self-host,
  * `wrangler dev`, tests), no `CF-Connecting-IP` (nothing is in front of the
- * Worker, so nothing to key on — and behind Cloudflare that header is set at
- * the edge and cannot be removed by a client), or a limiter that throws. A
- * broken brake must not stop people sharing guides.
+ * Worker, so nothing to key on; behind Cloudflare that header is set at the
+ * edge and a client cannot remove it), or a limiter that throws. A broken
+ * brake must not stop people sharing guides.
  *
  * Returns the `429` to send, or `null` to let the create through.
  */
