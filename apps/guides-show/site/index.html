@@ -57,6 +57,9 @@
   .shot{display:block;width:100%;margin:1.75rem 0 0;padding:0;border:1px solid var(--border);border-radius:8px;background:var(--surface);overflow:hidden;cursor:zoom-in;font:inherit;color:inherit;text-align:left}
   .shot img{display:block;width:100%;height:auto}
   .shot:focus-visible{outline:2px solid var(--add);outline-offset:2px}
+  .examples{margin:.75rem 0 0;font-size:.9rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.35rem .5rem;align-items:baseline}
+  .examples a{color:var(--text);text-decoration-color:var(--add)}
+  .examples a:hover{color:var(--heading)}
   .shot:hover{border-color:var(--border-strong)}
   .shot figcaption{padding:.55rem .9rem .6rem;border-top:1px solid var(--border);color:var(--muted);font-size:.8rem;display:flex;justify-content:space-between;gap:1rem}
   .shot figcaption span:last-child{font-family:var(--mono);font-size:.72rem;white-space:nowrap}
@@ -113,6 +116,11 @@
       <figcaption><span>A two-chapter guide, opened in a browser.</span><span>click to enlarge</span></figcaption>
     </figure>
   </button>
+  <p class="examples">Open a real one:
+    <a href="https://guides.show/g/gs0M7zgI_zYeuqtLG4j5vQ#key=awkuPrNypYrCLT49XVnrRUyzg3Iqb-YB2h9-QEWQWMM">a bug fix, 5 chapters</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://guides.show/g/Q-ECuRlzn6I2U41wmnyVmA#key=bA52euqWQypYoSC8n9LFXvP9gLsvTMwYtgjvfS0YAQE">a 125-file feature branch, 6 chapters</a>
+  </p>
 
   <h2>Making one</h2>
   <p>Ask your coding agent for a guide of a branch, PR, or commit with the <a href="https://github.com/plannotator/guides"><code>plannotator-guide</code></a> skill; it writes the chapters and hands you the file. <a href="https://plannotator.ai">Plannotator</a> users get the same from <em>Download portable guide</em> after a Guided Review.</p>
