@@ -53,6 +53,10 @@ interface PierreDiffContentProps {
   mergedAnnotations: DiffLineAnnotation<DiffAnnotationMetadata>[];
   pendingSelection: SelectedLineRange | null;
   onLineSelectionEnd: (range: SelectedLineRange | null) => void;
+  /** In-flight selection deltas. Only wired when Pierre needs the host to
+   *  repaint (see the options block below); undefined leaves the option off
+   *  the object entirely. */
+  onLineSelectionChange?: (range: SelectedLineRange | null) => void;
   onGutterUtilityClick: (range: SelectedLineRange) => void;
   renderAnnotation: (annotation: { side: string; lineNumber: number; metadata?: DiffAnnotationMetadata }) => React.ReactNode;
   onTokenClick?: (props: DiffTokenEventBaseProps, event: MouseEvent) => void;
@@ -74,6 +78,7 @@ const PierreDiffContent = React.memo(({
   mergedAnnotations,
   pendingSelection,
   onLineSelectionEnd,
+  onLineSelectionChange,
   onGutterUtilityClick,
   renderAnnotation,
   onTokenClick,
@@ -103,6 +108,13 @@ const PierreDiffContent = React.memo(({
         enableGutterUtility: true,
         onGutterUtilityClick,
         onLineSelectionEnd,
+        // A defined `selectedLines` prop puts Pierre in controlled-selection
+        // mode, where `InteractionManager.updateSelection` only stores a
+        // proposed range and leaves the painted highlight to whatever the host
+        // hands back. Without a change handler a second drag therefore never
+        // repaints. Spread conditionally so surfaces that don't need it keep an
+        // options object with no such key at all.
+        ...(onLineSelectionChange ? { onLineSelectionChange } : {}),
         // Pierre's renderer-options builder drops onToken* before it evaluates
         // shouldUseTokenTransformer, so passing the handlers alone never wraps
         // tokens (no data-char) and code-nav/token events never fire. Enable
@@ -134,6 +146,7 @@ const PierreDiffContent = React.memo(({
   prev.mergedAnnotations === next.mergedAnnotations &&
   prev.pendingSelection === next.pendingSelection &&
   prev.onLineSelectionEnd === next.onLineSelectionEnd &&
+  prev.onLineSelectionChange === next.onLineSelectionChange &&
   prev.onGutterUtilityClick === next.onGutterUtilityClick &&
   prev.renderAnnotation === next.renderAnnotation &&
   prev.onTokenClick === next.onTokenClick &&
@@ -633,12 +646,30 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     source: LineSelectionSource,
     range: SelectedLineRange | null,
   ) => {
+    // A cleared selection is never something to preserve. AllFilesCodeView
+    // early-returns on a null range; single-file has to route it to the toolbar
+    // host so an open composer (including the Ask AI window) closes with it —
+    // that call also publishes the null selection upwards.
+    if (range == null) {
+      toolbarHostRef.current?.handleLineSelectionEnd(null);
+      return;
+    }
     if (resolveLineSelectionBehavior({ source, compactTouchLayout }) === 'preserve-selection') {
       onLineSelection(range);
       return;
     }
     toolbarHostRef.current?.handleLineSelectionEnd(range);
   }, [compactTouchLayout, onLineSelection]);
+
+  // Compact touch keeps a dragged range on screen instead of opening the
+  // composer, so `pendingSelection` is non-null for the whole time the reviewer
+  // may drag again — and a non-null `selectedLines` is exactly what puts Pierre
+  // in controlled-selection mode. Feed the in-flight range back so the second
+  // drag repaints and the finger stays tracked. Desktop never enters that state
+  // through a preserved range, and gets no handler at all.
+  const handlePierreLineSelectionChange = useCallback((range: SelectedLineRange | null) => {
+    onLineSelection(range);
+  }, [onLineSelection]);
 
   const handleGutterUtilityClick = useCallback((range: SelectedLineRange) => {
     handleLineSelectionInteraction('gutter-comment-action', range);
@@ -806,6 +837,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
               mergedAnnotations={mergedAnnotations}
               pendingSelection={pendingSelection ?? selectedAnnotationRange}
               onLineSelectionEnd={handlePierreLineSelectionEnd}
+              onLineSelectionChange={compactTouchLayout ? handlePierreLineSelectionChange : undefined}
               onGutterUtilityClick={handleGutterUtilityClick}
               renderAnnotation={renderAnnotation}
               onTokenClick={handleTokenClick}
