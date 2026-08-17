@@ -1,5 +1,5 @@
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
-import React, { act, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
+import React, { act, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { SelectedLineRange } from '@plannotator/ui/types';
 import type { DiffFile } from '../types';
@@ -238,12 +238,38 @@ describe('AllFilesCodeView guide mount state', () => {
 });
 
 describe('AllFilesCodeView compact-touch line selection', () => {
-  async function mount(overrides: Partial<React.ComponentProps<typeof AllFilesCodeView>>) {
+  // Stands in for App: a published range comes straight back down as
+  // `pendingSelection`. That loop is load-bearing — CodeView's selection is
+  // controlled, and the reconcile effect clears the highlight whenever
+  // pendingSelection is null, so a statically-null prop would wipe the range
+  // the preserve branch just painted.
+  function Harness({ compactTouchLayout, onSelection }: {
+    compactTouchLayout: boolean;
+    onSelection?: (range: SelectedLineRange | null) => void;
+  }) {
+    const [pendingSelection, setPendingSelection] = useState<SelectedLineRange | null>(null);
+    return view({
+      compactTouchLayout,
+      pendingSelection,
+      onLineSelection: (range) => {
+        onSelection?.(range);
+        setPendingSelection(range);
+      },
+    });
+  }
+
+  async function mount(
+    compactTouchLayout: boolean,
+    onSelection?: (range: SelectedLineRange | null) => void,
+  ) {
     host = document.createElement('div');
     host.style.height = '400px';
     document.body.appendChild(host);
     root = createRoot(host);
-    await render(overrides);
+    await act(async () => {
+      root!.render(<Harness compactTouchLayout={compactTouchLayout} onSelection={onSelection} />);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
   }
 
   function getSelectionCallbacks() {
@@ -264,10 +290,7 @@ describe('AllFilesCodeView compact-touch line selection', () => {
   test.skipIf(!hasDom)('preserves a dragged range, then opens the composer from the gutter action', async () => {
     const observedSelections: Array<SelectedLineRange | null> = [];
     const range: SelectedLineRange = { start: 4, end: 8, side: 'additions' };
-    await mount({
-      compactTouchLayout: true,
-      onLineSelection: (selection) => observedSelections.push(selection),
-    });
+    await mount(true, (selection) => observedSelections.push(selection));
     const { options, item } = getSelectionCallbacks();
 
     await act(async () => {
@@ -276,6 +299,11 @@ describe('AllFilesCodeView compact-touch line selection', () => {
 
     expect(observedSelections.at(-1)).toEqual(range);
     expect(toolbarSelections).toEqual([]);
+    // Publishing the range upward is only half of "preserved": CodeView's
+    // selection is controlled here, so the highlight only survives if the range
+    // is also handed back down. Without this the composer would stay shut on a
+    // range nothing paints.
+    expect(lastCodeViewProps?.selectedLines).toEqual({ id: item.id, range });
 
     await act(async () => {
       options.onGutterUtilityClick?.(range, { item });
@@ -286,7 +314,7 @@ describe('AllFilesCodeView compact-touch line selection', () => {
 
   test.skipIf(!hasDom)('keeps the incumbent desktop selection-to-composer transition', async () => {
     const range: SelectedLineRange = { start: 4, end: 8, side: 'additions' };
-    await mount({ compactTouchLayout: false });
+    await mount(false);
     const { options, item } = getSelectionCallbacks();
 
     await act(async () => {
