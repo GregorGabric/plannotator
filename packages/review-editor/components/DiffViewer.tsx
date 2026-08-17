@@ -274,7 +274,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   aiHistoryMessages = [],
   onCodeNavRequest,
 }) => {
-  const pierreTheme = usePierreTheme({ fontFamily, fontSize });
+  const pierreTheme = usePierreTheme({ fontFamily, fontSize, compactTouchLayout });
   // Worker-pool highlighting: keep the pool's theme pair in step with the UI
   // theme. (No mount gating here — the single-file panel renders one diff;
   // a main-thread fallback frame at startup is invisible.)

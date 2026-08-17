@@ -564,7 +564,12 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   // header-custom slot, no [data-title] element), so that rule is moot either
   // way — we keep `true` to be explicit that the built-in title is irrelevant
   // here (our FileHeader owns all header chrome).
-  const pierreTheme = usePierreTheme({ fontFamily, fontSize, showFileHeader: true });
+  const pierreTheme = usePierreTheme({
+    fontFamily,
+    fontSize,
+    showFileHeader: true,
+    compactTouchLayout,
+  });
   // Worker-pool highlighting: wait for the pool so the first tokenization
   // wave runs in workers (not a main-thread fallback), and keep the pool's
   // theme pair in step with the UI theme.
