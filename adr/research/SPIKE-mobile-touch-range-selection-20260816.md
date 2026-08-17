@@ -1,6 +1,6 @@
 # Mobile touch range selection spike
 
-**Status:** prototype ready for physical-device gate
+**Status:** explicit endpoint-command prototype rejected; direct-manipulation exploration in progress
 
 **Branch:** `codex/mobile-touch-selection`
 
@@ -15,6 +15,39 @@ The shipped mobile foundation makes a single Plan block or diff line practical t
 - Pierre can technically drag a line-number selection with Pointer Events, but a vertical gutter drag competes with the phone's primary scroll gesture. A reliable comment range must not depend on that gesture.
 
 The goal is a touch-native way to choose one contiguous range. It is not a new annotation model and it is not a general-purpose mobile text editor.
+
+## Product feedback that changed the direction
+
+The first prototype's **Extend selection** and **Adjust lines** commands are rejected. They add a mode switch between the initial target and the actual range gesture, making the interaction slower and less physical than the thing it replaces. This is not a copy or presentation problem; the command-mediated model itself is wrong.
+
+The next experiments must satisfy a stronger contract:
+
+- no preparatory command before extending a range;
+- continuous visual feedback while the finger moves;
+- release commits the target and exposes the normal annotation actions;
+- ordinary scrolling remains available outside the active selection affordance;
+- Plan and Code Review may use different acquisition gestures because their content models are different.
+
+## What the platform actually provides
+
+### Safari-native text selection
+
+Safari owns long-press text selection, its draggable leading/trailing handles, magnifier, and Copy / Find callout. The web Selection API lets Plannotator observe and preserve the resulting range through `selectionchange`, but it exposes no selection-handle UI and no supported extension point for adding Plannotator actions to Safari's callout.
+
+`-webkit-touch-callout: none` is a non-standard Safari control for the long-press callout. It is not evidence that system selection handles will remain usable, and WebKit has version-specific long-press/loupe behavior. Any combination of native handles, suppressed callout, and custom Plannotator actions therefore requires a physical-Safari experiment rather than a code-only conclusion.
+
+Primary evidence:
+
+- [W3C Selection API](https://www.w3.org/TR/selection-api/) defines the document selection, `selectstart`, and `selectionchange`; it does not expose system handles or menu customization.
+- [W3C Pointer Events](https://www.w3.org/TR/pointerevents/) states that `touch-action` governs browser panning/zooming, not text selection or highlighting.
+- [Apple Safari CSS reference](https://developer.apple.com/library/archive/documentation/AppleApplications/Reference/SafariCSSRef/Articles/StandardCSSProperties.html) documents `-webkit-touch-callout` as a Safari-specific callout switch.
+- [WebKit bug 231161](https://bugs.webkit.org/show_bug.cgi?id=231161) distinguishes text selection (`user-select`) from long-press callout/loupe behavior and demonstrates why version-qualified device testing is required.
+
+### Pierre line-range selection
+
+`@pierre/diffs` 1.3.2 already provides the desired direct gesture. A pointer down in the line-number column seeds a range, document-level Pointer Events track across rows, the painted selection updates continuously, and pointer up emits `onLineSelectionEnd`. The gutter is already `user-select: none` and `touch-action: none`, so this path neither invokes native text selection nor hands the active drag to page scrolling.
+
+Plannotator already sets `enableLineSelection: true` and routes `onLineSelectionEnd` into the existing annotation toolbar in both File and All Files views. The remaining Code Review problem is therefore discoverability and touch geometry, not range state or a missing interaction engine.
 
 ## Method
 
@@ -37,11 +70,11 @@ The missing seam is acquisition. Today Pinpoint is disabled as soon as its first
 
 `SelectedLineRange` already represents a multi-line target. `useAnnotationToolbar` extracts the selected code and commits the same start/end span, while both `DiffViewer` and `AllFilesCodeView` project `pendingSelection` back into Pierre as a controlled selection.
 
-Pierre's current interaction manager already uses Pointer Events and supports a gutter drag. The missing seam is a non-drag alternative. This can be implemented in Plannotator's wrapper and hook state; it does not require changing Pierre, its Shadow DOM, or its selection types.
+Pierre's current interaction manager already uses Pointer Events and supports a gutter drag. The rejected prototype incorrectly treated a non-drag alternative as the missing seam. The next spike should preserve Pierre's direct gesture and improve its compact-touch affordance and hit geometry without changing its range types.
 
-## Shared interaction model
+## Rejected shared interaction model
 
-Both surfaces use an explicit two-step adjustment:
+The first prototype used an explicit two-step adjustment:
 
 1. The user's current single target becomes the fixed anchor.
 2. The user invokes a local **Extend** / **Adjust lines** action.
@@ -49,7 +82,40 @@ Both surfaces use an explicit two-step adjustment:
 4. The next eligible target in the same document or file becomes the other endpoint.
 5. Plannotator previews the normalized contiguous range and returns to the prior toolbar/composer.
 
-This is intentionally endpoint selection, not tap-to-toggle arbitrary items. Contiguous ranges preserve document meaning, produce readable exported context, and fit the existing durable annotation records. Discontiguous targets remain a separate product question; raw HTML's multi-target model is not silently generalized to Markdown.
+This was intentionally endpoint selection rather than tap-to-toggle arbitrary items. Its data model was sound, but its interaction was not ergonomic enough to continue. The implementation remains useful as evidence that both annotation pipelines already accept contiguous ranges; it is not the proposed UI.
+
+## Direct-manipulation experiments
+
+### Code Review — first candidate
+
+Use Pierre's incumbent line-number drag directly:
+
+1. Touch a line number and begin dragging in one motion.
+2. Paint the selected range 1:1 under the finger as it crosses rows.
+3. Release to open the normal feedback composer for that range.
+
+The experiment should enlarge the compact-touch hit region to at least 44 CSS pixels without unnecessarily widening the visible gutter or reducing the code viewport. It must test vertical page-scroll intent near the gutter, horizontal code scrolling, split and unified sides, reverse drag, edge auto-scroll, and a simple tap for a single-line comment. No new button or persistent instruction is permitted.
+
+### Plan — candidate A: native range, actions out of the way
+
+1. Long-press text and use Safari's own handles to select the desired words or blocks.
+2. Preserve the live range from `selectionchange`.
+3. Present Plannotator annotation actions in a safe-area-aware bottom dock, spatially separate from Safari's selection callout.
+4. Capture the saved range on action pointer-down so Safari collapsing the visible selection does not lose the target.
+
+This candidate wins if native handles can be extended across rendered Markdown and the bottom actions remain tappable without disabling ordinary copy, lookup, accessibility, or scrolling. Suppressing Safari's callout is an optional experimental cell, not the default assumption.
+
+### Plan — candidate B: semantic range handles
+
+1. A normal Pinpoint tap selects one semantic block as today.
+2. The selected range exposes a direct trailing handle; there is no **Extend** command.
+3. Dragging that handle over another semantic block continuously expands or contracts the contiguous range.
+4. Edge proximity auto-scrolls the document while the handle remains attached to the finger.
+5. Releasing returns the ordinary annotation toolbar at the visible endpoint.
+
+Only the handle owns `touch-action: none`; the document keeps native vertical scrolling everywhere else. This is custom web UI, but it borrows the familiar leading/trailing-handle model and maps the finger directly to the selected extent.
+
+Candidate B is preferred over a whole-document drag recognizer because taking over a vertical drag anywhere in Plan would conflict with its primary reading/scrolling gesture. A hold-then-drag recognizer is also lower priority because it competes with Safari's long-press selection and introduces a disambiguation delay.
 
 ## Plan prototype: block endpoint selection
 
