@@ -79,7 +79,8 @@
   .cmd button:hover{color:var(--heading);border-color:var(--muted)}
   .cmd button:focus-visible{outline:1px solid var(--add);outline-offset:2px}
   .cmd button.done{color:var(--add);border-color:var(--add)}
-  .banner{display:block;width:100%;height:auto;margin:1.5rem 0 0;border:1px solid var(--border);border-radius:8px}
+  .banner,.shot{display:block;width:100%;height:auto;margin:1.5rem 0 0;border:1px solid var(--border);border-radius:8px}
+  .shot{margin-top:1rem}
   footer{margin-top:4rem;padding-top:1.25rem;border-top:1px solid var(--border);color:var(--muted);font-size:.85rem;display:flex;flex-wrap:wrap;gap:.4rem 1.25rem}
   footer a{color:var(--text)}
   @media (prefers-reduced-motion:no-preference){a{transition:text-decoration-color .15s}}
@@ -125,6 +126,10 @@
 
   <h2>This host</h2>
   <p>Viewer builds live under <code>/v1/</code> and never change once published, so a guide from last year opens the same way. A downloaded file sends nothing about your code here. It is a small Cloudflare Worker (<a href="https://github.com/backnotprop/plannotator/tree/main/apps/guides-show"><code>apps/guides-show</code></a>) you can run yourself.</p>
+
+  <h2>What one looks like</h2>
+  <p>A two-chapter guide, opened in a browser. Chapter on the left, its files on the right.</p>
+  <img class="shot" src="/example_guide.webp" alt="A guide with two chapters. Left: the chapter title, a short overview, and the files it covers. Right: the diff for each file." width="1774" height="1101" loading="lazy" decoding="async">
 
   <footer>
     <a href="https://plannotator.ai/docs/reference/portable-guides/">File format</a>
