@@ -9,3 +9,5 @@
   Cache-Control: public, max-age=86400
 /example_guide.webp
   Cache-Control: public, max-age=86400
+/example_guide@2x.webp
+  Cache-Control: public, max-age=86400
