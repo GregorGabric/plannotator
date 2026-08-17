@@ -35,8 +35,6 @@ interface AnnotationToolbarProps {
   copyText?: string;
   /** Hide the copy button (set when a keyboard copy handler exists) */
   hideCopyButton?: boolean;
-  /** Compact Pinpoint action: keep the pending target and choose another block endpoint. */
-  onExtendSelection?: () => void;
   /** Close toolbar when element scrolls out of viewport */
   closeOnScrollOut?: boolean;
   /** Exit animation state */
@@ -55,7 +53,6 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   onQuickLabel,
   copyText,
   hideCopyButton = false,
-  onExtendSelection,
   closeOnScrollOut = false,
   isExiting = false,
   onMouseEnter,
@@ -212,17 +209,6 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
             <div className="w-px h-5 bg-border mx-0.5" />
           </>
         )}
-        {onExtendSelection && (
-          <>
-            <ToolbarButton
-              onClick={onExtendSelection}
-              icon={<ExtendIcon />}
-              label="Extend selection"
-              className="text-primary hover:bg-primary/10"
-            />
-            <div className="w-px h-5 bg-border mx-0.5" />
-          </>
-        )}
         <ToolbarButton
           onClick={() => handleTypeSelect(AnnotationType.DELETION)}
           icon={<TrashIcon />}
@@ -309,12 +295,6 @@ const ZapIcon = () => (
 const CloseIcon = () => (
   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-  </svg>
-);
-
-const ExtendIcon = () => (
-  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-    <path strokeLinecap="round" strokeLinejoin="round" d="M8 5H5v14h3M16 5h3v14h-3M9 12h6m-3-3 3 3-3 3" />
   </svg>
 );
 

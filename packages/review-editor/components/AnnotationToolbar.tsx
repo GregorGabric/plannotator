@@ -32,7 +32,6 @@ interface AnnotationToolbarProps {
   onSubmit: () => void;
   onDismiss: () => void;
   onCancel: () => void;
-  onAdjustRange?: () => void;
   // Conventional Comments
   conventionalCommentsEnabled: boolean;
   conventionalLabel: ConventionalLabel | null;
@@ -68,7 +67,6 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
   onSubmit,
   onDismiss,
   onCancel,
-  onAdjustRange,
   conventionalCommentsEnabled,
   conventionalLabel,
   onConventionalLabelChange,
@@ -165,25 +163,13 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
           style={{ width: Math.min(320, visibleBounds.width) }}
         >
           <div className="flex items-center justify-between mb-2" {...dragHandleProps}>
-            <div className="flex min-w-0 items-center gap-1">
-              <span className="truncate text-xs text-muted-foreground">
-                {isEditing
-                  ? 'Edit annotation'
-                  : toolbarState.tokenSelection
-                    ? formatTokenContext(toolbarState.tokenSelection)
-                    : formatLineRange(toolbarState.range.start, toolbarState.range.end)}
-              </span>
-              {onAdjustRange && (
-                <button
-                  type="button"
-                  data-pn-touch-target="true"
-                  onClick={onAdjustRange}
-                  className="shrink-0 rounded px-2 text-xs text-primary hover:bg-primary/10"
-                >
-                  Adjust lines
-                </button>
-              )}
-            </div>
+            <span className="text-xs text-muted-foreground">
+              {isEditing
+                ? 'Edit annotation'
+                : toolbarState.tokenSelection
+                  ? formatTokenContext(toolbarState.tokenSelection)
+                  : formatLineRange(toolbarState.range.start, toolbarState.range.end)}
+            </span>
             <div className="flex items-center gap-1">
               <button
                 onClick={() => setShowCommentModal(true)}

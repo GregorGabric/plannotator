@@ -756,13 +756,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   // the file first and defer until ToolbarHost remounts against its patch.
   const routeSelectionToToolbar = useCallback(
     (range: SelectedLineRange, filePath: string) => {
-      if (
-        activeFilePath !== filePath
-        && toolbarHostRef.current?.isAdjustingRange()
-      ) {
-        toolbarHostRef.current.cancelRangeAdjustment();
-        return;
-      }
       if (activeFilePath === filePath) {
         toolbarHostRef.current?.handleLineSelectionEnd(range);
       } else {

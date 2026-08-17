@@ -199,45 +199,6 @@ describe.if(hasDom)('canonical semantic target graph', () => {
       .toBe('bravo');
   });
 
-  test('builds forward whole-block spans from touch endpoints in either order', () => {
-    const {
-      buildSemanticTargetGraph,
-      createSemanticBlockSpanRange,
-    } = targeting();
-    const container = createDocumentFixture();
-    const graph = buildSemanticTargetGraph(container);
-    const introInline = targetByKey(graph.targets, 'intro:inline:0');
-    const outro = targetByKey(graph.targets, 'outro:block');
-
-    const forward = createSemanticBlockSpanRange(graph, introInline, outro);
-    const reverse = createSemanticBlockSpanRange(graph, outro, introInline);
-
-    expect(forward?.toString()).toBe(reverse?.toString());
-    expect(forward?.toString().startsWith('Alpha bravo')).toBe(true);
-    expect(forward?.toString().endsWith('Charlie delta')).toBe(true);
-  });
-
-  test('keeps specialized semantic targets out of touch block spans', () => {
-    const {
-      buildSemanticTargetGraph,
-      createSemanticBlockSpanRange,
-    } = targeting();
-    const container = createDocumentFixture();
-    const graph = buildSemanticTargetGraph(container);
-    const intro = targetByKey(graph.targets, 'intro:block');
-
-    expect(createSemanticBlockSpanRange(
-      graph,
-      intro,
-      targetByKey(graph.targets, 'matrix:table'),
-    )).toBeNull();
-    expect(createSemanticBlockSpanRange(
-      graph,
-      intro,
-      targetByKey(graph.targets, 'code:code'),
-    )).toBeNull();
-  });
-
   test('preserves nested inline hierarchy while exposing top-level inline siblings', () => {
     const { buildSemanticTargetGraph, moveSemanticTarget } = targeting();
     const container = createDocumentFixture();

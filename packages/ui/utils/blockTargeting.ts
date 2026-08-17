@@ -332,41 +332,6 @@ export function createSemanticTargetRange(target: SemanticTarget): Range | null 
     : createTextRange(target.element);
 }
 
-/**
- * Create one forward DOM range spanning two ordinary Markdown blocks.
- *
- * Touch Pinpoint uses this to choose range endpoints without invoking the
- * browser's native text-selection handles. Nested inline targets are promoted
- * to their owning blocks, and reverse taps are normalized to document order.
- * Specialized code, math, and table targets deliberately stay on their
- * incumbent annotation paths.
- */
-export function createSemanticBlockSpanRange(
-  graph: SemanticTargetGraph,
-  anchor: SemanticTarget,
-  endpoint: SemanticTarget,
-): Range | null {
-  const anchorBlock = getOwningBlockTarget(graph, anchor);
-  const endpointBlock = getOwningBlockTarget(graph, endpoint);
-  if (anchorBlock.kind !== 'block' || endpointBlock.kind !== 'block') return null;
-
-  const anchorIndex = graph.blockKeys.indexOf(anchorBlock.key);
-  const endpointIndex = graph.blockKeys.indexOf(endpointBlock.key);
-  if (anchorIndex < 0 || endpointIndex < 0) return null;
-
-  const [start, end] = anchorIndex <= endpointIndex
-    ? [anchorBlock, endpointBlock]
-    : [endpointBlock, anchorBlock];
-  const startRange = createTextRange(start.element);
-  const endRange = createTextRange(end.element);
-  if (!startRange || !endRange) return null;
-
-  const range = document.createRange();
-  range.setStart(startRange.startContainer, startRange.startOffset);
-  range.setEnd(endRange.endContainer, endRange.endOffset);
-  return range;
-}
-
 /** Return the direct semantic children of a target in document order. */
 export function getSemanticTargetChildren(
   graph: SemanticTargetGraph,

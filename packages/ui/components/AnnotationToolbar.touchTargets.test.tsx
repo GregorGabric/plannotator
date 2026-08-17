@@ -70,7 +70,6 @@ describe.if(hasDom)('AnnotationToolbar touch targets', () => {
 
     const annotated: AnnotationType[] = [];
     let closes = 0;
-    let extensions = 0;
     host = document.createElement('div');
     document.body.appendChild(host);
     root = createRoot(host);
@@ -81,7 +80,6 @@ describe.if(hasDom)('AnnotationToolbar touch targets', () => {
           positionMode="center-above"
           onAnnotate={(type) => { annotated.push(type); }}
           onClose={() => { closes += 1; }}
-          onExtendSelection={() => { extensions += 1; }}
         />,
       );
     });
@@ -90,10 +88,8 @@ describe.if(hasDom)('AnnotationToolbar touch targets', () => {
       document.querySelector<HTMLButtonElement>(`.annotation-toolbar button[title="${label}"]`);
 
     await act(async () => find('Delete')?.click());
-    await act(async () => find('Extend selection')?.click());
     await act(async () => find('Cancel')?.click());
     expect(annotated).toEqual([AnnotationType.DELETION]);
-    expect(extensions).toBe(1);
     expect(closes).toBe(1);
   });
 });
