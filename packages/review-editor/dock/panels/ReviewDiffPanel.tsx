@@ -89,6 +89,7 @@ export const ReviewDiffPanel: React.FC<IDockviewPanelProps> = (props) => {
         selectedAnnotationId={state.selectedAnnotationId}
         scrollTargetAnnotation={state.scrollTargetAnnotation}
         pendingSelection={state.pendingSelection}
+        compactTouchLayout={state.isCompactTouchLayout}
         onLineSelection={state.onLineSelection}
         onAddAnnotation={state.onAddAnnotation}
         onAddFileComment={state.onAddFileComment}

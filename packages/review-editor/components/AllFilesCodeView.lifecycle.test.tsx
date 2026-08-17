@@ -1,12 +1,14 @@
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
 import React, { act, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import type { SelectedLineRange } from '@plannotator/ui/types';
 import type { DiffFile } from '../types';
 
 let codeViewMounts = 0;
 let codeViewUnmounts = 0;
 let scrollTargets: Array<Record<string, unknown>> = [];
 let lastCodeViewProps: Record<string, unknown> | null = null;
+let toolbarSelections: Array<SelectedLineRange | null> = [];
 
 // Captured BEFORE the mocks below replace the specifiers, so this file can put
 // the real modules back when it is done. `mock.module` is process global and
@@ -103,7 +105,15 @@ mock.module('@pierre/diffs/react', () => ({
 }));
 
 mock.module('./ToolbarHost', () => ({
-  ToolbarHost: React.forwardRef(function MockToolbarHost() {
+  ToolbarHost: React.forwardRef(function MockToolbarHost(_props, ref) {
+    useImperativeHandle(ref, () => ({
+      handleLineSelectionEnd: (range: SelectedLineRange | null) => {
+        toolbarSelections.push(range);
+      },
+      openLineAnnotation: () => {},
+      handleTokenClick: () => {},
+      startEdit: () => {},
+    }));
     return null;
   }),
 }));
@@ -159,6 +169,7 @@ afterEach(async () => {
   codeViewUnmounts = 0;
   scrollTargets = [];
   lastCodeViewProps = null;
+  toolbarSelections = [];
 });
 
 // Hand the real @pierre/diffs back to the process. Only the two library
@@ -224,6 +235,67 @@ describe('AllFilesCodeView guide mount state', () => {
     ]);
   });
 
+});
+
+describe('AllFilesCodeView compact-touch line selection', () => {
+  async function mount(overrides: Partial<React.ComponentProps<typeof AllFilesCodeView>>) {
+    host = document.createElement('div');
+    host.style.height = '400px';
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await render(overrides);
+  }
+
+  function getSelectionCallbacks() {
+    const options = lastCodeViewProps?.options as {
+      onLineSelectionEnd?: (
+        range: SelectedLineRange | null,
+        context: { item: { id: string; type: 'diff' } },
+      ) => void;
+      onGutterUtilityClick?: (
+        range: SelectedLineRange,
+        context: { item: { id: string; type: 'diff' } },
+      ) => void;
+    };
+    const item = (lastCodeViewProps?.initialItems as Array<{ id: string; type: 'diff' }>)[0];
+    return { options, item };
+  }
+
+  test.skipIf(!hasDom)('preserves a dragged range, then opens the composer from the gutter action', async () => {
+    const observedSelections: Array<SelectedLineRange | null> = [];
+    const range: SelectedLineRange = { start: 4, end: 8, side: 'additions' };
+    await mount({
+      compactTouchLayout: true,
+      onLineSelection: (selection) => observedSelections.push(selection),
+    });
+    const { options, item } = getSelectionCallbacks();
+
+    await act(async () => {
+      options.onLineSelectionEnd?.(range, { item });
+    });
+
+    expect(observedSelections.at(-1)).toEqual(range);
+    expect(toolbarSelections).toEqual([]);
+
+    await act(async () => {
+      options.onGutterUtilityClick?.(range, { item });
+    });
+
+    expect(toolbarSelections).toEqual([range]);
+  });
+
+  test.skipIf(!hasDom)('keeps the incumbent desktop selection-to-composer transition', async () => {
+    const range: SelectedLineRange = { start: 4, end: 8, side: 'additions' };
+    await mount({ compactTouchLayout: false });
+    const { options, item } = getSelectionCallbacks();
+
+    await act(async () => {
+      options.onLineSelectionEnd?.(range, { item });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(toolbarSelections).toEqual([range]);
+  });
 });
 
 describe('AllFilesCodeView readOnly (portable guide host)', () => {

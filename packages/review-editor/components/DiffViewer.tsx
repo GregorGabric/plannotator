@@ -34,6 +34,10 @@ import {
   retryScrollToSearchMatch,
   swapActiveSearchHighlight,
 } from '../utils/reviewSearchHighlight';
+import {
+  resolveLineSelectionBehavior,
+  type LineSelectionSource,
+} from '../utils/lineSelectionBehavior';
 
 interface PierreDiffContentProps {
   filePath: string;
@@ -164,6 +168,8 @@ interface DiffViewerProps {
   selectedAnnotationId: string | null;
   scrollTargetAnnotation: AnnotationScrollTarget | null;
   pendingSelection: SelectedLineRange | null;
+  /** Compact coarse-pointer shell. Keeps range selection separate from writing. */
+  compactTouchLayout?: boolean;
   onLineSelection: (range: SelectedLineRange | null) => void;
   onAddAnnotation: (type: CodeAnnotationType, text?: string, suggestedCode?: string, originalCode?: string, conventionalLabel?: ConventionalLabel, decorations?: ConventionalDecoration[], tokenMeta?: TokenAnnotationMeta) => void;
   onAddFileComment: (text: string) => void;
@@ -224,6 +230,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   selectedAnnotationId,
   scrollTargetAnnotation,
   pendingSelection,
+  compactTouchLayout = false,
   onLineSelection,
   onAddAnnotation,
   onAddFileComment,
@@ -622,9 +629,20 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
     );
   }, [filePath, selectedAnnotationId, onSelectAnnotation, handleEdit, onDeleteAnnotation, onClickAIMarker]);
 
-  const handleGutterUtilityClick = useCallback((range: SelectedLineRange) => {
+  const handleLineSelectionInteraction = useCallback((
+    source: LineSelectionSource,
+    range: SelectedLineRange | null,
+  ) => {
+    if (resolveLineSelectionBehavior({ source, compactTouchLayout }) === 'preserve-selection') {
+      onLineSelection(range);
+      return;
+    }
     toolbarHostRef.current?.handleLineSelectionEnd(range);
-  }, []);
+  }, [compactTouchLayout, onLineSelection]);
+
+  const handleGutterUtilityClick = useCallback((range: SelectedLineRange) => {
+    handleLineSelectionInteraction('gutter-comment-action', range);
+  }, [handleLineSelectionInteraction]);
 
   useEffect(() => {
     const root = diffContentRef.current;
@@ -651,8 +669,8 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   }, []);
 
   const handlePierreLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
-    toolbarHostRef.current?.handleLineSelectionEnd(range);
-  }, []);
+    handleLineSelectionInteraction('range-gesture', range);
+  }, [handleLineSelectionInteraction]);
 
   // Token interaction handlers (code area clicks)
   const handleTokenClick = useCallback((props: DiffTokenEventBaseProps, event: MouseEvent) => {

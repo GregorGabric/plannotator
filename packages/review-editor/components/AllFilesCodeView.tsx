@@ -30,6 +30,10 @@ import { buildCodeNavRequest } from '../utils/buildCodeNavRequest';
 import { getDiffSelection, getLineNumberFromNode, getSideFromNode } from '../utils/diffSelection';
 import { isContentConsistentWithPatch } from '../utils/patchConsistency';
 import { hashString } from '../utils/hashString';
+import {
+  resolveLineSelectionBehavior,
+  type LineSelectionSource,
+} from '../utils/lineSelectionBehavior';
 import { isContentlessBinaryPatch, isOversizedReviewStubPatch } from '@plannotator/shared/diff-paths';
 import { OversizedFileNotice } from './OversizedFileNotice';
 import { ToolbarHost, type ToolbarHostHandle } from './ToolbarHost';
@@ -1820,25 +1824,41 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     }
   }, [activeFilePath, pendingSelection, filePathToItemId]);
 
-  const handleLineSelectionEnd = useStableCallback(
-    (range: SelectedLineRange | null, item: CodeViewItem<DiffAnnotationMetadata>) => {
+  const handleLineSelectionInteraction = useStableCallback(
+    (
+      source: LineSelectionSource,
+      range: SelectedLineRange | null,
+      item: CodeViewItem<DiffAnnotationMetadata>,
+    ) => {
       if (range == null || item.type !== 'diff') return;
       // The file being edited owns its pointer interactions — opening the
       // annotation toolbar over an active editor would fight its focus.
       if (item.id === editSession.editingItemIdRef.current) return;
       const filePath = itemIdToFilePath.get(item.id);
       if (filePath == null) return;
+      if (resolveLineSelectionBehavior({
+        source,
+        compactTouchLayout: compactTouchLayout === true,
+      }) === 'preserve-selection') {
+        pendingToolbarRange.current = null;
+        setActiveFilePath(filePath);
+        setSelectedLines({ id: item.id, range });
+        onLineSelection(range);
+        return;
+      }
       routeSelectionToToolbar(range, filePath);
+    },
+  );
+
+  const handleLineSelectionEnd = useStableCallback(
+    (range: SelectedLineRange | null, item: CodeViewItem<DiffAnnotationMetadata>) => {
+      handleLineSelectionInteraction('range-gesture', range, item);
     },
   );
 
   const handleGutterUtilityClick = useStableCallback(
     (range: SelectedLineRange, item: CodeViewItem<DiffAnnotationMetadata>) => {
-      if (item.type !== 'diff') return;
-      if (item.id === editSession.editingItemIdRef.current) return;
-      const filePath = itemIdToFilePath.get(item.id);
-      if (filePath == null) return;
-      routeSelectionToToolbar(range, filePath);
+      handleLineSelectionInteraction('gutter-comment-action', range, item);
     },
   );
 

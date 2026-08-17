@@ -1,6 +1,6 @@
 # Mobile touch range selection spike
 
-**Status:** explicit endpoint-command prototype rejected; direct-manipulation exploration in progress
+**Status:** Code Review interaction approved for implementation; Plan interaction exploration remains open
 
 **Branch:** `codex/mobile-touch-selection`
 
@@ -12,7 +12,7 @@
 The shipped mobile foundation makes a single Plan block or diff line practical to annotate, but extending that target still depends on a desktop-shaped gesture:
 
 - Safari text selection is the only way to span multiple Plan blocks in Drag mode. It raises the native Copy / Find Selection UI and can prevent Plannotator's own actions from receiving the next tap.
-- Pierre can technically drag a line-number selection with Pointer Events, but a vertical gutter drag competes with the phone's primary scroll gesture. A reliable comment range must not depend on that gesture.
+- Pierre already supports direct line-number dragging with Pointer Events. Physical use in DiffsHub confirmed that gesture is practical on mobile; Plannotator's remaining mismatch was opening the composer immediately on release instead of preserving the range and exposing Pierre's contextual gutter action.
 
 The goal is a touch-native way to choose one contiguous range. It is not a new annotation model and it is not a general-purpose mobile text editor.
 
@@ -47,7 +47,7 @@ Primary evidence:
 
 `@pierre/diffs` 1.3.2 already provides the desired direct gesture. A pointer down in the line-number column seeds a range, document-level Pointer Events track across rows, the painted selection updates continuously, and pointer up emits `onLineSelectionEnd`. The gutter is already `user-select: none` and `touch-action: none`, so this path neither invokes native text selection nor hands the active drag to page scrolling.
 
-Plannotator already sets `enableLineSelection: true` and routes `onLineSelectionEnd` into the existing annotation toolbar in both File and All Files views. The remaining Code Review problem is therefore discoverability and touch geometry, not range state or a missing interaction engine.
+At the `origin/main` baseline, Plannotator already set `enableLineSelection: true` and routed `onLineSelectionEnd` into the existing annotation toolbar in both File and All Files views. The implementation below changes only that post-gesture routing on compact touch. Range state and the interaction engine remain Pierre-owned.
 
 ## Method
 
@@ -70,7 +70,7 @@ The missing seam is acquisition. Today Pinpoint is disabled as soon as its first
 
 `SelectedLineRange` already represents a multi-line target. `useAnnotationToolbar` extracts the selected code and commits the same start/end span, while both `DiffViewer` and `AllFilesCodeView` project `pendingSelection` back into Pierre as a controlled selection.
 
-Pierre's current interaction manager already uses Pointer Events and supports a gutter drag. The rejected prototype incorrectly treated a non-drag alternative as the missing seam. The next spike should preserve Pierre's direct gesture and improve its compact-touch affordance and hit geometry without changing its range types.
+Pierre's current interaction manager already uses Pointer Events and supports a gutter drag. The rejected prototype incorrectly treated a non-drag alternative as the missing seam. The approved Code Review implementation preserves Pierre's direct gesture and changes no range type, hit geometry, or renderer internals.
 
 ## Rejected shared interaction model
 
@@ -86,7 +86,7 @@ This was intentionally endpoint selection rather than tap-to-toggle arbitrary it
 
 ## Direct-manipulation experiments
 
-### Code Review — DiffsHub reference and proposed behavior
+### Code Review — DiffsHub reference and approved behavior
 
 Physical feedback confirms multiline selection works well in the standalone DiffsHub app at `/Users/ramos/oss/pierre`. Source comparison shows that DiffsHub and Plannotator already enable the same Pierre contracts: `enableLineSelection`, `enableGutterUtility`, `onLineSelectionEnd`, and `onGutterUtilityClick`.
 
@@ -96,7 +96,7 @@ The important difference is what happens after selection:
 - DiffsHub's `onGutterUtilityClick` separately creates the draft comment for the selected range.
 - Plannotator currently routes both callbacks into `ToolbarHost.handleLineSelectionEnd`; compact touch therefore opens the expanded composer as soon as the range gesture ends.
 
-The proposed compact-touch behavior should match DiffsHub's selection-first transition:
+The compact-touch behavior now matches DiffsHub's selection-first transition:
 
 1. Touch a line number and begin dragging in one motion.
 2. Paint the selected range 1:1 under the finger as it crosses rows.
@@ -104,6 +104,8 @@ The proposed compact-touch behavior should match DiffsHub's selection-first tran
 4. Activate the contextual gutter comment utility to open the normal feedback composer for that range.
 
 There is no preparatory **Adjust lines** command and no persistent instruction. The gutter utility is a contextual action after direct selection, not a mode switch before it. Since the incumbent DiffsHub geometry already passed a physical multiline-selection check, Plannotator should first adopt the state-transition parity without changing Pierre's Shadow DOM, gesture recognizer, or gutter dimensions. Geometry changes require separate physical evidence.
+
+Implementation decision: compact-touch `onLineSelectionEnd` preserves the controlled range and active file without mounting the composer. The existing `onGutterUtilityClick` path remains the explicit writing action and opens the composer. Fine-pointer desktop retains the incumbent selection-to-composer transition. This changes no Pierre option, selector, CSS variable, gesture, or range type.
 
 Validation must cover vertical page-scroll intent near the gutter, horizontal code scrolling, split and unified sides, forward and reverse drag, edge auto-scroll, single-line selection, selection replacement, dismissing without writing, and selection persistence while the composer opens.
 
@@ -128,7 +130,7 @@ Only the handle owns `touch-action: none`; the document keeps native vertical sc
 
 Candidate B is preferred over a whole-document drag recognizer because taking over a vertical drag anywhere in Plan would conflict with its primary reading/scrolling gesture. A hold-then-drag recognizer is also lower priority because it competes with Safari's long-press selection and introduces a disambiguation delay.
 
-## Plan prototype: block endpoint selection
+## Historical rejected Plan prototype: block endpoint selection
 
 Eligibility:
 
@@ -153,7 +155,7 @@ First-prototype limits:
 - adjustment begins from the selection toolbar, before the comment composer opens;
 - changing documents or leaving Pinpoint cancels adjustment and restores the original pending target.
 
-## Code Review prototype: line endpoint selection
+## Historical rejected Code Review prototype: line endpoint selection
 
 Eligibility:
 
@@ -176,7 +178,7 @@ First-prototype limits:
 - no range adjustment while editing an existing submitted annotation;
 - no attempt to replace Pierre's existing mouse/trackpad drag or Shift extension.
 
-## State and cancellation rules
+## Historical rejected-prototype state and cancellation rules
 
 - The committed selection is not changed until a valid endpoint is tapped.
 - Cancel returns to the prior toolbar/composer with its original range and draft.
@@ -186,7 +188,7 @@ First-prototype limits:
 - A tap on an ineligible endpoint does not discard the draft and does not create a partial range.
 - Starting adjustment never opens the software keyboard. Returning to the composer does not auto-focus on a coarse pointer.
 
-## Visual and accessibility contract
+## Historical rejected-prototype visual and accessibility contract
 
 - The anchor and candidate range use existing selection colors; no new permanent document chrome is introduced.
 - The temporary instruction surface is above Safari's home-indicator inset and never owns page scrolling.
@@ -227,15 +229,15 @@ Physical gate:
 - iPad Safari: finger and trackpad paths both remain usable; trackpad behavior does not inherit the compact touch composition when it is the primary pointer.
 - Code Review: selection remains painted after the composer returns and the submitted annotation spans the intended lines after reload.
 
-## Decision after the prototype
+## Next decision
 
-The prototype passes only if endpoint selection is faster and less error-prone than native drag on a physical phone, without making single-target comments slower. If the explicit adjustment action feels too hidden, the next experiment is a temporary selection handle/pill after the first tap—not a persistent new top-level mode and not native text selection.
+Code Review has an approved direct gesture and no longer needs an endpoint-selection experiment. Physical Safari validation remains the release gate for its compact-touch transition. Plan Review still needs a separate direct-manipulation decision; the rejected **Extend selection** command must not return under different copy.
 
-## Implemented prototype evidence
+## Implementation evidence
 
-- Plan compact Pinpoint replaces the pending toolbar's Copy slot with **Extend selection**. The endpoint tap produces one forward whole-block range, anchors the returned toolbar at the endpoint that is currently visible, and leaves `window.getSelection()` collapsed.
-- Code Review adds **Adjust lines** only to a compact-touch, new line-comment draft. The composer yields to a safe-area-aware instruction pill, preserves the live draft, combines a same-side endpoint, and returns on the updated range. All Files refuses a cross-file switch during adjustment.
-- The shared instruction surface owns no scroll container and supports a 44px Cancel action plus Escape.
-- 20 focused tests pass, including rendered Plan multi-block selection, narrow fine-pointer exclusion, Code Review draft preservation, range normalization, touch target markers, and mobile dialog composition.
-- Root typecheck passes. Both production single-file builds pass: `apps/review` and `apps/hook`.
-- In-app rendered checks at 390 x 844 and 1280 x 720 confirm the fine-primary-pointer controls remain unchanged. The in-app browser cannot emulate a coarse primary pointer, so physical Safari remains the authority for the new composition.
+- A shared routing policy distinguishes Pierre's range-completion gesture from its contextual gutter comment action.
+- File and All Files views use the same compact-touch rule: gesture completion preserves the selected range; the gutter action opens the incumbent composer.
+- The All Files route also commits the owning item and active file before publishing the range, so an equal-numbered range cannot remain painted on the previously active file.
+- Fine-pointer desktop retains its incumbent selection-to-composer transition.
+- Focused policy and rendered All Files lifecycle tests pass, including a desktop control. Root typecheck and both production single-file builds (`apps/review` and `apps/hook`) pass.
+- No Pierre option, unsafe CSS, Shadow DOM selector, gesture recognizer, package version, toolbar geometry, or composer geometry changed. Physical iPhone/iPad Safari remains the authority for the final gesture check.
