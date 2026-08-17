@@ -49,6 +49,14 @@ import { PinpointOverlay } from './PinpointOverlay';
 import { usePinpoint } from '../hooks/usePinpoint';
 import { useAnnotationHighlighter } from '../hooks/useAnnotationHighlighter';
 import { useVimSelection } from '../hooks/useVimSelection';
+import { useCompactTouchLayout } from '../hooks/useIsMobile';
+import {
+  buildSemanticTargetGraph,
+  createSemanticBlockSpanRange,
+  getOwningBlockTarget,
+  resolveSemanticTarget,
+  type SemanticTarget,
+} from '../utils/blockTargeting';
 import {
   getScrollViewportIntersectionRoot,
   getScrollViewportRect,
@@ -58,6 +66,7 @@ import {
 } from '../hooks/useScrollViewport';
 import { decodeAnchorHash } from '../utils/anchors';
 import { VimModeOverlay } from './VimModeOverlay';
+import { TouchRangeInstruction } from './TouchRangeInstruction';
 
 interface ViewerProps {
   blocks: Block[];
@@ -291,6 +300,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   // `-1`/`-2`/... suffixes rather than colliding on the same id.
   const headingSlugMap = useMemo(() => buildHeadingSlugMap(blocks), [blocks]);
   const isTouchDevice = useMemo(() => window.matchMedia('(pointer: coarse)').matches, []);
+  const compactTouchLayout = useCompactTouchLayout();
   const [codeBlockToolbar, setCodeBlockToolbar] =
     useState<CodeBlockToolbarTarget | null>(null);
   const [isCodeBlockToolbarExiting, setIsCodeBlockToolbarExiting] = useState(false);
@@ -346,6 +356,53 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     mode,
     enabled: !readOnly,
   });
+  const [pinpointSelectionAnchorKey, setPinpointSelectionAnchorKey] = useState<string | null>(null);
+  const [pinpointRangeAdjusting, setPinpointRangeAdjusting] = useState(false);
+
+  const handlePinpointRange = useCallback((range: Range, target: SemanticTarget) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const graph = buildSemanticTargetGraph(container);
+
+    if (!pinpointRangeAdjusting || !pinpointSelectionAnchorKey) {
+      const block = getOwningBlockTarget(graph, target);
+      setPinpointSelectionAnchorKey(block.kind === 'block' ? block.key : null);
+      highlightRange(range);
+      return;
+    }
+
+    const anchor = resolveSemanticTarget(graph, pinpointSelectionAnchorKey);
+    if (!anchor) return;
+    const anchorBlock = getOwningBlockTarget(graph, anchor);
+    const endpointBlock = getOwningBlockTarget(graph, target);
+    const span = createSemanticBlockSpanRange(graph, anchor, target);
+    if (!span) return;
+    const anchorIndex = graph.blockKeys.indexOf(anchorBlock.key);
+    const endpointIndex = graph.blockKeys.indexOf(endpointBlock.key);
+
+    setPinpointRangeAdjusting(false);
+    highlightRange(span, undefined, endpointIndex >= anchorIndex ? 'end' : 'start');
+  }, [highlightRange, pinpointRangeAdjusting, pinpointSelectionAnchorKey]);
+
+  const beginPinpointRangeAdjustment = useCallback(() => {
+    if (!toolbarState || !pinpointSelectionAnchorKey) return;
+    setPinpointRangeAdjusting(true);
+  }, [pinpointSelectionAnchorKey, toolbarState]);
+
+  const cancelPinpointRangeAdjustment = useCallback(() => {
+    toolbarState?.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    setPinpointRangeAdjusting(false);
+  }, [toolbarState]);
+
+  useEffect(() => {
+    if (toolbarState || pinpointRangeAdjusting) return;
+    setPinpointSelectionAnchorKey(null);
+  }, [pinpointRangeAdjusting, toolbarState]);
+
+  useEffect(() => {
+    setPinpointRangeAdjusting(false);
+    setPinpointSelectionAnchorKey(null);
+  }, [blocks, inputMethod, isPlanDiffActive, readOnly]);
 
   // Refs for code block annotation path
   const onAddAnnotationRef = useRef(onAddAnnotation);
@@ -544,9 +601,9 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   const { hoverTarget, clearHover: clearPinpointHover } = usePinpoint({
     containerRef,
     inputMethod,
-    enabled: !readOnly && !toolbarState && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false) && !vim.helpOpen,
-    onSelectRange: highlightRange,
-    onCodeBlockClick: handlePinpointCodeBlockClick,
+    enabled: !readOnly && (!toolbarState || pinpointRangeAdjusting) && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false) && !vim.helpOpen,
+    onSelectRange: handlePinpointRange,
+    onCodeBlockClick: pinpointRangeAdjusting ? () => {} : handlePinpointCodeBlockClick,
   });
   clearPinpointHoverRef.current = clearPinpointHover;
   const vimOwnsHudTarget = vimHudEnabled
@@ -1024,7 +1081,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
         )}
 
         {/* Text selection toolbar */}
-        {!readOnly && toolbarState && (
+        {!readOnly && toolbarState && !pinpointRangeAdjusting && (
           <ToolbarErrorBoundary>
             <AnnotationToolbar
               element={toolbarState.element}
@@ -1034,10 +1091,27 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
               onRequestComment={handleRequestComment}
               onQuickLabel={handleQuickLabel}
               copyText={toolbarState.selectionText}
-              hideCopyButton={!isTouchDevice}
+              hideCopyButton={!isTouchDevice || Boolean(
+                compactTouchLayout
+                && inputMethod === 'pinpoint'
+                && pinpointSelectionAnchorKey
+              )}
+              onExtendSelection={
+                compactTouchLayout
+                && inputMethod === 'pinpoint'
+                && pinpointSelectionAnchorKey
+                  ? beginPinpointRangeAdjustment
+                  : undefined
+              }
               closeOnScrollOut
             />
           </ToolbarErrorBoundary>
+        )}
+
+        {pinpointRangeAdjusting && (
+          <TouchRangeInstruction surface="plan" onCancel={cancelPinpointRangeAdjustment}>
+            Tap the last block
+          </TouchRangeInstruction>
         )}
 
         {/* Table hover toolbar */}

@@ -58,6 +58,26 @@ function draftKey(filePath: string, range: SelectedLineRange): string {
   return `${filePath}:${range.side}:${start}-${end}`;
 }
 
+/** Combine a touch-selected endpoint with the original line anchor. */
+export function extendTouchLineRange(
+  anchor: SelectedLineRange,
+  endpoint: SelectedLineRange,
+): SelectedLineRange | null {
+  const anchorIsSingleSide = !anchor.endSide || anchor.endSide === anchor.side;
+  const endpointIsSingleSide = !endpoint.endSide || endpoint.endSide === endpoint.side;
+  if (!anchorIsSingleSide || !endpointIsSingleSide || anchor.side !== endpoint.side) {
+    return null;
+  }
+
+  const anchorLine = anchor.start;
+  const endpointLine = endpoint.end;
+  return {
+    start: Math.min(anchorLine, endpointLine),
+    end: Math.max(anchorLine, endpointLine),
+    side: anchor.side,
+  };
+}
+
 export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelection, onAddAnnotation, onEditAnnotation }: UseAnnotationToolbarArgs) {
   const visibleBounds = useVisibleViewportBounds(16);
   const expandedComposerRequired = shouldUseExpandedComposer({
@@ -80,6 +100,7 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
   const [conventionalLabel, setConventionalLabel] = useState<ConventionalLabel | null>(null);
   const [decorations, setDecorations] = useState<ConventionalDecoration[]>([]);
+  const [rangeAdjustmentAnchor, setRangeAdjustmentAnchor] = useState<SelectedLineRange | null>(null);
 
   // Refs to avoid stale closures in saveDraft
   const formRef = useRef({ commentText, suggestedCode, showSuggestedCode, conventionalLabel, decorations });
@@ -145,6 +166,7 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
     setEditingAnnotationId(null);
     setConventionalLabel(null);
     setDecorations([]);
+    setRangeAdjustmentAnchor(null);
   }, []);
 
   // Track mouse position continuously for toolbar placement.
@@ -197,6 +219,31 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
   const handleLineSelectionEnd = useCallback((range: SelectedLineRange | null) => {
     tokenAnchorRef.current = null;
 
+    if (rangeAdjustmentAnchor) {
+      const combined = range ? extendTouchLineRange(rangeAdjustmentAnchor, range) : null;
+      if (!combined) {
+        onLineSelection(rangeAdjustmentAnchor);
+        return;
+      }
+
+      draftStore.delete(draftKey(filePath, rangeAdjustmentAnchor));
+      currentDraftKeyRef.current = draftKey(filePath, combined);
+      setToolbarState((current) => current
+        ? { ...current, range: combined, tokenSelection: undefined }
+        : current);
+      const side = combined.side === 'additions' ? 'new' : 'old';
+      setSelectedOriginalCode(extractLinesFromPatch(
+        patch,
+        combined.start,
+        combined.end,
+        side,
+      ));
+      setRangeAdjustmentAnchor(null);
+      setShowCommentModal(expandedComposerRequired);
+      onLineSelection(combined);
+      return;
+    }
+
     if (!range) {
       setToolbarState(null);
       onLineSelection(null);
@@ -212,7 +259,23 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
           left: visibleBounds.left + visibleBounds.width / 2,
         }
     );
-  }, [onLineSelection, openToolbar, visibleBounds]);
+  }, [expandedComposerRequired, filePath, onLineSelection, openToolbar, patch, rangeAdjustmentAnchor, visibleBounds]);
+
+  const beginRangeAdjustment = useCallback(() => {
+    const current = toolbarStateRef.current;
+    if (!current || current.tokenSelection || editingRef.current) return;
+    setRangeAdjustmentAnchor(current.range);
+    setShowCodeModal(false);
+    setShowCommentModal(false);
+  }, []);
+
+  const cancelRangeAdjustment = useCallback(() => {
+    const anchor = rangeAdjustmentAnchor;
+    if (!anchor) return;
+    setRangeAdjustmentAnchor(null);
+    setShowCommentModal(expandedComposerRequired);
+    onLineSelection(anchor);
+  }, [expandedComposerRequired, onLineSelection, rangeAdjustmentAnchor]);
 
   /** Open the ordinary code-review composer for a selection requested elsewhere. */
   const openLineAnnotation = useCallback((range: SelectedLineRange) => {
@@ -310,10 +373,14 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
   });
 
   useEffect(() => {
-    if (toolbarState && expandedComposerRequired && !showCodeModal) {
+    if (toolbarState && expandedComposerRequired && !showCodeModal && !rangeAdjustmentAnchor) {
       setShowCommentModal(true);
     }
-  }, [expandedComposerRequired, showCodeModal, toolbarState]);
+  }, [expandedComposerRequired, rangeAdjustmentAnchor, showCodeModal, toolbarState]);
+
+  useEffect(() => {
+    setRangeAdjustmentAnchor(null);
+  }, [filePath, isFocused]);
 
   useEffect(() => {
     const wasFocused = wasFocusedRef.current;
@@ -410,12 +477,15 @@ export function useAnnotationToolbar({ patch, filePath, isFocused, onLineSelecti
     setConventionalLabel,
     decorations,
     setDecorations,
+    rangeAdjustmentAnchor,
     // Refs
     toolbarRef,
     // Handlers
     handleMouseMove,
     handleLineSelectionEnd,
     openLineAnnotation,
+    beginRangeAdjustment,
+    cancelRangeAdjustment,
     handleTokenClick,
     handleSubmitAnnotation,
     handleDismiss,

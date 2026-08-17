@@ -20,7 +20,7 @@ export interface UsePinpointOptions {
   /** Disable when toolbar/popover/diff is active */
   enabled: boolean;
   /** Submit a text range through the shared annotation pipeline. */
-  onSelectRange: (range: Range) => void;
+  onSelectRange: (range: Range, target: SemanticTarget) => void;
   /** Handle code block clicks (needs special annotation path) */
   onCodeBlockClick: (blockId: string, element: HTMLElement) => void;
 }
@@ -168,7 +168,7 @@ export function usePinpoint({
       const range = createSemanticTargetRange(resolved);
       if (!range) return;
 
-      onSelectRange(range);
+      onSelectRange(range, resolved);
     };
 
     // Use capture phase so we get the click before links navigate

@@ -16,12 +16,16 @@ import { ExpandedCommentDialog } from './ExpandedCommentDialog';
 import { getEnabledLabels } from './ConventionalLabelPicker';
 import type { AIChatEntry } from '../hooks/useAIChat';
 import { formatLineRange, formatTokenContext } from '../utils/formatLineRange';
+import { useCompactTouchLayout } from '@plannotator/ui/hooks/useIsMobile';
+import { TouchRangeInstruction } from '@plannotator/ui/components/TouchRangeInstruction';
 
 export interface ToolbarHostHandle {
   handleLineSelectionEnd: (range: SelectedLineRange | null) => void;
   openLineAnnotation: (range: SelectedLineRange) => void;
   handleTokenClick: (props: DiffTokenEventBaseProps, event: MouseEvent) => void;
   startEdit: (annotation: CodeAnnotation) => void;
+  isAdjustingRange: () => boolean;
+  cancelRangeAdjustment: () => void;
 }
 
 interface ToolbarHostProps {
@@ -82,6 +86,7 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
     onAddAnnotation,
     onEditAnnotation,
   });
+  const compactTouchLayout = useCompactTouchLayout();
 
   const conventionalCommentsEnabled = useConfigValue('conventionalComments');
   const conventionalLabelsJson = useConfigValue('conventionalLabels');
@@ -103,8 +108,17 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
       openLineAnnotation: toolbar.openLineAnnotation,
       handleTokenClick: toolbar.handleTokenClick,
       startEdit: toolbar.startEdit,
+      isAdjustingRange: () => toolbar.rangeAdjustmentAnchor !== null,
+      cancelRangeAdjustment: toolbar.cancelRangeAdjustment,
     }),
-    [toolbar.handleLineSelectionEnd, toolbar.openLineAnnotation, toolbar.handleTokenClick, toolbar.startEdit],
+    [
+      toolbar.cancelRangeAdjustment,
+      toolbar.handleLineSelectionEnd,
+      toolbar.handleTokenClick,
+      toolbar.openLineAnnotation,
+      toolbar.rangeAdjustmentAnchor,
+      toolbar.startEdit,
+    ],
   );
 
   const handleCloseCodeModal = useCallback(() => toolbar.setShowCodeModal(false), [toolbar.setShowCodeModal]);
@@ -149,10 +163,13 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
   }, [toolbar.editingAnnotationId, toolbar.toolbarState]);
 
   const canSubmitAnnotation = toolbar.commentText.trim().length > 0 || toolbar.suggestedCode.trim().length > 0;
+  const canAdjustRange = compactTouchLayout
+    && !toolbar.editingAnnotationId
+    && !toolbar.toolbarState?.tokenSelection;
 
   return (
     <>
-      {toolbar.toolbarState && !toolbar.showCodeModal && !toolbar.showCommentModal && (
+      {toolbar.toolbarState && !toolbar.showCodeModal && !toolbar.showCommentModal && !toolbar.rangeAdjustmentAnchor && (
         <AnnotationToolbar
           toolbarState={toolbar.toolbarState}
           toolbarRef={toolbar.toolbarRef}
@@ -171,6 +188,7 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
           onSubmit={toolbar.handleSubmitAnnotation}
           onDismiss={toolbar.handleDismiss}
           onCancel={toolbar.handleCancel}
+          onAdjustRange={canAdjustRange ? toolbar.beginRangeAdjustment : undefined}
           conventionalCommentsEnabled={conventionalCommentsEnabled}
           conventionalLabel={toolbar.conventionalLabel}
           onConventionalLabelChange={toolbar.setConventionalLabel}
@@ -185,7 +203,7 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
         />
       )}
 
-      {toolbar.toolbarState && toolbar.showCommentModal && (
+      {toolbar.toolbarState && toolbar.showCommentModal && !toolbar.rangeAdjustmentAnchor && (
         <ExpandedCommentDialog
           title={expandedCommentTitle}
           commentText={toolbar.commentText}
@@ -197,11 +215,18 @@ export const ToolbarHost = forwardRef<ToolbarHostHandle, ToolbarHostProps>(funct
           onSubmit={toolbar.handleSubmitAnnotation}
           onCollapse={handleCollapseCommentModal}
           onCancel={handleCancelCommentModal}
+          onAdjustRange={canAdjustRange ? toolbar.beginRangeAdjustment : undefined}
           autoFocus={!toolbar.expandedComposerRequired}
           collapsible={!toolbar.expandedComposerRequired}
           onEditSuggestion={toolbar.expandedComposerRequired ? handleEditSuggestion : undefined}
           hasSuggestedCode={toolbar.suggestedCode.trim().length > 0}
         />
+      )}
+
+      {toolbar.rangeAdjustmentAnchor && (
+        <TouchRangeInstruction surface="review" onCancel={toolbar.cancelRangeAdjustment}>
+          Tap the last line in this file
+        </TouchRangeInstruction>
       )}
 
       {toolbar.showCodeModal && (

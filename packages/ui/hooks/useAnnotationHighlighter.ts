@@ -277,7 +277,11 @@ export interface UseAnnotationHighlighterReturn {
   handleFloatingQuickLabel: (label: QuickLabel) => void;
   handleQuickLabelPickerDismiss: () => void;
   /** Paint a caller-created DOM range through the same pipeline as pointer selection. */
-  highlightRange: (range: Range, modeOverride?: EditorMode) => void;
+  highlightRange: (
+    range: Range,
+    modeOverride?: EditorMode,
+    anchorEdge?: 'start' | 'end',
+  ) => void;
   /** Annotate one rendered formula through the same path as a pointer click. */
   highlightMathElement: (element: HTMLElement, modeOverride?: EditorMode) => void;
 
@@ -311,6 +315,7 @@ export function useAnnotationHighlighter({
   const pendingMathTargetsRef = useRef<MathAnnotationTarget[]>([]);
   const pendingMathElementRef = useRef<HTMLElement | null>(null);
   const pendingModeOverrideRef = useRef<EditorMode | null>(null);
+  const pendingRangeAnchorEdgeRef = useRef<'start' | 'end'>('start');
   const justCreatedIdRef = useRef<string | null>(null);
   const lastMousePosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const mouseDownMathRef = useRef<HTMLElement | null>(null);
@@ -853,6 +858,12 @@ export function useAnnotationHighlighter({
         const source = sources[0];
         const doms = highlighter.getDoms(source.id);
         if (doms?.length > 0) {
+          const anchorEl = (
+            pendingRangeAnchorEdgeRef.current === 'end'
+              ? doms[doms.length - 1]
+              : doms[0]
+          ) as HTMLElement;
+          pendingRangeAnchorEdgeRef.current = 'start';
           // Clean up previous pending
           if (pendingSourceRef.current) {
             highlighter.remove(pendingSourceRef.current.id);
@@ -871,7 +882,7 @@ export function useAnnotationHighlighter({
           } else if (effectiveMode === 'comment') {
             pendingSourceRef.current = source;
             setCommentPopover({
-              anchorEl: doms[0] as HTMLElement,
+              anchorEl,
               contextText: source.text.slice(0, 80),
               selectedText: source.text,
               source,
@@ -880,7 +891,7 @@ export function useAnnotationHighlighter({
           } else if (effectiveMode === 'quickLabel') {
             pendingSourceRef.current = source;
             setQuickLabelPicker({
-              anchorEl: doms[0] as HTMLElement,
+              anchorEl,
               cursorHint: lastMousePosRef.current,
               source,
             });
@@ -888,7 +899,7 @@ export function useAnnotationHighlighter({
             // Selection mode — show toolbar
             pendingSourceRef.current = source;
             setToolbarState({
-              element: doms[0] as HTMLElement,
+              element: anchorEl,
               source,
               selectionText: source.text,
             });
@@ -1019,7 +1030,11 @@ export function useAnnotationHighlighter({
     };
   }, [clearPendingSelection, enabled]);
 
-  const highlightRange = useCallback((range: Range, modeOverride?: EditorMode) => {
+  const highlightRange = useCallback((
+    range: Range,
+    modeOverride?: EditorMode,
+    anchorEdge: 'start' | 'end' = 'start',
+  ) => {
     const highlighter = highlighterRef.current;
     const container = containerRef.current;
     if (!highlighter || !container || range.collapsed) return;
@@ -1029,11 +1044,13 @@ export function useAnnotationHighlighter({
     selection?.removeAllRanges();
     selection?.addRange(range.cloneRange());
     pendingModeOverrideRef.current = modeOverride ?? null;
+    pendingRangeAnchorEdgeRef.current = anchorEdge;
 
     try {
       highlighter.fromRange(range);
     } finally {
       pendingModeOverrideRef.current = null;
+      pendingRangeAnchorEdgeRef.current = 'start';
       selection?.removeAllRanges();
     }
   }, [containerRef]);

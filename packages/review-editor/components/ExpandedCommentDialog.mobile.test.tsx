@@ -34,6 +34,7 @@ describe('ExpandedCommentDialog mobile composition', () => {
     trigger.focus();
 
     let suggestionOpens = 0;
+    let rangeAdjustments = 0;
     await mount(
       <ExpandedCommentDialog
         title="Line 12"
@@ -44,6 +45,7 @@ describe('ExpandedCommentDialog mobile composition', () => {
         onSubmit={() => {}}
         onCollapse={() => {}}
         onCancel={() => {}}
+        onAdjustRange={() => { rangeAdjustments += 1; }}
         autoFocus={false}
         collapsible={false}
         onEditSuggestion={() => { suggestionOpens += 1; }}
@@ -62,6 +64,11 @@ describe('ExpandedCommentDialog mobile composition', () => {
     expect(document.activeElement).not.toBe(textarea);
     const suggestButton = Array.from(document.querySelectorAll('button'))
       .find(button => button.textContent?.trim() === 'Suggest code');
+    const adjustButton = Array.from(document.querySelectorAll('button'))
+      .find(button => button.textContent?.trim() === 'Adjust lines');
+    expect(adjustButton?.getAttribute('data-pn-touch-target')).toBe('true');
+    await act(async () => adjustButton?.click());
+    expect(rangeAdjustments).toBe(1);
     expect(suggestButton).not.toBeNull();
     await act(async () => suggestButton?.click());
     expect(suggestionOpens).toBe(1);

@@ -14,6 +14,7 @@ interface ExpandedCommentDialogProps {
   onSubmit: () => void;
   onCollapse: () => void;
   onCancel: () => void;
+  onAdjustRange?: () => void;
   autoFocus?: boolean;
   collapsible?: boolean;
   onEditSuggestion?: () => void;
@@ -31,6 +32,7 @@ export const ExpandedCommentDialog: React.FC<ExpandedCommentDialogProps> = ({
   onSubmit,
   onCollapse,
   onCancel,
+  onAdjustRange,
   autoFocus = true,
   collapsible = true,
   onEditSuggestion,
@@ -94,8 +96,20 @@ export const ExpandedCommentDialog: React.FC<ExpandedCommentDialogProps> = ({
             finalFocus={false}
             className="pn-responsive-composer-dialog pn-review-composer-dialog relative pointer-events-auto overflow-hidden bg-popover border border-border rounded-xl shadow-2xl flex flex-col"
           >
-          <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border/50">
-            <Dialog.Title className="text-xs font-normal text-muted-foreground truncate">{title}</Dialog.Title>
+          <div className="shrink-0 flex items-center justify-between gap-2 px-4 py-3 border-b border-border/50">
+            <div className="flex min-w-0 items-center gap-1">
+              <Dialog.Title className="truncate text-xs font-normal text-muted-foreground">{title}</Dialog.Title>
+              {onAdjustRange && (
+                <button
+                  type="button"
+                  data-pn-touch-target="true"
+                  onClick={onAdjustRange}
+                  className="shrink-0 rounded px-2 text-xs text-primary hover:bg-primary/10"
+                >
+                  Adjust lines
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-1">
               {collapsible && (
                 <button
