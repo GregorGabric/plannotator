@@ -86,15 +86,26 @@ This was intentionally endpoint selection rather than tap-to-toggle arbitrary it
 
 ## Direct-manipulation experiments
 
-### Code Review — first candidate
+### Code Review — DiffsHub reference and proposed behavior
 
-Use Pierre's incumbent line-number drag directly:
+Physical feedback confirms multiline selection works well in the standalone DiffsHub app at `/Users/ramos/oss/pierre`. Source comparison shows that DiffsHub and Plannotator already enable the same Pierre contracts: `enableLineSelection`, `enableGutterUtility`, `onLineSelectionEnd`, and `onGutterUtilityClick`.
+
+The important difference is what happens after selection:
+
+- DiffsHub's `onLineSelectionEnd` only preserves the controlled `selectedLines` range and updates its line link. It does not open an editor.
+- DiffsHub's `onGutterUtilityClick` separately creates the draft comment for the selected range.
+- Plannotator currently routes both callbacks into `ToolbarHost.handleLineSelectionEnd`; compact touch therefore opens the expanded composer as soon as the range gesture ends.
+
+The proposed compact-touch behavior should match DiffsHub's selection-first transition:
 
 1. Touch a line number and begin dragging in one motion.
 2. Paint the selected range 1:1 under the finger as it crosses rows.
-3. Release to open the normal feedback composer for that range.
+3. Release with the multiline range still selected and no keyboard or composer opened.
+4. Activate the contextual gutter comment utility to open the normal feedback composer for that range.
 
-The experiment should enlarge the compact-touch hit region to at least 44 CSS pixels without unnecessarily widening the visible gutter or reducing the code viewport. It must test vertical page-scroll intent near the gutter, horizontal code scrolling, split and unified sides, reverse drag, edge auto-scroll, and a simple tap for a single-line comment. No new button or persistent instruction is permitted.
+There is no preparatory **Adjust lines** command and no persistent instruction. The gutter utility is a contextual action after direct selection, not a mode switch before it. Since the incumbent DiffsHub geometry already passed a physical multiline-selection check, Plannotator should first adopt the state-transition parity without changing Pierre's Shadow DOM, gesture recognizer, or gutter dimensions. Geometry changes require separate physical evidence.
+
+Validation must cover vertical page-scroll intent near the gutter, horizontal code scrolling, split and unified sides, forward and reverse drag, edge auto-scroll, single-line selection, selection replacement, dismissing without writing, and selection persistence while the composer opens.
 
 ### Plan — candidate A: native range, actions out of the way
 
