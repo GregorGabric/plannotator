@@ -244,13 +244,15 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         run: bun run --cwd apps/guides-show check:budgets
 
-      # The viewer build is deterministic per platform but NOT across platforms
-      # (macOS and Linux produce different content hashes), and this Linux build
-      # is the one the pin must match. Publishing the built manifest lets a
-      # maintainer on any machine regenerate packages/core/guide-viewer-manifest.ts
-      # from the authoritative bytes when the check below fails:
-      # download it to apps/guides-show/dist/viewer/manifest.json, then run
-      # `bun run --cwd apps/guides-show sync:manifest` and commit the result.
+      # The viewer build is deterministic across platforms at the pinned Bun and
+      # lockfile (macOS and Linux produce identical hashes from a clean install),
+      # but a drifted local environment silently builds different bytes: a bun
+      # store with stale duplicate package versions reproduced exactly that. This
+      # Linux build is the authority the pin must match, so publish its manifest;
+      # when the check below fails and a fresh local regen still disagrees,
+      # download this artifact to apps/guides-show/dist/viewer/manifest.json, run
+      # `bun run --cwd apps/guides-show sync:manifest`, commit the result, and
+      # rebuild your environment (rm -rf node_modules && bun install --frozen-lockfile).
       - name: Publish built viewer manifest for pin regeneration
         if: always() && steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0
