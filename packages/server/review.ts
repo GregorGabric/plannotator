@@ -64,6 +64,7 @@ import {
 } from "@plannotator/shared/pr-stack";
 import { type AgentJobInfo, REVIEW_OUTPUT_FAILED, getAgentJobAnnotationContext, markJobReviewFailed } from "@plannotator/shared/agent-jobs";
 import { createCommitAvatarResolver } from "@plannotator/shared/commit-avatars";
+import { detectGeneratedFiles } from "@plannotator/shared/generated-files";
 import { getRepoInfo } from "./repo";
 import { handleImage, handleUpload, handleAgents, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, readDraftGenerationFromBody, readDraftGenerationFromUrl, type OpencodeClient } from "./shared-handlers";
 import { contentHash, deleteDraft } from "./draft";
@@ -737,6 +738,28 @@ export async function startReviewServer(
     const avatars = await commitAvatars.resolve(cwd, [info.authorEmail]);
     const avatarUrl = avatars.get(info.authorEmail);
     return avatarUrl ? { ...info, avatarUrl } : info;
+  };
+
+  // --- Generated-files sidecar (#1317) ---------------------------------------
+  // Resolves `linguist-generated` (`.gitattributes`) for the served patch's
+  // paths so the client can collapse those diffs by default, GitHub-style.
+  // Presentation-layer only: the patch is never filtered and snapshot/
+  // fingerprint semantics are untouched. Plain local Git sessions only —
+  // PR worktrees, workspace multi-repo, jj, GitButler, and P4 degrade to an
+  // absent sidecar (every file renders expanded) rather than guessing
+  // attributes for a tree git can't authoritatively resolve here. Patch and
+  // diff type are parameterized for the same pin-before-await discipline as
+  // buildSectionsSidecar.
+  const buildGeneratedFilesSidecar = async (
+    patch: string = currentPatch,
+    diffType: string = currentDiffType as string,
+  ): Promise<string[] | undefined> => {
+    if (isPRMode || workspace || !gitContext) return undefined;
+    if ((sessionVcsType ?? "git") !== "git") return undefined;
+    const cwd = resolveVcsCwd(diffType as DiffType, gitContext.cwd);
+    const paths = listPatchFiles(patch).map((f) => f.path);
+    const generated = await detectGeneratedFiles(gitRuntime, cwd, paths);
+    return generated.length > 0 ? generated : undefined;
   };
 
   // Agent jobs — background process manager (late-binds serverUrl via getter).
@@ -1903,6 +1926,7 @@ export async function startReviewServer(
             const servedGitContext = clientGitContext;
             const sections = await buildSectionsSidecar(servedBase, servedDiffType as string);
             const commitInfo = await buildCommitInfoSidecar(servedDiffType as string);
+            const generatedFiles = await buildGeneratedFilesSidecar(servedPatch, servedDiffType as string);
             return Response.json({
               rawPatch: servedPatch,
               aiReviewContext: buildCurrentAiReviewContext(servedPatch, servedBase, servedDiffType as DiffType),
@@ -1945,6 +1969,7 @@ export async function startReviewServer(
               ...(isPRMode && initialViewedFiles.length > 0 && { viewedFiles: initialViewedFiles }),
               ...(sections && { sections }),
               ...(commitInfo && { commitInfo }),
+              ...(generatedFiles && { generatedFiles }),
               ...(baseBehindRemote && { baseBehindRemote: true }),
               ...(servedError && { error: servedError }),
               semanticDiff: await getSemanticDiffAdvert(servedDiffType as DiffType),
@@ -2370,6 +2395,7 @@ export async function startReviewServer(
               ).catch(() => false);
               const sections = await buildSectionsSidecar(nextBase, newDiffType as string);
               const commitInfo = await buildCommitInfoSidecar(newDiffType as string);
+              const generatedFiles = await buildGeneratedFilesSidecar(result.patch, newDiffType as string);
               const [switchSemanticDiff, switchCallFlow] = await Promise.all([
                 getSemanticDiffAdvert(newDiffType as DiffType),
                 getCallFlowAdvert(newDiffType as DiffType),
@@ -2411,6 +2437,7 @@ export async function startReviewServer(
                 hideWhitespace: currentHideWhitespace,
                 ...(sections && { sections }),
                 ...(commitInfo && { commitInfo }),
+                ...(generatedFiles && { generatedFiles }),
                 ...(baseBehindRemote && { baseBehindRemote: true }),
                 ...(updatedContext && { gitContext: updatedContext }),
                 ...(currentError && { error: currentError }),

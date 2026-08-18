@@ -78,6 +78,7 @@
     "./plan-review-lifecycle": "./plan-review-lifecycle.ts",
     "./review-profiles": "./review-profiles.ts",
     "./commit-avatars": "./commit-avatars.ts",
+    "./generated-files": "./generated-files.ts",
     "./annotate-client-lease": "./annotate-client-lease.ts",
     "./annotate-decision": "./annotate-decision.ts",
     "./archive-mode": "./archive-mode.ts",

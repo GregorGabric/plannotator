@@ -444,6 +444,25 @@ const ReviewApp: React.FC = () => {
   const [copyRawDiffStatus, setCopyRawDiffStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [viewedFiles, setViewedFiles] = useState<Set<string>>(new Set());
   const [hideViewedFiles, setHideViewedFiles] = useState(false);
+  // Generated-files sidecar (#1317): repo-relative paths marked
+  // `linguist-generated` in `.gitattributes`. Their diffs seed collapsed on
+  // the all-files surface (GitHub-style) and their headers carry a
+  // "generated" tag. Presentation-only — the diff data is never filtered.
+  const [generatedFiles, setGeneratedFiles] = useState<Set<string>>(new Set());
+  // Generated files the user explicitly expanded — session-local so an
+  // expansion survives re-renders, dock panel remounts, and identity
+  // re-seeds until the page reloads.
+  const [expandedGeneratedFiles, setExpandedGeneratedFiles] = useState<Set<string>>(new Set());
+  const handleGeneratedFileCollapsedChange = useCallback((filePath: string, collapsed: boolean) => {
+    setExpandedGeneratedFiles(prev => {
+      const expanded = !collapsed;
+      if (prev.has(filePath) === expanded) return prev;
+      const next = new Set(prev);
+      if (expanded) next.add(filePath);
+      else next.delete(filePath);
+      return next;
+    });
+  }, []);
   const [origin, setOrigin] = useState<Origin | null>(null);
   // Unknown until /api/diff responds. Keeping this tri-state prevents provider
   // discovery from starting before the server reports that AI is enabled.
@@ -1693,6 +1712,7 @@ const ReviewApp: React.FC = () => {
         callFlow?: CallFlowAdvert;
         sections?: SinceBaseSections;
         commitInfo?: CommitDiffInfo;
+        generatedFiles?: string[];
         baseBehindRemote?: boolean;
         snapshotId?: string;
         serverConfig?: Record<string, unknown> & { displayName?: string; gitUser?: string };
@@ -1757,6 +1777,7 @@ const ReviewApp: React.FC = () => {
         if (data.callFlow) setCallFlowAdvert(data.callFlow);
         setSections(data.sections ?? null);
         setCommitInfo(data.commitInfo ?? null);
+        setGeneratedFiles(new Set(data.generatedFiles ?? []));
         setBaseBehindRemote(data.baseBehindRemote === true);
         // First-run: offer the review-view chooser for a plain local git
         // session (not workspace/PR/jj/p4), once. An unseen reviewer's panel
@@ -2282,6 +2303,7 @@ const ReviewApp: React.FC = () => {
         callFlow?: CallFlowAdvert;
         sections?: SinceBaseSections;
         commitInfo?: CommitDiffInfo;
+        generatedFiles?: string[];
         baseBehindRemote?: boolean;
         superseded?: boolean;
       };
@@ -2304,6 +2326,7 @@ const ReviewApp: React.FC = () => {
       applyCallFlowAdvert(data.callFlow);
       setSections(data.sections ?? null);
       setCommitInfo(data.commitInfo ?? null);
+      setGeneratedFiles(new Set(data.generatedFiles ?? []));
       setBaseBehindRemote(data.baseBehindRemote === true);
 
       if (options?.preserveFile) {
@@ -2945,6 +2968,9 @@ const ReviewApp: React.FC = () => {
     commentScrollTarget,
     viewedFiles,
     onToggleViewed: handleToggleViewed,
+    generatedFiles,
+    expandedGeneratedFiles,
+    onGeneratedFileCollapsedChange: handleGeneratedFileCollapsedChange,
     showViewedControls: reviewShowViewedControls,
     showStageControls: reviewShowStageControls,
     stagedFiles,
@@ -3022,6 +3048,7 @@ const ReviewApp: React.FC = () => {
     handleRequestLineAnnotation, handleAddCallFlowAnnotation,
     handleAddAnnotation, handleAddFileComment, handleAddFileCommentForFile, handleEditAnnotation,
     handleSelectAnnotation, handleNavigateToAnnotation, handleDeleteAnnotation, viewedFiles,
+    generatedFiles, expandedGeneratedFiles, handleGeneratedFileCollapsedChange,
     handleToggleViewed, reviewShowViewedControls, reviewShowStageControls, stagedFiles, stagingFile, stageFile,
     canStageFiles, isPathStageable, activeWorktreePath, guideRevealFile, handleGuideRevealFile, stageError, isSearchPending, debouncedSearchQuery,
     activeFileSearchMatches, activeSearchMatchId, activeSearchMatch, searchMatches,
