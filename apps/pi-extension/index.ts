@@ -1644,13 +1644,20 @@ Mark completed steps with [DONE:n] in your response.`
 						}
 					}
 				} else {
-					// Plan file gone — fall back to idle
+					// Plan file gone — fall back to idle. This demotes a RECORDED
+					// executing phase, so the session provably used plan mode and
+					// its framing residue is still in history: owe the countermand.
+					// Arming here cannot break the #1269 fresh-session promise —
+					// only a persisted executing entry reaches this branch.
 					phase = "idle";
 					lastSubmittedPath = null;
+					idleNoticePending = true;
 				}
 			} else {
-				// No path recorded — can't rebuild, fall back to idle
+				// No path recorded — can't rebuild, fall back to idle. Same
+				// recorded-executing demotion as above: the countermand is owed.
 				phase = "idle";
+				idleNoticePending = true;
 			}
 		}
 

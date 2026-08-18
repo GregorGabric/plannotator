@@ -667,6 +667,16 @@ describe("Plannotator plan-mode-off countermand (#1320)", () => {
 		await runtime.commands.get("plannotator-plan-mode")?.handler("", context); // off: notice pending
 		await runtime.commands.get("plannotator-plan-mode")?.handler("", context); // on again, no turn between
 
+		// The load-bearing contract of enterPlanning's latch clear: the
+		// re-entered planning state entry must NOT carry a pending notice.
+		// If it did, the latch would propagate into planning/executing state
+		// entries and re-arm through the resync fallbacks, delivering a stale
+		// "plan mode is off" into a session that is back IN plan mode.
+		expect(runtime.lastPersistedState()).toMatchObject({
+			phase: "planning",
+			idleNoticePending: false,
+		});
+
 		// The first prompt of the new cycle delivers planning framing, not a
 		// stale "plan mode is off" — that would contradict the toggle.
 		const reentry = await startAgent(runtime, context);
