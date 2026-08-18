@@ -4,7 +4,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import { readFileSync } from "node:fs";
-import { detectGeneratedFiles, parseCheckAttrGenerated } from "./generated-files";
+import {
+  detectGeneratedFiles,
+  detectGeneratedFilesByName,
+  isDefaultGeneratedPath,
+  parseCheckAttrStates,
+} from "./generated-files";
 import type { ReviewGitRuntime } from "./review-core";
 
 // Same minimal git harness as review-core.test.ts (per-file test harnesses
@@ -123,12 +128,38 @@ describe("detectGeneratedFiles", () => {
     expect(generated).toEqual(["generated/weird name.md"]);
   });
 
-  test("degrades to the empty set outside a git work tree", async () => {
+  test("outside a git work tree the name-based defaults still apply", async () => {
     const plainDir = makeTempDir("plannotator-generated-nogit-");
     const generated = await detectGeneratedFiles(makeRuntime(plainDir), plainDir, [
       "a.md",
+      "bun.lock",
     ]);
-    expect(generated).toEqual([]);
+    // check-attr fails (not a work tree) — the built-in list stands alone.
+    expect(generated).toEqual(["bun.lock"]);
+  });
+
+  test("explicit .gitattributes wins over the built-in list in BOTH directions", async () => {
+    const repo = initRepo();
+    writeFileSync(
+      join(repo, ".gitattributes"),
+      [
+        // Un-mark a built-in default: the lockfile must render expanded.
+        "yarn.lock -linguist-generated",
+        "package-lock.json linguist-generated=false",
+        // Mark a file the built-in list knows nothing about.
+        "src/schema.ts linguist-generated",
+      ].join("\n") + "\n",
+    );
+
+    const generated = await detectGeneratedFiles(makeRuntime(repo), repo, [
+      "yarn.lock",
+      "package-lock.json",
+      "bun.lock", // unspecified — falls through to the built-in default
+      "src/schema.ts",
+      "src/app.ts",
+    ]);
+
+    expect(generated).toEqual(["bun.lock", "src/schema.ts"]);
   });
 
   test("returns empty for an empty path list without spawning git", async () => {
@@ -153,8 +184,8 @@ describe("detectGeneratedFiles", () => {
   });
 });
 
-describe("parseCheckAttrGenerated", () => {
-  test("reads set/true as generated and unset/false/unspecified as not", () => {
+describe("parseCheckAttrStates", () => {
+  test("maps set/true to set, unset/false to unset, everything else to unspecified", () => {
     const stdout = [
       "a.md", "linguist-generated", "true",
       "b.sql", "linguist-generated", "set",
@@ -162,6 +193,42 @@ describe("parseCheckAttrGenerated", () => {
       "d.md", "linguist-generated", "false",
       "e.ts", "linguist-generated", "unspecified",
     ].join("\0") + "\0";
-    expect(parseCheckAttrGenerated(stdout)).toEqual(["a.md", "b.sql"]);
+    expect(parseCheckAttrStates(stdout)).toEqual(
+      new Map([
+        ["a.md", "set"],
+        ["b.sql", "set"],
+        ["c.ts", "unset"],
+        ["d.md", "unset"],
+        ["e.ts", "unspecified"],
+      ]),
+    );
+  });
+});
+
+describe("built-in generated defaults", () => {
+  test("matches exact lockfile names and *.min/*.map globs on the LAST path segment only", () => {
+    // Exact names, at the root and nested.
+    expect(isDefaultGeneratedPath("bun.lock")).toBe(true);
+    expect(isDefaultGeneratedPath("apps/web/package-lock.json")).toBe(true);
+    // Glob suffixes.
+    expect(isDefaultGeneratedPath("vendor/app.min.js")).toBe(true);
+    expect(isDefaultGeneratedPath("dist/styles.min.css")).toBe(true);
+    expect(isDefaultGeneratedPath("dist/app.js.map")).toBe(true);
+    // A DIRECTORY named bun.lock never marks the files inside it.
+    expect(isDefaultGeneratedPath("bun.lock/README.md")).toBe(false);
+    // Ordinary sources stay unmarked.
+    expect(isDefaultGeneratedPath("src/app.ts")).toBe(false);
+    expect(isDefaultGeneratedPath("src/min.js")).toBe(false);
+  });
+
+  test("detectGeneratedFilesByName dedupes and preserves input order (the non-git sidecar path)", () => {
+    expect(
+      detectGeneratedFilesByName([
+        "folder/yarn.lock",
+        "src/app.ts",
+        "bun.lock",
+        "folder/yarn.lock",
+      ]),
+    ).toEqual(["folder/yarn.lock", "bun.lock"]);
   });
 });

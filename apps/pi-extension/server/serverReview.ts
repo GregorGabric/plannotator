@@ -76,7 +76,7 @@ import {
 
 import { resolvePoolCwd, type WorktreePool } from "../generated/worktree-pool.ts";
 import { createCommitAvatarResolver } from "../generated/commit-avatars.ts";
-import { detectGeneratedFiles } from "../generated/generated-files.ts";
+import { detectGeneratedFiles, detectGeneratedFilesByName } from "../generated/generated-files.ts";
 
 import { createEditorAnnotationHandler } from "./annotations.ts";
 import { createAgentJobHandler, whichCmd as commandExists } from "./agent-jobs.ts";
@@ -667,12 +667,15 @@ export async function startReviewServer(options: {
 	}
 
 	// --- Generated-files sidecar (#1317, mirrors Bun review.ts) ----------------
-	// Resolves `linguist-generated` (`.gitattributes`) for the served patch's
-	// paths so the client can collapse those diffs by default, GitHub-style.
+	// Two-layer generated detection for the served patch's paths so the client
+	// can collapse those diffs by default, GitHub-style: built-in name defaults
+	// (lockfiles, minified assets — no git needed) refined by `.gitattributes`
+	// `linguist-generated`, which wins in both directions (set marks, unset
+	// un-marks even a built-in name, unspecified keeps the default).
 	// Presentation-layer only: the patch is never filtered and snapshot/
-	// fingerprint semantics are untouched. Plain local Git sessions only —
-	// PR worktrees, workspace multi-repo, jj, and GitButler degrade to an
-	// absent sidecar (every file renders expanded) rather than guessing
+	// fingerprint semantics are untouched. Attribute refinement runs for plain
+	// local Git sessions only — PR worktrees, workspace multi-repo, jj, and
+	// GitButler get the name-based defaults alone rather than guessing
 	// attributes for a tree git can't authoritatively resolve here. Patch and
 	// diff type are parameterized for the same pin-before-await discipline as
 	// buildSectionsSidecar.
@@ -680,11 +683,16 @@ export async function startReviewServer(options: {
 		patch: string = currentPatch,
 		diffType: string = currentDiffType as string,
 	): Promise<string[] | undefined> {
-		if (isPRMode || workspace || !options.gitContext) return undefined;
-		if ((sessionVcsType ?? "git") !== "git") return undefined;
-		const cwd = resolveVcsCwd(diffType as DiffType, options.gitContext.cwd);
 		const paths = listPatchFiles(patch).map((f) => f.path);
-		const generated = await detectGeneratedFiles(reviewRuntime, cwd, paths);
+		const plainLocalGit =
+			!isPRMode && !workspace && options.gitContext && (sessionVcsType ?? "git") === "git";
+		const generated = plainLocalGit
+			? await detectGeneratedFiles(
+					reviewRuntime,
+					resolveVcsCwd(diffType as DiffType, options.gitContext!.cwd),
+					paths,
+				)
+			: detectGeneratedFilesByName(paths);
 		return generated.length > 0 ? generated : undefined;
 	}
 

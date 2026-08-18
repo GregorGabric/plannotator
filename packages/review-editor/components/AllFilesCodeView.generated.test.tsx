@@ -11,7 +11,11 @@
  *  - the header chevron expands in place (no CodeView remount) and reports
  *    the expansion to the owner so it can outlive remounts;
  *  - a file listed in `expandedGeneratedFiles` seeds expanded — the
- *    remount-survival half of the session contract.
+ *    remount-survival half of the session contract;
+ *  - a collapsed generated card shows the explicit placeholder strip, whose
+ *    click expands through the SAME collapse-report funnel as the chevron;
+ *  - search-match navigation expands through the funnel too, so a
+ *    search-driven expansion survives a diff-switch re-seed.
  */
 import { afterAll, afterEach, describe, expect, mock, test } from 'bun:test';
 import React, { act, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
@@ -262,5 +266,69 @@ describe.if(hasDom)('generated-file default collapse (#1317)', () => {
     await render({ expandedGeneratedFiles: new Set(['gen/schema.sql']) });
     const gen = seededItems().find((i) => i.id === 'gen/schema.sql');
     expect(gen?.collapsed).toBeUndefined();
+  });
+
+  test('the collapsed card shows the placeholder strip, which expands through the funnel', async () => {
+    const reports: Array<[string, boolean]> = [];
+    await render({
+      onGeneratedFileCollapsedChange: (path, collapsed) => reports.push([path, collapsed]),
+    });
+
+    const collapsedHeader = await renderHeaderFor('gen/schema.sql');
+    const strip = collapsedHeader.querySelector<HTMLButtonElement>('[data-pn-generated-collapsed-notice]');
+    expect(strip).not.toBeNull();
+    // The fold is explicit, not a failed render: the strip carries the file's
+    // +/- counts (server-derived data, so assert the data, not the prose).
+    expect(strip!.textContent).toContain('+1');
+    expect(strip!.textContent).toContain('-1');
+
+    await act(async () => strip!.click());
+    // Same funnel as the chevron: the expansion reports to the owner and the
+    // live item expands in place (no CodeView remount).
+    expect(reports).toEqual([['gen/schema.sql', false]]);
+    expect(seededItems().find((i) => i.id === 'gen/schema.sql')?.collapsed).toBe(false);
+    expect(codeViewMounts).toBe(1);
+
+    // The re-rendered expanded card drops the strip.
+    const expandedHeader = await renderHeaderFor('gen/schema.sql');
+    expect(expandedHeader.querySelector('[data-pn-generated-collapsed-notice]')).toBeNull();
+  });
+
+  test('search-match navigation expands through the funnel, surviving a re-seed round-trip', async () => {
+    const reports: Array<[string, boolean]> = [];
+    const onChange = (path: string, collapsed: boolean) => reports.push([path, collapsed]);
+    await render({ onGeneratedFileCollapsedChange: onChange });
+    expect(seededItems().find((i) => i.id === 'gen/schema.sql')?.collapsed).toBe(true);
+
+    // Search navigation lands in the collapsed generated file.
+    await render({
+      onGeneratedFileCollapsedChange: onChange,
+      activeSearchMatch: {
+        id: 'm1',
+        filePath: 'gen/schema.sql',
+        side: 'addition',
+        lineNumber: 1,
+        text: 'new',
+        matchStart: 0,
+        matchEnd: 3,
+        snippet: 'new',
+      },
+    });
+    // The expansion reached the owner — before the F1 fix this site mutated
+    // item.collapsed directly and the report was silently dropped, so the
+    // expansion died on the next diff switch.
+    expect(reports).toEqual([['gen/schema.sql', false]]);
+
+    // Round trip: the owner feeds the reported expansion back while a diff
+    // switch re-seeds items (new files identity + snapshot id) — the file the
+    // search opened stays open.
+    const expanded = new Set(reports.filter(([, collapsed]) => !collapsed).map(([path]) => path));
+    await render({
+      files: [makeFile('gen/schema.sql'), makeFile('src/app.ts')],
+      reviewSnapshotId: 'post-switch',
+      generatedFiles: new Set(['gen/schema.sql']),
+      expandedGeneratedFiles: expanded,
+    });
+    expect(seededItems().find((i) => i.id === 'gen/schema.sql')?.collapsed).toBeUndefined();
   });
 });

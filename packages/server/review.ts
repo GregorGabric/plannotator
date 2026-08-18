@@ -64,7 +64,7 @@ import {
 } from "@plannotator/shared/pr-stack";
 import { type AgentJobInfo, REVIEW_OUTPUT_FAILED, getAgentJobAnnotationContext, markJobReviewFailed } from "@plannotator/shared/agent-jobs";
 import { createCommitAvatarResolver } from "@plannotator/shared/commit-avatars";
-import { detectGeneratedFiles } from "@plannotator/shared/generated-files";
+import { detectGeneratedFiles, detectGeneratedFilesByName } from "@plannotator/shared/generated-files";
 import { getRepoInfo } from "./repo";
 import { handleImage, handleUpload, handleAgents, handleServerReady, handleDraftSave, handleDraftLoad, handleDraftDelete, handleApiNotFound, handleFavicon, readDraftGenerationFromBody, readDraftGenerationFromUrl, type OpencodeClient } from "./shared-handlers";
 import { contentHash, deleteDraft } from "./draft";
@@ -741,12 +741,15 @@ export async function startReviewServer(
   };
 
   // --- Generated-files sidecar (#1317) ---------------------------------------
-  // Resolves `linguist-generated` (`.gitattributes`) for the served patch's
-  // paths so the client can collapse those diffs by default, GitHub-style.
+  // Two-layer generated detection for the served patch's paths so the client
+  // can collapse those diffs by default, GitHub-style: built-in name defaults
+  // (lockfiles, minified assets — no git needed) refined by `.gitattributes`
+  // `linguist-generated`, which wins in both directions (set marks, unset
+  // un-marks even a built-in name, unspecified keeps the default).
   // Presentation-layer only: the patch is never filtered and snapshot/
-  // fingerprint semantics are untouched. Plain local Git sessions only —
-  // PR worktrees, workspace multi-repo, jj, GitButler, and P4 degrade to an
-  // absent sidecar (every file renders expanded) rather than guessing
+  // fingerprint semantics are untouched. Attribute refinement runs for plain
+  // local Git sessions only — PR worktrees, workspace multi-repo, jj,
+  // GitButler, and P4 get the name-based defaults alone rather than guessing
   // attributes for a tree git can't authoritatively resolve here. Patch and
   // diff type are parameterized for the same pin-before-await discipline as
   // buildSectionsSidecar.
@@ -754,11 +757,16 @@ export async function startReviewServer(
     patch: string = currentPatch,
     diffType: string = currentDiffType as string,
   ): Promise<string[] | undefined> => {
-    if (isPRMode || workspace || !gitContext) return undefined;
-    if ((sessionVcsType ?? "git") !== "git") return undefined;
-    const cwd = resolveVcsCwd(diffType as DiffType, gitContext.cwd);
     const paths = listPatchFiles(patch).map((f) => f.path);
-    const generated = await detectGeneratedFiles(gitRuntime, cwd, paths);
+    const plainLocalGit =
+      !isPRMode && !workspace && gitContext && (sessionVcsType ?? "git") === "git";
+    const generated = plainLocalGit
+      ? await detectGeneratedFiles(
+          gitRuntime,
+          resolveVcsCwd(diffType as DiffType, gitContext.cwd),
+          paths,
+        )
+      : detectGeneratedFilesByName(paths);
     return generated.length > 0 ? generated : undefined;
   };
 

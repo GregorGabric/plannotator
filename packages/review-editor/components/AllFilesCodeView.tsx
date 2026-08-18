@@ -39,6 +39,7 @@ import { OversizedFileNotice } from './OversizedFileNotice';
 import { ToolbarHost, type ToolbarHostHandle } from './ToolbarHost';
 import { FileHeader } from './FileHeader';
 import { BinaryFileNotice } from './BinaryFileNotice';
+import { GeneratedFileNotice } from './GeneratedFileNotice';
 import { EditSessionHud } from './EditSessionHud';
 import { FileCommentBanner } from './FileCommentBanner';
 import { annotationMatchesPrScope, isFileScopedAnnotation, lineRangeForAnnotation } from '../utils/annotationScope';
@@ -666,7 +667,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   // can resync them.
   const prevViewedRef = useRef<Set<string> | undefined>(viewedFiles);
   const prevStagedRef = useRef<Set<string> | undefined>(stagedFiles);
-  const prevGeneratedRef = useRef<Set<string> | undefined>(generatedFiles);
   const prevStagingRef = useRef<string | null | undefined>(stagingFile);
   const prevStageErrorRef = useRef<string | null | undefined>(stageError);
   // Previous line-card snapshots for the per-item annotation-sync effect (P4).
@@ -995,7 +995,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     // previous one (the remounted items already seed from live props).
     prevViewedRef.current = viewedFiles;
     prevStagedRef.current = stagedFiles;
-    prevGeneratedRef.current = generatedFiles;
     prevStagingRef.current = stagingFile;
     prevStageErrorRef.current = stageError;
     // Line cards are seeded into the remounted items at build time, so resync
@@ -1045,9 +1044,11 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     if (!filePath) return;
     onFileCollapsedChange?.(filePath, collapsed);
     // Generated files (#1317): let the owner track explicit expansion so it
-    // survives remounts. Every collapse mutation funnels through here
-    // (toggle, viewed+collapse, collapse/expand-all), so the owner's set
-    // always mirrors the live item state.
+    // survives remounts. Every collapse mutation funnels through here —
+    // toggle, viewed+collapse, collapse/expand-all, the collapsed-placeholder
+    // strip, and the navigation-driven expansions (guide outline, search
+    // match, sidebar comment) — so the owner's set always mirrors the live
+    // item state.
     if (generatedFiles?.has(filePath)) onGeneratedFileCollapsedChange?.(filePath, collapsed);
   });
 
@@ -1586,6 +1587,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       item.collapsed = false;
       item.version = (item.version ?? 0) + 1;
       handle.updateItem(item);
+      syncAllCollapsedMirror();
+      reportFileCollapsed(itemId, false);
     }
 
     // ReviewSearchSide: 'addition' -> additions, 'deletion' -> deletions,
@@ -1600,7 +1603,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       viewer.scrollTo({ type: 'line', id: itemId, lineNumber, side, align: 'center' });
     });
     return () => cancelAnimationFrame(raf);
-  }, [activeSearchMatch, filePathToItemId, isActive]);
+  }, [activeSearchMatch, filePathToItemId, isActive, syncAllCollapsedMirror, reportFileCollapsed]);
 
   // --- Annotations through CodeView item state (P4) ---------------------------
 
@@ -1746,7 +1749,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // diff doesn't refresh everything spuriously.
       prevViewedRef.current = viewedFiles;
       prevStagedRef.current = stagedFiles;
-      prevGeneratedRef.current = generatedFiles;
       prevStagingRef.current = stagingFile;
       prevStageErrorRef.current = stageError;
       return;
@@ -1768,11 +1770,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
 
     collectSetDelta(viewedFiles, prevViewedRef.current);
     collectSetDelta(stagedFiles, prevStagedRef.current);
-    // Generated tags (#1317): a changed set also remounts via fileSetKey, but
-    // an equal-content set delivered as a NEW Set object lands here and
-    // refreshes nothing (delta is empty) — this only exists for completeness
-    // with the other header-driving sets.
-    collectSetDelta(generatedFiles, prevGeneratedRef.current);
+    // Generated tags (#1317) deliberately have no delta here: any
+    // content-changed generated set remounts CodeView via fileSetKey
+    // (generatedKey), so a delta on the live items is unreachable.
     // stagingFile / stageError are single-file scalars: the file that just
     // started/stopped staging (or whose error appeared/cleared) needs a refresh.
     if (stagingFile !== prevStagingRef.current) {
@@ -1788,7 +1788,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
 
     prevViewedRef.current = viewedFiles;
     prevStagedRef.current = stagedFiles;
-    prevGeneratedRef.current = generatedFiles;
     prevStagingRef.current = stagingFile;
     prevStageErrorRef.current = stageError;
 
@@ -1799,7 +1798,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         refreshItem(itemId);
       }
     }
-  }, [viewedFiles, stagedFiles, generatedFiles, stagingFile, stageError, filePathToItemIds, refreshItem]);
+  }, [viewedFiles, stagedFiles, stagingFile, stageError, filePathToItemIds, refreshItem]);
 
   // The control-visibility preferences affect every header at once, so a
   // toggle refreshes all items (same slot-portal republish constraint as the
@@ -2117,6 +2116,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       item.collapsed = false;
       item.version = (item.version ?? 0) + 1;
       handle.updateItem(item);
+      syncAllCollapsedMirror();
+      reportFileCollapsed(itemId, false);
     }
 
     const isFile = isFileScopedAnnotation(ann);
@@ -2317,6 +2318,17 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         }
         onCollapseToggle={() => toggleItemCollapsed(item.id)}
         />
+        {/* A collapsed generated file must read as an intentional fold, never
+            a failed render: an explicit placeholder strip with the counts,
+            clickable through the SAME toggle funnel as the chevron. */}
+        {collapsed && generatedFiles?.has(filePath) === true && (
+          <GeneratedFileNotice
+            additions={file.additions}
+            deletions={file.deletions}
+            onExpand={() => toggleItemCollapsed(item.id)}
+            onHeightChange={() => refreshItem(item.id)}
+          />
+        )}
         {/* Files over the review size cap arrive as a contents-free stub, so
             Pierre renders nothing below the header. Explain why rather than
             leaving a bare header that reads as a broken diff. */}
