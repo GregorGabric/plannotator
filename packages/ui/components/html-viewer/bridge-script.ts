@@ -1434,7 +1434,11 @@ export const BRIDGE_SCRIPT = `(function() {
     var key = JSON.stringify(combined);
     if (key === lastUnanchoredKey) return;
     lastUnanchoredKey = key;
-    parent.postMessage({ type: PREFIX + 'unanchored', ids: combined }, '*');
+    // postToParent, not a raw '*' post: live sessions stamp the session
+    // token and post only to the listed editor origins, and the parent
+    // drops untokened live messages — a raw post would silently disable
+    // unanchored reporting exactly where restores fail most (live pages).
+    postToParent({ type: PREFIX + 'unanchored', ids: combined });
   }
 
   function validNormalizedPoint(p) {

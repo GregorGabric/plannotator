@@ -1249,6 +1249,17 @@ if (args[0] === "sessions") {
     );
   }
 
+  // --tailscale is the same exposure in different clothes: the annotate
+  // server stays loopback-bound but is published across the tailnet through
+  // the serve proxy, so a live proxy would relay the user's authenticated
+  // dev app to every tailnet peer. Hard-off, matching how the annotate agent
+  // terminal treats tailnet publication; the server throw backstops this.
+  if (liveAppResolved && tailscaleFlag) {
+    exitAnnotateStartupFailure(
+      "Live app annotation is unavailable with --tailscale (the session is reachable across your tailnet). Run without --tailscale, or use --static to annotate a converted snapshot of the page.",
+    );
+  }
+
   const annotateProject = (await detectProjectName()) ?? "_unknown";
 
   // Start the annotate server (reuses plan editor HTML)

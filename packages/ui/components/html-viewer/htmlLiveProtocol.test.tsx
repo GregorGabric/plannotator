@@ -450,4 +450,36 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     }
     expect(scrolled).toContain(late);
   });
+
+  test('the unanchored report is token-stamped and posted per editor origin in live mode', async () => {
+    // Guards the rebase seam between the live message contract and the
+    // unanchored-transparency report: a raw parent.postMessage(..., '*')
+    // emission carries no token, so the live parent would silently drop it
+    // (rejectsLiveMessage) exactly where restores fail most. The report must
+    // travel like every other live outbound: token stamped, one post per
+    // listed editor origin.
+    parentPosts.length = 0;
+    // No anchor and no text: nothing can seed placeholder targets, so this
+    // restore is a total failure and must surface in the unanchored set.
+    postToBridge({
+      type: 'plannotator-bridge-find-and-mark',
+      id: 'ghost-pin',
+      originalText: '',
+      annotationType: 'comment',
+      token: bridgeToken,
+    });
+    let reports: ParentPost[] = [];
+    for (let i = 0; i < 50 && reports.length === 0; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      reports = parentPosts.filter((p) => p.data.type === 'plannotator-bridge-unanchored');
+    }
+    expect(reports.length).toBeGreaterThan(0);
+    const latest = reports[reports.length - 1]!;
+    expect(latest.data.ids as string[]).toContain('ghost-pin');
+    expect(latest.data.token).toBe(bridgeToken);
+    const reportOrigins = reports.map((p) => p.targetOrigin);
+    expect(reportOrigins).toContain(editorOrigin);
+    expect(reportOrigins).toContain('http://127.0.0.1:4100');
+    expect(reportOrigins).not.toContain('*');
+  });
 });

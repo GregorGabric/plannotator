@@ -1851,7 +1851,7 @@ describe("annotate server: live app mode (annotate-app)", () => {
     });
   }
 
-  async function startLiveServer(targetUrl: string) {
+  async function startLiveServer(targetUrl: string, extra?: { tailnetPublished?: boolean }) {
     return startAnnotateServer({
       markdown: "",
       filePath: targetUrl,
@@ -1864,6 +1864,7 @@ describe("annotate server: live app mode (annotate-app)", () => {
         bridgeBootstrap: "/* bootstrap body */",
         annotationCss: ".pn-live {}",
       },
+      ...extra,
     });
   }
 
@@ -1975,5 +1976,15 @@ describe("annotate server: live app mode (annotate-app)", () => {
     await expect(startLiveServer("http://127.0.0.1:65500")).rejects.toThrow(
       "Live app annotation is unavailable in remote mode",
     );
+  });
+
+  test("tailnet-published sessions reject live app sessions outright", async () => {
+    // --tailscale keeps the annotate server loopback-bound but publishes it
+    // across the tailnet through the serve proxy; a live proxy would relay
+    // the user's authenticated dev app to every tailnet peer, so it is the
+    // same hard-off as remote mode, keyed on tailnetPublished.
+    await expect(
+      startLiveServer("http://127.0.0.1:65500", { tailnetPublished: true }),
+    ).rejects.toThrow("Live app annotation is unavailable in tailnet-published sessions");
   });
 });
