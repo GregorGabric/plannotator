@@ -27,12 +27,16 @@ export interface HtmlChromeState {
   sidebarOpen: boolean;
   /** Whether the right annotations drawer was open when the user last left. */
   panelOpen: boolean;
+  /** Whether the floating comment/attachments cluster over the page was
+   *  collapsed to its pill when the user last left. */
+  controlsCollapsed: boolean;
 }
 
 /** Default: both side surfaces closed — the page gets the viewport. */
 export const DEFAULT_HTML_CHROME_STATE: HtmlChromeState = {
   sidebarOpen: false,
   panelOpen: false,
+  controlsCollapsed: false,
 };
 
 /** Pure resolution logic (exported for tests): raw cookie value → state. */
@@ -55,6 +59,9 @@ export function resolveHtmlChromeState(
       panelOpen: typeof record.panelOpen === 'boolean'
         ? record.panelOpen
         : DEFAULT_HTML_CHROME_STATE.panelOpen,
+      controlsCollapsed: typeof record.controlsCollapsed === 'boolean'
+        ? record.controlsCollapsed
+        : DEFAULT_HTML_CHROME_STATE.controlsCollapsed,
     };
   } catch {
     return DEFAULT_HTML_CHROME_STATE;

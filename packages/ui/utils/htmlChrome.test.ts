@@ -34,7 +34,7 @@ afterAll(() => {
   resetStorageBackend();
 });
 
-const DEFAULTS = { sidebarOpen: false, panelOpen: false };
+const DEFAULTS = { sidebarOpen: false, panelOpen: false, controlsCollapsed: false };
 const NOW = 1_800_000_000_000;
 const stamp = (state: object, age = 0) => JSON.stringify({ ...state, savedAt: NOW - age });
 
@@ -53,10 +53,11 @@ describe.if(hasDom)('resolveHtmlChromeState (pure)', () => {
     expect(htmlChromeModule!.resolveHtmlChromeState(stamp({ sidebarOpen: true }), NOW)).toEqual({
       sidebarOpen: true,
       panelOpen: false,
+      controlsCollapsed: false,
     });
     expect(
       htmlChromeModule!.resolveHtmlChromeState(stamp({ panelOpen: true }), NOW),
-    ).toEqual({ sidebarOpen: false, panelOpen: true });
+    ).toEqual({ sidebarOpen: false, panelOpen: true, controlsCollapsed: false });
   });
 
   test('an old record carrying the removed toolsHidden flag is read tolerantly: the flag is ignored, the rest applies', () => {
@@ -68,7 +69,7 @@ describe.if(hasDom)('resolveHtmlChromeState (pure)', () => {
         stamp({ toolsHidden: true, sidebarOpen: true, panelOpen: true }),
         NOW,
       ),
-    ).toEqual({ sidebarOpen: true, panelOpen: true });
+    ).toEqual({ sidebarOpen: true, panelOpen: true, controlsCollapsed: false });
   });
 
   test('a record older than the TTL expires back to the defaults', () => {
@@ -78,6 +79,7 @@ describe.if(hasDom)('resolveHtmlChromeState (pure)', () => {
     expect(htmlChromeModule!.resolveHtmlChromeState(inside, NOW)).toEqual({
       sidebarOpen: true,
       panelOpen: true,
+      controlsCollapsed: false,
     });
   });
 
@@ -95,17 +97,29 @@ describe.if(hasDom)('getHtmlChromeState / saveHtmlChromeState (cookie round trip
 
   test('a "user opened surfaces" state persists across a fresh mount', () => {
     // Session 1: user opens the sidebar and the drawer, then leaves.
-    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: true, panelOpen: true });
+    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: true, panelOpen: true, controlsCollapsed: false });
     // Session 2 (fresh mount, same cookies): opens exactly as left.
     expect(htmlChromeModule!.getHtmlChromeState()).toEqual({
       sidebarOpen: true,
       panelOpen: true,
+      controlsCollapsed: false,
+    });
+  });
+
+  test('a collapsed floating-controls cluster persists across a fresh mount', () => {
+    // Session 1: user collapses the comment/attachments cluster to its pill.
+    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: false, panelOpen: false, controlsCollapsed: true });
+    // Session 2: the cluster opens collapsed, with the pill as the way back.
+    expect(htmlChromeModule!.getHtmlChromeState()).toEqual({
+      sidebarOpen: false,
+      panelOpen: false,
+      controlsCollapsed: true,
     });
   });
 
   test('a "user re-closed everything" state persists too', () => {
-    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: true, panelOpen: true });
-    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: false, panelOpen: false });
+    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: true, panelOpen: true, controlsCollapsed: true });
+    htmlChromeModule!.saveHtmlChromeState({ sidebarOpen: false, panelOpen: false, controlsCollapsed: false });
     expect(htmlChromeModule!.getHtmlChromeState()).toEqual(DEFAULTS);
   });
 });

@@ -494,6 +494,8 @@ const App: React.FC = () => {
   // The restore's own commit still renders pre-restore values; the writer
   // consumes this flag to skip that exact run (see the save effect).
   const skipNextHtmlChromeSaveRef = useRef(false);
+  // Floating comment/attachments cluster over the page, collapsed to its pill.
+  const [htmlControlsCollapsed, setHtmlControlsCollapsed] = useState(false);
   const [imageBaseDir, setImageBaseDir] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1805,6 +1807,7 @@ const App: React.FC = () => {
     if (chrome.sidebarOpen) sidebar.open();
     else sidebar.close();
     setIsPanelOpen(chrome.panelOpen);
+    setHtmlControlsCollapsed(chrome.controlsCollapsed);
     htmlChromeRestoredRef.current = true;
   }, [
     annotateSource,
@@ -1836,8 +1839,8 @@ const App: React.FC = () => {
       skipNextHtmlChromeSaveRef.current = false;
       return;
     }
-    saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
-  }, [isHtmlSurface, sidebar.isOpen, isPanelOpen]);
+    saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, controlsCollapsed: htmlControlsCollapsed });
+  }, [isHtmlSurface, sidebar.isOpen, isPanelOpen, htmlControlsCollapsed]);
 
   const ensureShareLink = useCallback(async (): Promise<string | null> => {
     const existing = shortShareUrl || shareUrl;
@@ -3589,7 +3592,7 @@ const App: React.FC = () => {
     if (isHtmlSurface) {
       refreshInputMethodStamp(inputMethod);
       if (htmlChromeRestoredRef.current) {
-        saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
+        saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, controlsCollapsed: htmlControlsCollapsed });
       }
     }
   };
@@ -5379,6 +5382,8 @@ const App: React.FC = () => {
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     maxWidth={isHtmlSurface ? null : annotateReaderMaxWidth}
                     fullViewport={isHtmlSurface}
+                    controlsCollapsed={htmlControlsCollapsed}
+                    onToggleControlsCollapsed={() => setHtmlControlsCollapsed((v) => !v)}
                     diffAvailable={!liveApp && !!htmlDiffHtml}
                     diffActive={!liveApp && isPlanDiffActive && !!htmlDiffHtml}
                     onToggleDiff={() => setIsPlanDiffActive((v) => !v)}
