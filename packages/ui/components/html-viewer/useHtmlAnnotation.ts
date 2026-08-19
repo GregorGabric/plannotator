@@ -532,25 +532,20 @@ export function useHtmlAnnotation({
         const anchor = positionAnchor(message.rect);
         if (!anchor) return;
 
-        const currentMode = message.modeOverride ?? modeRef.current;
+        // HTML and live-app surfaces are COMMENT-ONLY: redline (auto-DELETION)
+        // and quickLabel are markdown-surface features, so both the host's
+        // mode and any bridge-posted modeOverride clamp to the plain selection
+        // flow here (a hostile page can post modeOverride, so the clamp sits
+        // at the trust boundary, not in the host). Persisted DELETION
+        // annotations still restore through applyAnnotations — only CREATION
+        // is comment-only.
+        const requestedMode = message.modeOverride ?? modeRef.current;
+        const currentMode =
+          requestedMode === "redline" || requestedMode === "quickLabel"
+            ? "selection"
+            : requestedMode;
 
-        if (currentMode === "redline") {
-          const id = nextHtmlAnnId();
-          post({ type: `${PREFIX}create-mark`, id, annotationType: "deletion" });
-          onAddRef.current?.({
-            id,
-            blockId: "",
-            startOffset: 0,
-            endOffset: 0,
-            type: AnnotationType.DELETION,
-            originalText: message.text,
-            author: getIdentity(),
-            createdA: Date.now(),
-            htmlAnchor: message.anchor,
-          });
-          pendingTextRef.current = "";
-          pendingAnchorRef.current = null;
-        } else if (
+        if (
           currentMode === "comment"
           // Pinpoint click-to-pin: the click already chose the target, so skip
           // the intermediate toolbar and go straight to the comment composer.
@@ -584,11 +579,6 @@ export function useHtmlAnnotation({
               key: message.targetKey,
             });
           }
-        } else if (currentMode === "quickLabel") {
-          setQuickLabelPicker({
-            anchorEl: anchor,
-            cursorHint: { x: parseFloat(anchor.style.left), y: parseFloat(anchor.style.top) },
-          });
         } else {
           setToolbarState({
             element: anchor,

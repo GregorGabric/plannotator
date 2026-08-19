@@ -428,45 +428,82 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     return btn as HTMLElement;
   }
 
-  test('inbound messages without the token (or from a foreign origin) are ignored', () => {
-    // Forged arming attempts (no token / wrong origin) must leave the session
-    // fully inert: no cursor affordance, and page clicks stay native.
-    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: true });
-    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'pinpoint' });
-    postToBridge(
-      { type: 'plannotator-bridge-set-annotate-mode', active: true, token: bridgeToken },
-      'http://evil.example',
-    );
-    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
-    const probe = clickProbe(probeButton());
-    expect(probe.prevented).toBe(false);
-    expect(probe.selections).toBe(0);
-  });
+  /** Simulate a real text drag over `el`: select its contents, then run the
+   * mousedown → >4px mousemove (button held) → mouseup sequence the drag
+   * arming keys off. Returns after the 10ms selection pass has run. */
+  async function dragSelectContents(el: HTMLElement) {
+    const range = bridgeDocument.createRange();
+    range.selectNodeContents(el);
+    const sel = bridgeWindow.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: 5, clientY: 5 }));
+    el.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, buttons: 1, clientX: 40, clientY: 12 }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0, clientX: 40, clientY: 12 }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 
-  test('live sessions start in Interact: an authenticated pinpoint input method alone captures nothing', () => {
-    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'pinpoint', token: bridgeToken });
-    // Interact gates the cursor affordance as well as the capture.
-    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
-    const probe = clickProbe(probeButton());
-    expect(probe.prevented).toBe(false);
-    expect(probe.selections).toBe(0);
-    // Esc belongs to the page in Interact: no annotate-exit post.
-    const exitsBefore = primaryPosts('annotate-exit').length;
-    pressEscape();
-    expect(primaryPosts('annotate-exit').length).toBe(exitsBefore);
-  });
+  function dragProbeParagraph(): HTMLElement {
+    let p = bridgeDocument.getElementById('live-drag-probe');
+    if (!p) {
+      p = bridgeDocument.createElement('p');
+      p.id = 'live-drag-probe';
+      p.textContent = 'Draggable live copy';
+      bridgeDocument.body.appendChild(p);
+    }
+    return p as HTMLElement;
+  }
 
-  test('arming Annotate enables pinpoint capture, still clamped to pinpoint', () => {
-    // Even an authenticated request for drag lands on pinpoint (live clamp);
-    // arming then lights the cursor affordance and captures the click.
-    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'drag', token: bridgeToken });
-    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: true, token: bridgeToken });
+  test('live sessions start ARMED: pinpoint capture and the cursor affordance are live before any parent message', () => {
+    // No set-annotate-mode or set-input-method has arrived yet — the default
+    // must already be pinpoint-armed on the live surface.
     expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(true);
     const probe = clickProbe(probeButton());
     expect(probe.prevented).toBe(true);
     expect(probe.selections).toBe(1);
     expect(selectionPosts().at(-1)!.data.pinpoint).toBe(true);
     postToBridge({ type: 'plannotator-bridge-cancel-selection', token: bridgeToken });
+  });
+
+  test('forged disarm attempts (no token / wrong origin) are ignored', () => {
+    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: false });
+    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'drag' });
+    postToBridge(
+      { type: 'plannotator-bridge-set-annotate-mode', active: false, token: bridgeToken },
+      'http://evil.example',
+    );
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(true);
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(true);
+    expect(probe.selections).toBe(1);
+    postToBridge({ type: 'plannotator-bridge-cancel-selection', token: bridgeToken });
+  });
+
+  test('an authenticated drag input-method request stays clamped to pinpoint (clicks still pin)', () => {
+    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'drag', token: bridgeToken });
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(true);
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(true);
+    expect(probe.selections).toBe(1);
+    expect(selectionPosts().at(-1)!.data.pinpoint).toBe(true);
+    postToBridge({ type: 'plannotator-bridge-cancel-selection', token: bridgeToken });
+  });
+
+  test('ARMED: a real text drag posts a drag selection, and its trailing click never re-pins', async () => {
+    const p = dragProbeParagraph();
+    const before = selectionPosts().length;
+    await dragSelectContents(p);
+    const posts = selectionPosts();
+    expect(posts.length).toBe(before + 1);
+    expect(posts.at(-1)!.data.text).toBe('Draggable live copy');
+    expect(posts.at(-1)!.data.pinpoint).toBeFalsy();
+    // The click event that follows a completed drag must not clobber the
+    // drag selection with a pinpoint pin.
+    const trailing = clickProbe(p);
+    expect(trailing.prevented).toBe(false);
+    expect(trailing.selections).toBe(0);
+    postToBridge({ type: 'plannotator-bridge-cancel-selection', token: bridgeToken });
+    bridgeWindow.getSelection()!.removeAllRanges();
   });
 
   test('Esc ladder: a pending draft clears first, then Esc asks to exit Annotate; the parent flips the mode', () => {
@@ -489,6 +526,30 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     // The parent answers: Interact. Cursor affordance drops, clicks are native.
     postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: false, token: bridgeToken });
     expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
+    const native = clickProbe(probeButton());
+    expect(native.prevented).toBe(false);
+    expect(native.selections).toBe(0);
+  });
+
+  test('INTERACT: text drag-selection commenting still works while plain clicks stay native', async () => {
+    // The ladder test above left the session in Interact.
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
+    const p = dragProbeParagraph();
+    const before = selectionPosts().length;
+    await dragSelectContents(p);
+    const posts = selectionPosts();
+    expect(posts.length).toBe(before + 1);
+    expect(posts.at(-1)!.data.text).toBe('Draggable live copy');
+    // Esc with the drag draft open closes the draft — and ONLY the draft:
+    // there is no armed mode to exit, so no annotate-exit ever posts.
+    const clearsBefore = primaryPosts('selection-clear').length;
+    const exitsBefore = primaryPosts('annotate-exit').length;
+    pressEscape();
+    expect(primaryPosts('selection-clear').length).toBe(clearsBefore + 1);
+    expect(primaryPosts('annotate-exit').length).toBe(exitsBefore);
+    pressEscape();
+    expect(primaryPosts('annotate-exit').length).toBe(exitsBefore);
+    // Plain clicks reach the page natively in Interact.
     const native = clickProbe(probeButton());
     expect(native.prevented).toBe(false);
     expect(native.selections).toBe(0);

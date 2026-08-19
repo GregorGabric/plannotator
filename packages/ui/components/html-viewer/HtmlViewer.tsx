@@ -29,7 +29,6 @@ import {
   type CommentAskAIHandler,
   type CommentTargetChip,
 } from "../CommentPopover";
-import { FloatingQuickLabelPicker } from "../FloatingQuickLabelPicker";
 import { VimKeyHud } from "../VimKeyHud";
 import type { ViewerHandle } from "../Viewer";
 import {
@@ -161,11 +160,12 @@ export interface HtmlViewerProps {
   mode: EditorMode;
   /** Input method: 'drag' = text selection, 'pinpoint' = click an element. */
   inputMethod: InputMethod;
-  /** Interact/Annotate toggle for HTML and live-app surfaces. While false the
-   *  bridge is fully passive (no pinpoint capture, no hover outline, no drag
-   *  toolbar) and clicks/forms/navigation reach the page natively. Committed
-   *  markers stay visible and clickable in BOTH modes. Default true, which is
-   *  classic raw-HTML behavior. */
+  /** Interact/Annotate toggle for HTML and live-app surfaces. While false
+   *  the bridge keeps clicks native (no pinpoint capture, no hover outline)
+   *  and clicks/forms/navigation reach the page untouched. Text
+   *  drag-selection commenting stays live in BOTH modes, and committed
+   *  markers stay visible and clickable in BOTH modes. Default true (armed)
+   *  on both surface kinds. */
   annotateModeActive?: boolean;
   /** Esc final rung (bridge-side or the parent-side listener here): the user
    *  asked to leave Annotate for Interact. The host owns the mode state. */
@@ -877,9 +877,12 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               positionMode="center-above"
               element={hook.toolbarState.element}
               copyText={hook.toolbarState.selectionText}
+              // HTML/live surfaces are comment-only: no Delete, no quick
+              // labels (onQuickLabel deliberately not passed). The markdown
+              // surface keeps the full toolbar.
+              commentOnly
               onAnnotate={hook.handleAnnotate}
               onRequestComment={hook.handleRequestComment}
-              onQuickLabel={hook.handleQuickLabel}
               onClose={hook.handleToolbarClose}
             />,
             document.body,
@@ -909,18 +912,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
               refocusToken={targetChips ? hook.composerFocusToken : undefined}
               captureStrayKeys={multiSelectActive}
               yieldState={multiSelectActive ? composerYield : undefined}
-            />,
-            document.body,
-          )}
-
-        {/* Quick label picker portal */}
-        {!readOnly && hook.quickLabelPicker &&
-          createPortal(
-            <FloatingQuickLabelPicker
-              anchorEl={hook.quickLabelPicker.anchorEl}
-              cursorHint={hook.quickLabelPicker.cursorHint}
-              onSelect={hook.handleFloatingQuickLabel}
-              onDismiss={hook.handleQuickLabelPickerDismiss}
             />,
             document.body,
           )}

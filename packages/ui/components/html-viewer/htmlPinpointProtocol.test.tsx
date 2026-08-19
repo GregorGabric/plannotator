@@ -197,7 +197,7 @@ describe.if(hasDom)('parseBridgeMessage selection additions', () => {
 
 describe.if(hasDom)('pinpoint click-to-pin flow', () => {
   async function mountViewer(options: {
-    mode: 'selection' | 'redline';
+    mode: 'selection' | 'redline' | 'comment';
     onAdd: (ann: Annotation) => void;
   }) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
@@ -239,6 +239,27 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
     anchor: { selector: 'p:nth-of-type(1)', tagName: 'p', text: 'Pinpoint target' },
   };
 
+  async function typeComment(value: string) {
+    const el = document.querySelector<HTMLTextAreaElement>('[data-comment-popover] textarea');
+    if (!el) throw new Error('composer textarea missing');
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')?.set;
+    await act(async () => {
+      if (setter) setter.call(el, value);
+      else el.value = value;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function saveComment() {
+    const button = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'),
+    ).find((b) => b.textContent === 'Save');
+    if (!button) throw new Error('Save button missing');
+    await act(async () => {
+      button.click();
+    });
+  }
+
   test('a pinpoint selection opens the comment composer, not the toolbar', async () => {
     const { postSelection } = await mountViewer({ mode: 'selection', onAdd: () => {} });
     await postSelection({ ...selectionMessage, pinpoint: true });
@@ -253,26 +274,51 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
     expect(document.querySelector('[data-comment-popover]')).toBeNull();
   });
 
-  test('redline pinpoint commits an annotation carrying the element anchor', async () => {
+  test('the HTML selection toolbar is comment-only: no Delete, no quick labels', async () => {
+    const { postSelection } = await mountViewer({ mode: 'selection', onAdd: () => {} });
+    await postSelection({ ...selectionMessage, anchor: undefined });
+    const toolbar = document.querySelector('.annotation-toolbar');
+    if (!toolbar) throw new Error('toolbar missing');
+    const titles = Array.from(toolbar.querySelectorAll('button')).map((b) => b.title);
+    expect(titles).toContain('Comment');
+    expect(titles).not.toContain('Delete');
+    expect(titles).not.toContain('Quick label');
+    expect(titles).not.toContain('Looks good');
+  });
+
+  test('redline mode is CLAMPED on HTML surfaces: a pinpoint selection opens the composer instead of auto-deleting', async () => {
     const added: Annotation[] = [];
     const { postSelection } = await mountViewer({
       mode: 'redline',
       onAdd: (ann) => added.push(ann),
     });
     await postSelection({ ...selectionMessage, pinpoint: true });
-    expect(added.length).toBe(1);
-    expect(added[0]!.originalText).toBe('Pinpoint target');
-    expect(added[0]!.htmlAnchor).toEqual({
-      selector: 'p:nth-of-type(1)',
-      tagName: 'p',
-      text: 'Pinpoint target',
+    // No DELETION was created; the comment composer owns the draft.
+    expect(added.length).toBe(0);
+    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+  });
+
+  test('a bridge-posted modeOverride "redline" cannot force a DELETION (trust-boundary clamp)', async () => {
+    // A hostile page controls modeOverride, so the clamp must sit on the
+    // message path, not just on the host-passed mode.
+    const added: Annotation[] = [];
+    const { postSelection } = await mountViewer({
+      mode: 'selection',
+      onAdd: (ann) => added.push(ann),
     });
+    await postSelection({ ...selectionMessage, pinpoint: true, modeOverride: 'redline' });
+    expect(added.length).toBe(0);
+    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+    await typeComment('clamped');
+    await saveComment();
+    expect(added.length).toBe(1);
+    expect(added[0]!.type).toBe('COMMENT' as Annotation['type']);
   });
 
   test('a selection with a malformed anchor commits without one', async () => {
     const added: Annotation[] = [];
     const { postSelection } = await mountViewer({
-      mode: 'redline',
+      mode: 'comment',
       onAdd: (ann) => added.push(ann),
     });
     await postSelection({
@@ -280,6 +326,8 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
       anchor: { selector: 'x'.repeat(2000), tagName: 'p' },
       pinpoint: true,
     });
+    await typeComment('no anchor');
+    await saveComment();
     expect(added.length).toBe(1);
     expect(added[0]!.htmlAnchor).toBeUndefined();
   });
@@ -287,7 +335,7 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
   test('the anchor point (selected relative point) rides onto the committed annotation', async () => {
     const added: Annotation[] = [];
     const { postSelection } = await mountViewer({
-      mode: 'redline',
+      mode: 'comment',
       onAdd: (ann) => added.push(ann),
     });
     await postSelection({
@@ -295,14 +343,17 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
       anchor: { ...selectionMessage.anchor, point: { x: 0.75, y: 0.1 } },
       pinpoint: true,
     });
+    await typeComment('with point');
+    await saveComment();
     expect(added.length).toBe(1);
+    expect(added[0]!.originalText).toBe('Pinpoint target');
     expect(added[0]!.htmlAnchor?.point).toEqual({ x: 0.75, y: 0.1 });
   });
 
   test('a hostile anchor point is dropped while the anchor itself commits', async () => {
     const added: Annotation[] = [];
     const { postSelection } = await mountViewer({
-      mode: 'redline',
+      mode: 'comment',
       onAdd: (ann) => added.push(ann),
     });
     await postSelection({
@@ -310,6 +361,8 @@ describe.if(hasDom)('pinpoint click-to-pin flow', () => {
       anchor: { ...selectionMessage.anchor, point: { x: 'evil', y: [1] } },
       pinpoint: true,
     });
+    await typeComment('hostile point');
+    await saveComment();
     expect(added.length).toBe(1);
     expect(added[0]!.htmlAnchor).toEqual({
       selector: 'p:nth-of-type(1)',
@@ -825,18 +878,21 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     });
   });
 
-  test('quickLabel-mode drafts never arm the bridge and never build chips (D1)', async () => {
-    // quickLabel mode: the pinpoint draft opens the label picker, which the
-    // parent does NOT mirror as targets — so it must never arm the bridge,
-    // and stray adds must not build chips.
+  test('quickLabel mode is CLAMPED on HTML surfaces: the pinpoint draft opens the composer and arms like any pinpoint draft', async () => {
+    // Quick labels are a markdown-surface feature. On HTML surfaces the mode
+    // clamps to the plain selection flow, so a pinpoint draft opens the
+    // composer (which mirrors targets) — never the label picker. This also
+    // keeps the D1 invariant vacuously safe: every pinpoint draft that arms
+    // the bridge is mirrored by the composer.
     const quick = await mountViewer(() => {}, 'quickLabel');
     await quick.post(primarySelection());
-    expect(document.querySelector('[data-comment-popover]')).toBe(null);
-    expect(
-      quick.postedToIframe.some((m) => m.type === 'plannotator-bridge-arm-multi-select'),
-    ).toBe(false);
+    expect(document.querySelector('[data-comment-popover]')).not.toBe(null);
+    expect(quick.postedToIframe).toContainEqual({
+      type: 'plannotator-bridge-arm-multi-select',
+      key: 'ht-1',
+    });
     await quick.post(addedTarget('ht-2', 'Create'));
-    expect(chips().length).toBe(0);
+    expect(chips().length).toBe(2);
   });
 
   test('a forged multi-target-removed still echoes remove-target to resync the bridge (D4)', async () => {

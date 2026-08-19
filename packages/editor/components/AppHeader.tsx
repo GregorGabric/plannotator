@@ -15,13 +15,11 @@ interface AppHeaderProps {
   /** Mobile document-scroll surfaces let Safari own the top edge and scroll
    * this header with the page. Desktop keeps the incumbent sticky header. */
   sticky?: boolean;
-  /** HTML annotate surface: show a Hide/Show annotation-tools toggle in the header,
-   *  so hiding leaves the rendered HTML completely free of overlay controls. */
+  /** HTML annotate surface (raw HTML or live app): shows the pen toggle. */
   htmlSurface?: boolean;
-  htmlToolsHidden?: boolean;
-  onToggleHtmlTools?: () => void;
   /** Interact/Annotate toggle for HTML and live-app surfaces: armed means
-   *  clicks annotate; unarmed hands the page back its native interaction. */
+   *  clicks annotate; unarmed hands the page back its native interaction
+   *  (text drag-selection commenting stays live either way). */
   htmlAnnotateArmed?: boolean;
   onToggleHtmlAnnotate?: () => void;
   /** Compact touch layouts replace the brand mark with a task-focused entry
@@ -113,8 +111,6 @@ interface AppHeaderProps {
 export const AppHeader = React.memo<AppHeaderProps>(({
   sticky = true,
   htmlSurface,
-  htmlToolsHidden,
-  onToggleHtmlTools,
   htmlAnnotateArmed,
   onToggleHtmlAnnotate,
   compactTouchLayout = false,
@@ -206,16 +202,6 @@ export const AppHeader = React.memo<AppHeaderProps>(({
           )
         ) : (
           <AppHeaderLogo />
-        )}
-        {!compactTouchLayout && htmlSurface && onToggleHtmlTools && (
-          <button
-            type="button"
-            onClick={onToggleHtmlTools}
-            className="ml-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded cursor-pointer"
-            title={htmlToolsHidden ? 'Show annotation tools' : 'Hide annotation tools'}
-          >
-            {htmlToolsHidden ? 'Show tools' : 'Hide tools'}
-          </button>
         )}
       </div>
 
@@ -355,8 +341,11 @@ export const AppHeader = React.memo<AppHeaderProps>(({
           </>
         )}
 
-        {/* Interact/Annotate toggle — HTML and live-app surfaces only. Always
-            the same bubble icon: armed shows the accent color plus a visible
+        {/* Interact/Annotate toggle — HTML and live-app surfaces only. A PEN
+            icon (deliberately not a speech bubble: the annotations-panel
+            button beside it is already a bubble, and the two must be
+            distinguishable at a glance — also distinct from the AI sparkles).
+            Always the same icon: armed shows the accent color plus a visible
             border; unarmed is muted with a TRANSPARENT border of the same
             width, so the button's box is pixel-identical in both states. */}
         {!compactTouchLayout && htmlSurface && onToggleHtmlAnnotate && (
@@ -371,11 +360,11 @@ export const AppHeader = React.memo<AppHeaderProps>(({
                 : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted'
             }`}
             title={htmlAnnotateArmed
-              ? 'Annotate mode: clicks annotate the page. Esc or click to interact'
-              : 'Interact mode: clicks reach the page. Click to annotate'}
+              ? 'Annotate mode: click an element or select text to comment. Esc to interact'
+              : 'Interact mode: clicks reach the page (text selection still comments). Click to annotate'}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.862 4.487zm0 0L19.5 7.125" />
             </svg>
           </button>
         )}

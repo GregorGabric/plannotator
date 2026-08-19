@@ -477,33 +477,23 @@ const App: React.FC = () => {
   const [liveApp, setLiveApp] = useState<{ appUrl: string; origin: string; token: string } | null>(null);
   const [livePageUrl, setLivePageUrl] = useState('');
   // Interact/Annotate mode for HTML and live-app surfaces. Armed = the bridge
-  // captures clicks for annotation; disarmed (Interact) = the page is fully
-  // native and committed markers stay visible/clickable. Session-only, never
-  // persisted. Static/raw HTML sessions START armed (classic behavior); live
-  // app sessions start in Interact (set in the /api/plan handler) so the
-  // running app is usable before anyone opts into annotating.
+  // captures clicks for pinpoint annotation; disarmed (Interact) = clicks are
+  // fully native while committed markers stay visible/clickable and text
+  // drag-selection commenting stays live. Session-only, never persisted.
+  // BOTH surface kinds start armed; Esc (or the header pen) drops to
+  // Interact.
   const [htmlAnnotateArmed, setHtmlAnnotateArmed] = useState(true);
   const handleHtmlAnnotateToggle = useCallback(() => setHtmlAnnotateArmed((v) => !v), []);
   const handleHtmlAnnotateExit = useCallback(() => setHtmlAnnotateArmed(false), []);
   // Session-level force-markdown preference (`--markdown`). When set, folder/linked HTML
   // files are converted instead of rendered raw — threaded into /api/doc as &convert=1.
   const [convertHtml, setConvertHtml] = useState(false);
-  // Hide the floating HTML annotation controls (toolstrip + action cluster) so the
-  // user can read the rendered page unobstructed. Selections/annotations are unaffected.
-  // First-ever HTML session opens minimal (everything hidden); afterwards the user's
-  // last chrome state is restored from the persisted cookie (see utils/htmlChrome.ts).
-  const [htmlToolsHidden, setHtmlToolsHidden] = useState(false);
   // Gate for the chrome-persistence writer: only start saving once the persisted
   // state has been applied, so a pre-restore render can't clobber the cookie.
   const htmlChromeRestoredRef = useRef(false);
   // The restore's own commit still renders pre-restore values; the writer
   // consumes this flag to skip that exact run (see the save effect).
   const skipNextHtmlChromeSaveRef = useRef(false);
-  // Every overlay the document surface paints over a rendered HTML page — the
-  // toolstrip and the collapsed sidebar tab flags — drops out together, so the
-  // page really gets the whole viewport. The header's "Show tools" button stays
-  // put, and Mod+B still opens the sidebar, so neither can be locked away.
-  const htmlChromeHidden = isHtmlSurface && htmlToolsHidden;
   const [imageBaseDir, setImageBaseDir] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1795,10 +1785,13 @@ const App: React.FC = () => {
 
   // Restore-on-entry: every time the session transitions ONTO an HTML surface
   // (a root raw-HTML session, or a linked .html doc opened from markdown),
-  // apply the chrome the user last left an HTML session with (first-ever run:
-  // everything hidden, sidebar closed — a minimal "just the page" paint).
-  // Re-restoring on each entry is also what keeps a markdown surface's sidebar
-  // state from leaking into the HTML cookie on the way back.
+  // apply the sidebar/panel state the user last left an HTML session with
+  // (first-ever run: both closed). The old "Hide tools" chrome flag is gone —
+  // annotation chrome is always visible on HTML surfaces now, and an old
+  // cookie still carrying toolsHidden is simply ignored, so a stale record
+  // can never strand a user with hidden chrome. Re-restoring on each entry is
+  // also what keeps a markdown surface's sidebar state from leaking into the
+  // HTML cookie on the way back.
   const prevHtmlChromeSurfaceRef = useRef(false);
   useEffect(() => {
     if (isLoading || isLoadingShared) return;
@@ -1809,7 +1802,6 @@ const App: React.FC = () => {
     if (archive.archiveMode || goalSetupMode || annotateSource === 'folder') return;
     const chrome = getHtmlChromeState();
     skipNextHtmlChromeSaveRef.current = true;
-    setHtmlToolsHidden(chrome.toolsHidden);
     if (chrome.sidebarOpen) sidebar.open();
     else sidebar.close();
     setIsPanelOpen(chrome.panelOpen);
@@ -1826,8 +1818,8 @@ const App: React.FC = () => {
     wideModeType,
   ]);
 
-  // Persist the chrome the user leaves an HTML session in (tools visibility +
-  // sidebar open), so the next raw-HTML session opens exactly as they left this
+  // Persist the chrome the user leaves an HTML session in (sidebar + panel
+  // open state), so the next raw-HTML session opens exactly as they left this
   // one. Gated on the restore having run — a pre-restore render must not save
   // the transient defaults over the user's remembered state — and on being ON
   // the HTML surface, so a linked markdown doc's sidebar use never writes here.
@@ -1844,8 +1836,8 @@ const App: React.FC = () => {
       skipNextHtmlChromeSaveRef.current = false;
       return;
     }
-    saveHtmlChromeState({ toolsHidden: htmlToolsHidden, sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
-  }, [isHtmlSurface, htmlToolsHidden, sidebar.isOpen, isPanelOpen]);
+    saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
+  }, [isHtmlSurface, sidebar.isOpen, isPanelOpen]);
 
   const ensureShareLink = useCallback(async (): Promise<string | null> => {
     const existing = shortShareUrl || shareUrl;
@@ -2645,9 +2637,11 @@ const App: React.FC = () => {
   };
 
   const handleInputMethodChange = (method: InputMethod) => {
-    // Live app sessions are pinpoint-only: the switch is hidden and the
-    // Alt shortcut must not flip the surface to drag either.
-    if (liveApp) return;
+    // HTML and live-app surfaces pin the viewer to pinpoint (drag-selection
+    // commenting is simultaneously live there, so there is nothing to
+    // switch): the toolstrip is not rendered and the Alt shortcut must not
+    // flip state the surface ignores or write the html cookie.
+    if (liveApp || isHtmlSurface) return;
     if (isCompactTouchLayout) {
       setCompactInputMethod(method);
       return;
@@ -2675,16 +2669,18 @@ const App: React.FC = () => {
   useInputMethodSwitch(effectiveInputMethod, handleInputMethodChange);
 
   // Gates both the toolstrip's own render and its shortcuts, so a mode can never
-  // change with no visible pill to report it.
+  // change with no visible pill to report it. HTML/live surfaces have no
+  // toolstrip at all: they are comment-only with pinpoint + drag both live,
+  // so there is no input method or annotation mode left to switch.
   const toolstripVisible = useMemo(
     () =>
-      !goalSetupMode && !isPlanDiffActive && !archive.archiveMode && !isEditingMarkdown && !htmlChromeHidden
+      !goalSetupMode && !isPlanDiffActive && !archive.archiveMode && !isEditingMarkdown && !isHtmlSurface
       && (!isCompactTouchLayout || !(annotateSource === 'folder' && !markdown && !linkedDocHook.isActive)),
     [
       annotateSource,
       archive.archiveMode,
       goalSetupMode,
-      htmlChromeHidden,
+      isHtmlSurface,
       isCompactTouchLayout,
       isEditingMarkdown,
       isPlanDiffActive,
@@ -2759,9 +2755,8 @@ const App: React.FC = () => {
           // proxy origin. No rawHtml, no version fields, no sharing.
           setRenderAs('html');
           setMarkdown('');
-          // Live sessions open in Interact: the app must be immediately
-          // usable; the header bubble (or Mod+Shift+A) arms Annotate.
-          setHtmlAnnotateArmed(false);
+          // Live sessions open ARMED like every HTML surface (htmlAnnotateArmed
+          // defaults true): pinpoint is the default, Esc drops to Interact.
           setLiveApp({
             appUrl: data.appUrl,
             origin: new URL(data.appUrl).origin,
@@ -3594,7 +3589,7 @@ const App: React.FC = () => {
     if (isHtmlSurface) {
       refreshInputMethodStamp(inputMethod);
       if (htmlChromeRestoredRef.current) {
-        saveHtmlChromeState({ toolsHidden: htmlToolsHidden, sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
+        saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen });
       }
     }
   };
@@ -4593,13 +4588,6 @@ const App: React.FC = () => {
   const compactDocumentActions: CompactPlanAction[] = !isCompactTouchLayout
     ? []
     : [
-        ...(isHtmlSurface
-          ? [{
-              id: 'tools' as const,
-              label: htmlToolsHidden ? 'Show annotation tools' : 'Hide annotation tools',
-              onSelect: () => setHtmlToolsHidden((hidden) => !hidden),
-            }]
-          : []),
         ...(canEditMarkdown && !isEditingMarkdown && !isPlanDiffActive && !archive.archiveMode && !isHtmlSurface
           ? [{
               id: 'edit' as const,
@@ -4868,8 +4856,6 @@ const App: React.FC = () => {
         <AppHeader
           sticky={!usesDocumentScroll}
           htmlSurface={isHtmlSurface}
-          htmlToolsHidden={htmlToolsHidden}
-          onToggleHtmlTools={() => setHtmlToolsHidden((v) => !v)}
           htmlAnnotateArmed={htmlAnnotateArmed}
           onToggleHtmlAnnotate={isHtmlSurface && !documentReadOnly ? handleHtmlAnnotateToggle : undefined}
           compactTouchLayout={isCompactTouchLayout}
@@ -5093,7 +5079,7 @@ const App: React.FC = () => {
             </div>
           )}
           {/* Left Sidebar: collapsed tab flags (when sidebar is closed) */}
-          {!isCompactTouchLayout && wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && !htmlChromeHidden && (
+          {!isCompactTouchLayout && wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && (
             <SidebarTabs
               activeTab={sidebar.activeTab}
               onToggleTab={toggleSidebarTab}
@@ -5167,31 +5153,29 @@ const App: React.FC = () => {
               )}
 
               {/* Annotation Toolstrip — the mode switcher (selection/redline input +
-                  comment/markup mode). Hidden during plan diff, and on HTML surfaces
-                  when the header's "Hide tools" toggle is on (leaving the rendered HTML
-                  free of overlay controls). On HTML it floats top-left over the doc. */}
+                  comment/markup mode). Markdown surfaces only: HTML/live surfaces
+                  are comment-only with pinpoint + drag both live, so no floating
+                  toolstrip ever overlays the rendered page. Hidden during plan
+                  diff and archive browsing. */}
               {toolstripVisible && (
                 <div
                   data-print-hide
-                  className={isHtmlSurface
-                    ? `absolute top-3 ${sidebar.isOpen ? 'left-3' : 'left-10'} z-20 flex items-center rounded-lg border border-border/50 bg-background/85 px-1.5 py-1 shadow-md backdrop-blur-sm`
-                    : "w-full mb-3 md:mb-4 flex items-center justify-start"}
-                  style={isHtmlSurface || annotateReaderMaxWidth == null ? undefined : { maxWidth: annotateReaderMaxWidth }}
+                  className="w-full mb-3 md:mb-4 flex items-center justify-start"
+                  style={annotateReaderMaxWidth == null ? undefined : { maxWidth: annotateReaderMaxWidth }}
                 >
-                  {isCompactTouchLayout && !isHtmlSurface ? (
+                  {isCompactTouchLayout ? (
                     <CompactAnnotationControls
                       inputMethod={effectiveInputMethod}
                       onInputMethodChange={handleInputMethodChange}
                     />
                   ) : (
                     <AnnotationToolstrip
-                      inputMethod={liveApp ? 'pinpoint' : inputMethod}
+                      inputMethod={inputMethod}
                       onInputMethodChange={handleInputMethodChange}
                       mode={editorMode}
                       onModeChange={handleEditorModeChange}
                       taterMode={taterMode}
-                      showHelpLink={!isHtmlSurface}
-                      hideInputMethodSwitch={!!liveApp}
+                      showHelpLink
                     />
                   )}
                 </div>
@@ -5378,11 +5362,11 @@ const App: React.FC = () => {
                     onSelectAnnotation={handleSelectAnnotation}
                     selectedAnnotationId={selectedAnnotationId}
                     mode={effectiveEditorMode}
-                    // Mode-aware wiring: live sessions annotate exclusively via
-                    // pinpoint WHILE Annotate is armed; Interact disarms the
-                    // bridge entirely (annotateModeActive below), so this no
-                    // longer makes the app unusable.
-                    inputMethod={liveApp ? 'pinpoint' : effectiveInputMethod}
+                    // HTML/live surfaces are always pinpoint: armed = click
+                    // pins an element AND drag selects text (both live at
+                    // once); Interact (Esc) keeps clicks native while drag
+                    // commenting stays available. No input-method switch.
+                    inputMethod="pinpoint"
                     annotateModeActive={htmlAnnotateArmed}
                     onAnnotateModeExit={documentReadOnly ? undefined : handleHtmlAnnotateExit}
                     onAnnotateModeToggle={documentReadOnly ? undefined : handleHtmlAnnotateToggle}
@@ -5395,7 +5379,6 @@ const App: React.FC = () => {
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     maxWidth={isHtmlSurface ? null : annotateReaderMaxWidth}
                     fullViewport={isHtmlSurface}
-                    hideControls={htmlToolsHidden}
                     diffAvailable={!liveApp && !!htmlDiffHtml}
                     diffActive={!liveApp && isPlanDiffActive && !!htmlDiffHtml}
                     onToggleDiff={() => setIsPlanDiffActive((v) => !v)}

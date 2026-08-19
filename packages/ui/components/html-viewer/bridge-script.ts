@@ -339,18 +339,20 @@ export const BRIDGE_SCRIPT = `(function() {
   var pendingMultiTargets = []; // { key, el, anchor, label, text, box }
   var multiTargetSeq = 0;
   var MAX_MULTI_TARGETS = 16;
-  // Live mode is pinpoint-only: drag selection registers live Range targets a
-  // framework re-render destroys, and fights the app's own selection UX.
+  // Live mode clamps the INPUT METHOD to pinpoint (click = element). Text
+  // drag-selection is a separate, always-on channel — see the mouseup handler
+  // — so the clamp only decides what a plain click does, never whether text
+  // can be selected and commented.
   var currentInputMethod = LIVE ? 'pinpoint' : 'drag'; // 'drag' = text selection, 'pinpoint' = click an element
-  // Interact/Annotate mode. While INACTIVE the bridge is passive: no pinpoint
-  // capture, no hover outline, no drag-selection toolbar, no [data-annotate]
-  // click, no committed-highlight click interception — clicks, forms, text
-  // selection, and SPA navigation reach the page natively. Committed overlay
-  // artifacts stay visible in both modes and marker buttons keep their own
-  // clicks. Live sessions start in Interact (the running app must be usable
-  // first); srcdoc sessions start armed, so classic raw-HTML behavior is
-  // unchanged when no set-annotate-mode message ever arrives.
-  var annotateModeActive = !LIVE;
+  // Interact/Annotate mode. While INACTIVE the bridge keeps clicks native: no
+  // pinpoint capture, no hover outline, no [data-annotate] click, no
+  // committed-highlight click interception — clicks, forms, and SPA
+  // navigation reach the page untouched. Text drag-selection commenting stays
+  // LIVE in both modes (a real drag opens the comment toolbar even in
+  // Interact), committed overlay artifacts stay visible in both modes, and
+  // marker buttons keep their own clicks. BOTH surface kinds start ARMED —
+  // Esc (or the header pen) drops to Interact.
+  var annotateModeActive = true;
   function updatePinpointCursor() {
     if (!document.body) return;
     if (annotateModeActive && currentInputMethod === 'pinpoint') {
@@ -379,11 +381,9 @@ export const BRIDGE_SCRIPT = `(function() {
   // and immediately clear it. This flag suppresses that one trailing clear.
   var skipNextClear = false;
 
-  document.addEventListener('mouseup', function(e) {
-    if (!annotateModeActive) return; // Interact mode: selection stays native
-    if (currentInputMethod === 'pinpoint') return; // pinpoint uses click, not drag-select
-    setTimeout(handleSelection, 10);
-  });
+  // Drag-selection commenting is handled by the merged capture-phase mouseup
+  // listener below (after the drag-yield state it reads) — it is ALWAYS live:
+  // both surfaces, armed or Interact, drag or pinpoint input method.
 
   // The page fully controls element text, so everything posted as a selection
   // is bounded here before it crosses the bridge (the parent enforces the same
@@ -664,7 +664,8 @@ export const BRIDGE_SCRIPT = `(function() {
     }
 
     else if (type === PREFIX + 'set-input-method') {
-      // Live mode clamps to pinpoint: drag selection is disabled outright.
+      // Live mode clamps the input method to pinpoint (what a plain click
+      // does); text drag-selection commenting stays live regardless.
       currentInputMethod = (LIVE || e.data.method === 'pinpoint') ? 'pinpoint' : 'drag';
       if (currentInputMethod === 'pinpoint') {
         clearHoverHighlight(); // pinpoint owns clicks; drop the select affordance (and any pending hit test)
@@ -1220,6 +1221,9 @@ export const BRIDGE_SCRIPT = `(function() {
       return;
     }
     if (vimEnabled && vimPhase !== 'inactive') return;
+    // Mid-drag (text selection in progress) the element hover box is noise:
+    // the drag owns the surface until mouseup resolves it.
+    if (dragYieldActive) { clearPinpointHover(); return; }
     // Hit-test at the pointer (e.target only backstops engines without
     // elementFromPoint) so the same code path serves the scroll re-hit-test.
     updatePinpointHover(e.clientX, e.clientY, e.target);
@@ -1371,15 +1375,21 @@ export const BRIDGE_SCRIPT = `(function() {
     }
   }
 
-  // Drag-selection marker yield: while a text drag is in progress in drag
-  // mode, placed markers drop pointer input (the same data-pn-hittest CSS the
-  // hit-test yield uses) so a 25px bubble sitting over the text cannot
-  // capture the selection mid-drag. Armed only by a >4px move with the
-  // primary button held from a non-overlay mousedown, so marker clicks
-  // (mousedown ON the marker) and plain click-to-select (no drag) are
-  // untouched; disarmed on mouseup or when the button is seen released.
+  // Drag-selection marker yield: while a text drag is in progress, placed
+  // markers drop pointer input (the same data-pn-hittest CSS the hit-test
+  // yield uses) so a 25px bubble sitting over the text cannot capture the
+  // selection mid-drag. Armed only by a >4px move with the primary button
+  // held from a non-overlay mousedown, so marker clicks (mousedown ON the
+  // marker) and plain click-to-select (no drag) are untouched; disarmed on
+  // mouseup or when the button is seen released. The same >4px arming is
+  // what tells the mouseup handler below that a REAL drag happened, which
+  // is how drag-selection commenting stays live in pinpoint/armed mode
+  // without a plain pinpoint click re-posting its own selection.
   var dragYieldStart = null;
   var dragYieldActive = false;
+  // True between a drag's terminating mouseup and the next mousedown: the
+  // click event that follows a completed drag must not pinpoint-annotate.
+  var dragEndedClick = false;
   function endDragYield() {
     dragYieldStart = null;
     if (dragYieldActive) {
@@ -1404,13 +1414,25 @@ export const BRIDGE_SCRIPT = `(function() {
     }
   }
   document.addEventListener('mousedown', function(e) {
-    if (currentInputMethod === 'pinpoint') return;
+    dragEndedClick = false;
     if (e.button !== 0) return;
     if (isViewerOverlayNode(e.target)) return;
     dragYieldStart = { x: e.clientX, y: e.clientY };
   }, true);
   document.addEventListener('mouseup', function() {
+    // Text drag-selection commenting is ALWAYS live: both surfaces, armed or
+    // Interact. In armed pinpoint a plain click belongs to the pinpoint
+    // handler — only a REAL drag (>4px with the button held) schedules the
+    // selection pass, so annotateElement's own selection is never re-posted
+    // by its trailing mouseup. Everywhere else the classic always-schedule
+    // behavior stays: handleSelection only acts on a real selection, posts
+    // the clear that dismisses a stale draft, and never preventDefaults —
+    // a plain click is never swallowed.
+    var dragged = dragYieldActive;
+    dragEndedClick = dragged;
     endDragYield();
+    if (annotateModeActive && currentInputMethod === 'pinpoint' && !dragged) return;
+    setTimeout(handleSelection, 10);
   }, true);
 
   // One record per committed annotation. Its targets are live projections;
@@ -2993,6 +3015,14 @@ export const BRIDGE_SCRIPT = `(function() {
     // checked by IDENTITY, not selector, so a page element spoofing
     // [data-plannotator-marker] stays an ordinary annotatable target.
     if (isViewerOverlayNode(e.target)) return;
+    // A drag that ended in this click owns the surface: the drag-selection
+    // pass is about to post the selected text, and pinpoint-annotating the
+    // element under the pointer would clobber it (annotateElement rewrites
+    // the selection). Keyed off the >4px drag arming, not selection state, so
+    // the selection a previous text-element pin left behind never blocks the
+    // next plain re-pin click. One-shot: only the drag's own trailing click
+    // is suppressed.
+    if (dragEndedClick) { dragEndedClick = false; return; }
     // Shift-click while an ARMED pinpoint draft is open: toggle the element
     // in/out of the SAME draft comment instead of replacing the selection.
     // Unarmed drafts (modes the parent does not mirror, e.g. quickLabel)
@@ -3023,18 +3053,26 @@ export const BRIDGE_SCRIPT = `(function() {
   // first, then the hover outline clears, then Esc EXITS Annotate back to
   // Interact — the parent owns the mode, so the final rung only posts
   // annotate-exit and waits for set-annotate-mode to come back down.
+  function closePendingDraft() {
+    postToParent({ type: PREFIX + 'selection-clear' });
+    pendingSelection = null;
+    pendingRange = null;
+    skipNextClear = false;
+    clearMultiTargets();
+    clearPendingPin();
+    window.getSelection().removeAllRanges();
+    renderAnnotationOverlay();
+  }
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape' || vimEnabled) return;
-    if (!annotateModeActive) return; // Interact mode: Esc belongs to the page
+    if (!annotateModeActive) {
+      // Interact mode: Esc belongs to the page — except an open drag-comment
+      // draft (drag-selection stays live in Interact) still closes first.
+      if (pendingSelection) closePendingDraft();
+      return;
+    }
     if (pendingSelection) {
-      postToParent({ type: PREFIX + 'selection-clear' });
-      pendingSelection = null;
-      pendingRange = null;
-      skipNextClear = false;
-      clearMultiTargets();
-      clearPendingPin();
-      window.getSelection().removeAllRanges();
-      renderAnnotationOverlay();
+      closePendingDraft();
     } else if (currentInputMethod === 'pinpoint' && pinpointHover) {
       clearPinpointHover();
     } else {
@@ -4480,6 +4518,10 @@ export const BRIDGE_SCRIPT = `(function() {
       }).observe(document.body);
     }
     watchPageMutations();
+    // Armed is the default on both surfaces, and live sessions default to
+    // pinpoint: show the cursor affordance immediately instead of waiting for
+    // the parent's first set-input-method/set-annotate-mode round trip.
+    updatePinpointCursor();
     var readyMsg = { type: PREFIX + 'ready' };
     if (LIVE) readyMsg.pageUrl = currentPageUrl();
     postToParent(readyMsg);
