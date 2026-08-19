@@ -83,6 +83,9 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     onPageChange?: (pageUrl: string) => void;
     annotations?: Annotation[];
     currentPageUrl?: string;
+    annotateModeActive?: boolean;
+    onAnnotateModeExit?: () => void;
+    onAnnotateModeToggle?: () => void;
   } = {}) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
     const HtmlViewer = htmlViewerModule.HtmlViewer;
@@ -104,6 +107,9 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
           selectedAnnotationId={null}
           mode="selection"
           inputMethod="pinpoint"
+          annotateModeActive={options.annotateModeActive}
+          onAnnotateModeExit={options.onAnnotateModeExit}
+          onAnnotateModeToggle={options.onAnnotateModeToggle}
           fullViewport
         />,
       );
@@ -232,6 +238,41 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
       'on-about',
     ]);
   });
+
+  test('the Interact/Annotate mode is pushed on EVERY bridge ready, so it survives page-change reloads and bridge re-injection', async () => {
+    const { post, postedToIframe } = await mountLiveViewer({ annotateModeActive: false });
+    await post({ type: 'plannotator-bridge-ready', pageUrl: '/', token: LIVE_TOKEN });
+    const modePosts = () =>
+      postedToIframe.filter((p) => p.data.type === 'plannotator-bridge-set-annotate-mode');
+    expect(modePosts().length).toBe(1);
+    expect(modePosts()[0]!.data.active).toBe(false);
+    // A live navigation / HMR reload re-injects the bridge and posts ready
+    // again from a FRESH document: the mode must be re-established, not lost
+    // to the fresh bridge's default.
+    postedToIframe.length = 0;
+    await post({ type: 'plannotator-bridge-ready', pageUrl: '/about', token: LIVE_TOKEN });
+    expect(modePosts().length).toBe(1);
+    expect(modePosts()[0]!.data.active).toBe(false);
+  });
+
+  test('annotate-exit and annotate-toggle reach the parent callbacks only when authenticated', async () => {
+    let exits = 0;
+    let toggles = 0;
+    const { post } = await mountLiveViewer({
+      annotateModeActive: true,
+      onAnnotateModeExit: () => { exits += 1; },
+      onAnnotateModeToggle: () => { toggles += 1; },
+    });
+    await post({ type: 'plannotator-bridge-annotate-exit' });
+    await post({ type: 'plannotator-bridge-annotate-toggle', token: 'forged' });
+    await post({ type: 'plannotator-bridge-annotate-exit', token: LIVE_TOKEN }, 'http://evil.example');
+    expect(exits).toBe(0);
+    expect(toggles).toBe(0);
+    await post({ type: 'plannotator-bridge-annotate-exit', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-annotate-toggle', token: LIVE_TOKEN });
+    expect(exits).toBe(1);
+    expect(toggles).toBe(1);
+  });
 });
 
 describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () => {
@@ -349,22 +390,151 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     }
   });
 
+  /** One logical post goes out once per listed editor origin; count only the
+   * primary origin's copy so assertions read in logical messages. */
+  function primaryPosts(type: string): ParentPost[] {
+    return parentPosts.filter(
+      (p) => p.data.type === `plannotator-bridge-${type}` && p.targetOrigin === editorOrigin,
+    );
+  }
+
+  function selectionPosts(): ParentPost[] {
+    return primaryPosts('selection');
+  }
+
+  /** Dispatch a real cancelable click and report whether the bridge captured
+   * it (preventDefault + a posted selection) or let it through to the page. */
+  function clickProbe(el: HTMLElement): { prevented: boolean; selections: number } {
+    const before = selectionPosts().length;
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    el.dispatchEvent(click);
+    return { prevented: click.defaultPrevented, selections: selectionPosts().length - before };
+  }
+
+  function pressEscape() {
+    bridgeDocument.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+    );
+  }
+
+  function probeButton(): HTMLElement {
+    let btn = bridgeDocument.getElementById('live-probe-button');
+    if (!btn) {
+      btn = bridgeDocument.createElement('button');
+      btn.id = 'live-probe-button';
+      btn.textContent = 'Register a click';
+      bridgeDocument.body.appendChild(btn);
+    }
+    return btn as HTMLElement;
+  }
+
   test('inbound messages without the token (or from a foreign origin) are ignored', () => {
-    bridgeDocument.body.removeAttribute('data-plannotator-pinpoint-cursor');
+    // Forged arming attempts (no token / wrong origin) must leave the session
+    // fully inert: no cursor affordance, and page clicks stay native.
+    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: true });
     postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'pinpoint' });
-    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
     postToBridge(
-      { type: 'plannotator-bridge-set-input-method', method: 'pinpoint', token: bridgeToken },
+      { type: 'plannotator-bridge-set-annotate-mode', active: true, token: bridgeToken },
       'http://evil.example',
     );
     expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(false);
+    expect(probe.selections).toBe(0);
   });
 
-  test('the live gate clamps the input method to pinpoint', () => {
-    bridgeDocument.body.removeAttribute('data-plannotator-pinpoint-cursor');
-    // An authenticated request for drag still lands on pinpoint.
+  test('live sessions start in Interact: an authenticated pinpoint input method alone captures nothing', () => {
+    postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'pinpoint', token: bridgeToken });
+    // Interact gates the cursor affordance as well as the capture.
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(false);
+    expect(probe.selections).toBe(0);
+    // Esc belongs to the page in Interact: no annotate-exit post.
+    const exitsBefore = primaryPosts('annotate-exit').length;
+    pressEscape();
+    expect(primaryPosts('annotate-exit').length).toBe(exitsBefore);
+  });
+
+  test('arming Annotate enables pinpoint capture, still clamped to pinpoint', () => {
+    // Even an authenticated request for drag lands on pinpoint (live clamp);
+    // arming then lights the cursor affordance and captures the click.
     postToBridge({ type: 'plannotator-bridge-set-input-method', method: 'drag', token: bridgeToken });
+    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: true, token: bridgeToken });
     expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(true);
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(true);
+    expect(probe.selections).toBe(1);
+    expect(selectionPosts().at(-1)!.data.pinpoint).toBe(true);
+    postToBridge({ type: 'plannotator-bridge-cancel-selection', token: bridgeToken });
+  });
+
+  test('Esc ladder: a pending draft clears first, then Esc asks to exit Annotate; the parent flips the mode', () => {
+    // Armed from the previous test. A fresh pending pinpoint draft:
+    const probe = clickProbe(probeButton());
+    expect(probe.prevented).toBe(true);
+    const countOf = (type: string) => primaryPosts(type).length;
+    const clearsBefore = countOf('selection-clear');
+    const exitsBefore = countOf('annotate-exit');
+    pressEscape();
+    // Rung 1: the draft clears; the mode is untouched (no exit post).
+    expect(countOf('selection-clear')).toBe(clearsBefore + 1);
+    expect(countOf('annotate-exit')).toBe(exitsBefore);
+    pressEscape();
+    // Final rung: nothing left to close — ask the parent to exit Annotate.
+    // The bridge does NOT flip itself (the parent owns the mode): capture
+    // stays armed until set-annotate-mode comes back down.
+    expect(countOf('annotate-exit')).toBe(exitsBefore + 1);
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(true);
+    // The parent answers: Interact. Cursor affordance drops, clicks are native.
+    postToBridge({ type: 'plannotator-bridge-set-annotate-mode', active: false, token: bridgeToken });
+    expect(bridgeDocument.body.hasAttribute('data-plannotator-pinpoint-cursor')).toBe(false);
+    const native = clickProbe(probeButton());
+    expect(native.prevented).toBe(false);
+    expect(native.selections).toBe(0);
+  });
+
+  test('Mod+Shift+A inside the iframe forwards a toggle request to the parent in both modes', () => {
+    const countToggles = () => primaryPosts('annotate-toggle').length;
+    const before = countToggles();
+    const chord = new KeyboardEvent('keydown', { key: 'A', shiftKey: true, metaKey: true, bubbles: true, cancelable: true });
+    bridgeDocument.body.dispatchEvent(chord);
+    expect(countToggles()).toBe(before + 1);
+    expect(chord.defaultPrevented).toBe(true);
+  });
+
+  test('a placed marker still opens its comment in Interact mode', async () => {
+    // Committed overlay artifacts are mode-independent: restore an anchored
+    // annotation while the session is in Interact, then click its marker.
+    const host = bridgeDocument.createElement('div');
+    host.id = 'interact-marker-host';
+    host.textContent = 'Marker host content';
+    bridgeDocument.body.appendChild(host);
+    postToBridge({
+      type: 'plannotator-bridge-find-and-mark',
+      id: 'interact-pin',
+      originalText: '',
+      annotationType: 'comment',
+      anchor: { selector: '#interact-marker-host', tagName: 'div' },
+      token: bridgeToken,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const overlay = bridgeDocument.querySelector('[data-plannotator-overlay-host]');
+    const root = (overlay as HTMLElement | null)?.shadowRoot ?? overlay;
+    const marker = root?.querySelector<HTMLElement>(
+      'button[data-plannotator-marker][data-annotation-id="interact-pin"]',
+    );
+    if (!marker) throw new Error('placed marker missing');
+    expect(marker.style.display).not.toBe('none');
+    const clicksBefore = primaryPosts('mark-click').length;
+    marker.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    const clicks = primaryPosts('mark-click');
+    expect(clicks.length).toBe(clicksBefore + 1);
+    expect(clicks.at(-1)!.data.id).toBe('interact-pin');
+    // The page element UNDER the annotation is still natively clickable.
+    const probe = clickProbe(host);
+    expect(probe.prevented).toBe(false);
+    expect(probe.selections).toBe(0);
   });
 
   test('set-vim-mode is ignored in live mode', () => {
@@ -376,7 +546,11 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
       token: bridgeToken,
     });
     expect(bridgeDocument.body.hasAttribute('data-plannotator-vim-focus-owner')).toBe(false);
-    expect(bridgeDocument.querySelector('[data-plannotator-vim-ui]')).toBeNull();
+    // Vim-owned surfaces only: the shared [data-plannotator-vim-ui] tag also
+    // rides the pinpoint hover box, which earlier annotate-mode tests create.
+    expect(bridgeDocument.querySelector('[data-plannotator-vim-cursor]')).toBeNull();
+    expect(bridgeDocument.querySelector('[data-plannotator-vim-badge]')).toBeNull();
+    expect(bridgeDocument.querySelector('[data-plannotator-vim-reticle]')).toBeNull();
   });
 
   test('a pushState burst posts exactly one coalesced page-change per editor origin', async () => {

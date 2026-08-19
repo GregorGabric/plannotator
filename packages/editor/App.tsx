@@ -120,6 +120,7 @@ import {
   useAnnotationModeShortcuts,
   useDocumentViewShortcuts,
   useDoubleTapShortcuts,
+  useHtmlAnnotateShortcuts,
 } from '@plannotator/ui/shortcuts';
 const USE_DIFF_DEMO =
   import.meta.env.VITE_DIFF_DEMO === '1' ||
@@ -475,6 +476,15 @@ const App: React.FC = () => {
   // made on.
   const [liveApp, setLiveApp] = useState<{ appUrl: string; origin: string; token: string } | null>(null);
   const [livePageUrl, setLivePageUrl] = useState('');
+  // Interact/Annotate mode for HTML and live-app surfaces. Armed = the bridge
+  // captures clicks for annotation; disarmed (Interact) = the page is fully
+  // native and committed markers stay visible/clickable. Session-only, never
+  // persisted. Static/raw HTML sessions START armed (classic behavior); live
+  // app sessions start in Interact (set in the /api/plan handler) so the
+  // running app is usable before anyone opts into annotating.
+  const [htmlAnnotateArmed, setHtmlAnnotateArmed] = useState(true);
+  const handleHtmlAnnotateToggle = useCallback(() => setHtmlAnnotateArmed((v) => !v), []);
+  const handleHtmlAnnotateExit = useCallback(() => setHtmlAnnotateArmed(false), []);
   // Session-level force-markdown preference (`--markdown`). When set, folder/linked HTML
   // files are converted instead of rendered raw — threaded into /api/doc as &convert=1.
   const [convertHtml, setConvertHtml] = useState(false);
@@ -2688,6 +2698,18 @@ const App: React.FC = () => {
     [canHandleDocumentChromeShortcut, toolstripVisible],
   );
 
+  // Interact/Annotate toggle (Mod+Shift+A) — HTML and live-app surfaces only.
+  // The bridge mirrors the same chord inside the iframe and forwards it, so
+  // this parent-side registration covers focus living in the editor chrome.
+  useHtmlAnnotateShortcuts({
+    handlers: {
+      toggleAnnotateMode: {
+        when: (event) => isHtmlSurface && !documentReadOnly && canHandleDocumentChromeShortcut(event),
+        handle: handleHtmlAnnotateToggle,
+      },
+    },
+  });
+
   useAnnotationModeShortcuts({
     handlers: {
       selectMarkupMode: { when: canHandleAnnotationModeShortcut, handle: () => handleEditorModeChange('selection') },
@@ -2737,6 +2759,9 @@ const App: React.FC = () => {
           // proxy origin. No rawHtml, no version fields, no sharing.
           setRenderAs('html');
           setMarkdown('');
+          // Live sessions open in Interact: the app must be immediately
+          // usable; the header bubble (or Mod+Shift+A) arms Annotate.
+          setHtmlAnnotateArmed(false);
           setLiveApp({
             appUrl: data.appUrl,
             origin: new URL(data.appUrl).origin,
@@ -4845,6 +4870,8 @@ const App: React.FC = () => {
           htmlSurface={isHtmlSurface}
           htmlToolsHidden={htmlToolsHidden}
           onToggleHtmlTools={() => setHtmlToolsHidden((v) => !v)}
+          htmlAnnotateArmed={htmlAnnotateArmed}
+          onToggleHtmlAnnotate={isHtmlSurface && !documentReadOnly ? handleHtmlAnnotateToggle : undefined}
           compactTouchLayout={isCompactTouchLayout}
           compactNavigatorAvailable={compactNavigatorAvailable}
           compactNavigatorOpen={isCompactNavigatorOpen}
@@ -5351,9 +5378,16 @@ const App: React.FC = () => {
                     onSelectAnnotation={handleSelectAnnotation}
                     selectedAnnotationId={selectedAnnotationId}
                     mode={effectiveEditorMode}
+                    // Mode-aware wiring: live sessions annotate exclusively via
+                    // pinpoint WHILE Annotate is armed; Interact disarms the
+                    // bridge entirely (annotateModeActive below), so this no
+                    // longer makes the app unusable.
                     inputMethod={liveApp ? 'pinpoint' : effectiveInputMethod}
-                    vimModeEnabled={liveApp ? false : vimModeEnabled}
-                    vimHudEnabled={!liveApp && vimModeEnabled && vimHudEnabled}
+                    annotateModeActive={htmlAnnotateArmed}
+                    onAnnotateModeExit={documentReadOnly ? undefined : handleHtmlAnnotateExit}
+                    onAnnotateModeToggle={documentReadOnly ? undefined : handleHtmlAnnotateToggle}
+                    vimModeEnabled={liveApp ? false : vimModeEnabled && htmlAnnotateArmed}
+                    vimHudEnabled={!liveApp && vimModeEnabled && htmlAnnotateArmed && vimHudEnabled}
                     vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}
                     onVimHudKeyPanelChange={handleVimHudKeyPanelChange}
                     globalAttachments={globalAttachments}

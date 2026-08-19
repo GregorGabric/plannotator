@@ -20,6 +20,10 @@ interface AppHeaderProps {
   htmlSurface?: boolean;
   htmlToolsHidden?: boolean;
   onToggleHtmlTools?: () => void;
+  /** Interact/Annotate toggle for HTML and live-app surfaces: armed means
+   *  clicks annotate; unarmed hands the page back its native interaction. */
+  htmlAnnotateArmed?: boolean;
+  onToggleHtmlAnnotate?: () => void;
   /** Compact touch layouts replace the brand mark with a task-focused entry
    * into the full-stage document navigator. Desktop never receives it. */
   compactTouchLayout?: boolean;
@@ -111,6 +115,8 @@ export const AppHeader = React.memo<AppHeaderProps>(({
   htmlSurface,
   htmlToolsHidden,
   onToggleHtmlTools,
+  htmlAnnotateArmed,
+  onToggleHtmlAnnotate,
   compactTouchLayout = false,
   compactNavigatorAvailable = false,
   compactNavigatorOpen = false,
@@ -347,6 +353,31 @@ export const AppHeader = React.memo<AppHeaderProps>(({
 
             <div className="w-px h-5 bg-border/50 mx-1 hidden md:block" />
           </>
+        )}
+
+        {/* Interact/Annotate toggle — HTML and live-app surfaces only. Always
+            the same bubble icon: armed shows the accent color plus a visible
+            border; unarmed is muted with a TRANSPARENT border of the same
+            width, so the button's box is pixel-identical in both states. */}
+        {!compactTouchLayout && htmlSurface && onToggleHtmlAnnotate && (
+          <button
+            type="button"
+            data-html-annotate-toggle
+            onClick={onToggleHtmlAnnotate}
+            aria-pressed={!!htmlAnnotateArmed}
+            className={`p-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer ${
+              htmlAnnotateArmed
+                ? 'border-primary/60 bg-primary/15 text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted'
+            }`}
+            title={htmlAnnotateArmed
+              ? 'Annotate mode: clicks annotate the page. Esc or click to interact'
+              : 'Interact mode: clicks reach the page. Click to annotate'}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
+            </svg>
+          </button>
         )}
 
         {/* Annotations panel toggle */}

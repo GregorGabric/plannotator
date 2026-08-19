@@ -161,6 +161,17 @@ export interface HtmlViewerProps {
   mode: EditorMode;
   /** Input method: 'drag' = text selection, 'pinpoint' = click an element. */
   inputMethod: InputMethod;
+  /** Interact/Annotate toggle for HTML and live-app surfaces. While false the
+   *  bridge is fully passive (no pinpoint capture, no hover outline, no drag
+   *  toolbar) and clicks/forms/navigation reach the page natively. Committed
+   *  markers stay visible and clickable in BOTH modes. Default true, which is
+   *  classic raw-HTML behavior. */
+  annotateModeActive?: boolean;
+  /** Esc final rung (bridge-side or the parent-side listener here): the user
+   *  asked to leave Annotate for Interact. The host owns the mode state. */
+  onAnnotateModeExit?: () => void;
+  /** Mod+Shift+A pressed while focus lived inside the iframe. */
+  onAnnotateModeToggle?: () => void;
   /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
   vimModeEnabled?: boolean;
   /** Replace the iframe-local compact badge with the shared live key HUD. */
@@ -215,6 +226,9 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       selectedAnnotationId,
       mode,
       inputMethod,
+      annotateModeActive = true,
+      onAnnotateModeExit,
+      onAnnotateModeToggle,
       vimModeEnabled = false,
       vimHudEnabled = false,
       vimHudKeyPanelEnabled = true,
@@ -260,6 +274,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     liveSessionRef.current = liveSession ?? null;
     const onPageChangeRef = useRef(onPageChange);
     onPageChangeRef.current = onPageChange;
+    const onAnnotateModeExitRef = useRef(onAnnotateModeExit);
+    onAnnotateModeExitRef.current = onAnnotateModeExit;
+    const onAnnotateModeToggleRef = useRef(onAnnotateModeToggle);
+    onAnnotateModeToggleRef.current = onAnnotateModeToggle;
 
     /** Single choke point for direct-to-bridge posts: live sessions get the
      *  token + concrete targetOrigin, srcdoc keeps "*" and no token. */
@@ -427,6 +445,16 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
           }
           return;
         }
+        // Interact/Annotate mode messages ride the same authenticated path:
+        // live sessions already rejected wrong-origin/tokenless data above.
+        if (isRecord(e.data) && e.data.type === `${PREFIX}annotate-exit`) {
+          onAnnotateModeExitRef.current?.();
+          return;
+        }
+        if (isRecord(e.data) && e.data.type === `${PREFIX}annotate-toggle`) {
+          onAnnotateModeToggleRef.current?.();
+          return;
+        }
         const vimCopy = parseVimBridgeCopy(e.data);
         if (vimCopy !== null) {
           const iframe = iframeRef.current;
@@ -565,6 +593,45 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         { type: `${PREFIX}set-input-method`, method: inputMethod },
       );
     }, [iframeReadyVersion, inputMethod]);
+
+    // Tell the bridge whether Annotate is armed. Same re-post pattern as
+    // set-input-method, so the mode survives live page changes / HMR reloads
+    // and bridge re-injection without ever reloading the iframe.
+    useEffect(() => {
+      if (iframeReadyVersion === 0) return;
+      postToBridge(
+        { type: `${PREFIX}set-annotate-mode`, active: annotateModeActive },
+      );
+    }, [iframeReadyVersion, annotateModeActive]);
+
+    // Parent-side Esc rung: with focus outside the iframe the bridge never
+    // sees the keydown. Any open composer/toolbar/picker still closes first —
+    // their state is read from this render's closure, so an Esc that closed
+    // one this same keydown is not double-consumed here.
+    useEffect(() => {
+      if (readOnly || !annotateModeActive || !onAnnotateModeExit) return;
+      const overlayOpen =
+        !!hook.toolbarState || !!hook.commentPopover || !!hook.quickLabelPicker || !!globalCommentPopover;
+      const onKeyDown = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape' || e.defaultPrevented) return;
+        if (overlayOpen) return;
+        // A text field or dialog owns its own Escape.
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+        if (document.querySelector('[data-plannotator-confirm-dialog="true"]')) return;
+        onAnnotateModeExit();
+      };
+      window.addEventListener('keydown', onKeyDown);
+      return () => window.removeEventListener('keydown', onKeyDown);
+    }, [
+      readOnly,
+      annotateModeActive,
+      onAnnotateModeExit,
+      hook.toolbarState,
+      hook.commentPopover,
+      hook.quickLabelPicker,
+      globalCommentPopover,
+    ]);
 
     useEffect(() => {
       if (iframeReadyVersion === 0) return;
@@ -723,6 +790,20 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
             data-print-region="article"
             className={fullViewport ? "relative overflow-hidden w-full flex-1" : "relative bg-card rounded-xl shadow-xl overflow-hidden w-full"}
           >
+            {/* Armed affordance: a subtle accent ring floats over the iframe
+                while Annotate is armed (hosts that wire the toggle only).
+                Overlaid + pointer-transparent, so it never shifts layout and
+                never eats a click; an inset shadow on the article itself
+                would paint UNDER the covering iframe. */}
+            {!readOnly && annotateModeActive && (onAnnotateModeExit || onAnnotateModeToggle) && (
+              <div
+                aria-hidden
+                data-print-hide
+                data-annotate-armed-ring
+                className="pointer-events-none absolute inset-0 z-10"
+                style={{ boxShadow: "inset 0 0 0 2px color-mix(in srgb, var(--primary) 45%, transparent)" }}
+              />
+            )}
             {/* Full-viewport mode has no card chrome, so float the same controls
                 over the top-right of the iframe (with a backdrop so they read over
                 any HTML). The selection toolbar is portaled separately. */}

@@ -342,6 +342,23 @@ export const BRIDGE_SCRIPT = `(function() {
   // Live mode is pinpoint-only: drag selection registers live Range targets a
   // framework re-render destroys, and fights the app's own selection UX.
   var currentInputMethod = LIVE ? 'pinpoint' : 'drag'; // 'drag' = text selection, 'pinpoint' = click an element
+  // Interact/Annotate mode. While INACTIVE the bridge is passive: no pinpoint
+  // capture, no hover outline, no drag-selection toolbar, no [data-annotate]
+  // click, no committed-highlight click interception — clicks, forms, text
+  // selection, and SPA navigation reach the page natively. Committed overlay
+  // artifacts stay visible in both modes and marker buttons keep their own
+  // clicks. Live sessions start in Interact (the running app must be usable
+  // first); srcdoc sessions start armed, so classic raw-HTML behavior is
+  // unchanged when no set-annotate-mode message ever arrives.
+  var annotateModeActive = !LIVE;
+  function updatePinpointCursor() {
+    if (!document.body) return;
+    if (annotateModeActive && currentInputMethod === 'pinpoint') {
+      document.body.setAttribute('data-plannotator-pinpoint-cursor', '');
+    } else {
+      document.body.removeAttribute('data-plannotator-pinpoint-cursor');
+    }
+  }
   var pinpointHover = null;
   var vimEnabled = false;
   var vimHudEnabled = false;
@@ -363,6 +380,7 @@ export const BRIDGE_SCRIPT = `(function() {
   var skipNextClear = false;
 
   document.addEventListener('mouseup', function(e) {
+    if (!annotateModeActive) return; // Interact mode: selection stays native
     if (currentInputMethod === 'pinpoint') return; // pinpoint uses click, not drag-select
     setTimeout(handleSelection, 10);
   });
@@ -650,12 +668,33 @@ export const BRIDGE_SCRIPT = `(function() {
       currentInputMethod = (LIVE || e.data.method === 'pinpoint') ? 'pinpoint' : 'drag';
       if (currentInputMethod === 'pinpoint') {
         clearHoverHighlight(); // pinpoint owns clicks; drop the select affordance (and any pending hit test)
-        if (document.body) document.body.setAttribute('data-plannotator-pinpoint-cursor', '');
       } else {
-        if (document.body) document.body.removeAttribute('data-plannotator-pinpoint-cursor');
         clearPinpointHover();
       }
+      updatePinpointCursor(); // cursor affordance is mode-gated: never in Interact
       if (vimEnabled) updateVimUi();
+    }
+
+    else if (type === PREFIX + 'set-annotate-mode') {
+      var nextAnnotateActive = e.data.active === true;
+      if (nextAnnotateActive !== annotateModeActive) {
+        annotateModeActive = nextAnnotateActive;
+        if (!annotateModeActive) {
+          // Disarm tears down every PENDING affordance; committed markers and
+          // highlights stay visible, and marker buttons keep their clicks.
+          if (pendingSelection) postToParent({ type: PREFIX + 'selection-clear' });
+          pendingSelection = null;
+          pendingRange = null;
+          skipNextClear = false;
+          clearMultiTargets();
+          clearPendingPin();
+          try { window.getSelection().removeAllRanges(); } catch (ex) {}
+          clearPinpointHover();
+          clearHoverHighlight();
+          renderAnnotationOverlay();
+        }
+        updatePinpointCursor();
+      }
     }
 
     else if (type === PREFIX + 'set-vim-mode') {
@@ -1168,6 +1207,7 @@ export const BRIDGE_SCRIPT = `(function() {
   document.addEventListener('mousemove', function(e) {
     lastPointer = { x: e.clientX, y: e.clientY };
     updateDragYield(e);
+    if (!annotateModeActive) return; // Interact mode: no hover affordances
     if (currentInputMethod !== 'pinpoint') {
       // Click-to-select hover affordance (drag mode owns highlight clicks):
       // cheap cached-rect hit test, rAF-throttled, cleared while a draft or
@@ -1209,7 +1249,7 @@ export const BRIDGE_SCRIPT = `(function() {
       renderAnnotationOverlay();
       // Scroll under a stationary pointer moves the committed rects: re-run
       // the cached-rect hover test so the affordance tracks reality.
-      if (currentInputMethod !== 'pinpoint' && lastPointer && !pendingPinEl && !pendingSelection) {
+      if (annotateModeActive && currentInputMethod !== 'pinpoint' && lastPointer && !pendingPinEl && !pendingSelection) {
         setHoverHighlight(committedHighlightIdAtCached(lastPointer.x, lastPointer.y));
       }
       positionMultiTargetBoxes();
@@ -1217,7 +1257,7 @@ export const BRIDGE_SCRIPT = `(function() {
         positionPinpointBox(pendingPinEl);
         return;
       }
-      if (currentInputMethod !== 'pinpoint') return;
+      if (!annotateModeActive || currentInputMethod !== 'pinpoint') return;
       if (vimEnabled && vimPhase !== 'inactive') return;
       if (lastPointer) {
         updatePinpointHover(lastPointer.x, lastPointer.y, pinpointHover);
@@ -2948,7 +2988,7 @@ export const BRIDGE_SCRIPT = `(function() {
   }
 
   document.addEventListener('click', function(e) {
-    if (currentInputMethod !== 'pinpoint') return;
+    if (!annotateModeActive || currentInputMethod !== 'pinpoint') return;
     // Real placed markers (and any other viewer overlay) own their clicks —
     // checked by IDENTITY, not selector, so a page element spoofing
     // [data-plannotator-marker] stays an ordinary annotatable target.
@@ -2979,10 +3019,13 @@ export const BRIDGE_SCRIPT = `(function() {
     annotateElement(el, undefined, true, { x: e.clientX, y: e.clientY });
   }, true);
 
-  // Escape while pinpointing (outside vim, which has its own ladder): cancel a
-  // pending pin, else just drop the hover outline.
+  // Escape ladder (outside vim, which has its own): a pending draft closes
+  // first, then the hover outline clears, then Esc EXITS Annotate back to
+  // Interact — the parent owns the mode, so the final rung only posts
+  // annotate-exit and waits for set-annotate-mode to come back down.
   document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape' || vimEnabled) return;
+    if (!annotateModeActive) return; // Interact mode: Esc belongs to the page
     if (pendingSelection) {
       postToParent({ type: PREFIX + 'selection-clear' });
       pendingSelection = null;
@@ -2992,10 +3035,23 @@ export const BRIDGE_SCRIPT = `(function() {
       clearPendingPin();
       window.getSelection().removeAllRanges();
       renderAnnotationOverlay();
-    } else if (currentInputMethod === 'pinpoint') {
+    } else if (currentInputMethod === 'pinpoint' && pinpointHover) {
       clearPinpointHover();
+    } else {
+      postToParent({ type: PREFIX + 'annotate-exit' });
     }
   });
+
+  // Mod+Shift+A toggles Interact/Annotate from inside the iframe (the parent
+  // registers the same chord, but focus usually lives in here on live apps).
+  // Capture phase so the page cannot swallow the reserved chord; the parent
+  // answers with set-annotate-mode.
+  document.addEventListener('keydown', function(e) {
+    if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey) return;
+    if (e.key !== 'a' && e.key !== 'A') return;
+    e.preventDefault();
+    postToParent({ type: PREFIX + 'annotate-toggle' });
+  }, true);
 
   // Author opt-in: a plain click on any element tagged [data-annotate] pops the
   // toolbar — no pinpoint mode. Lets an HTML doc (e.g. a flow graph) wire its own
@@ -3004,6 +3060,7 @@ export const BRIDGE_SCRIPT = `(function() {
   // a committed highlight selects the annotation instead (the pre-overlay
   // handler deferred to '.annotation-highlight' the same way).
   document.addEventListener('click', function(e) {
+    if (!annotateModeActive) return; // Interact mode: [data-annotate] stays a page element
     if (currentInputMethod === 'pinpoint') return; // pinpoint handler covers this
     if (isViewerOverlayNode(e.target)) return; // placed markers own their clicks
     var t = e.target && e.target.closest && e.target.closest('[data-annotate]');
@@ -3047,6 +3104,10 @@ export const BRIDGE_SCRIPT = `(function() {
   }
 
   document.addEventListener('click', function(e) {
+    // Interact mode: highlight rects are pointer-transparent projections, so a
+    // page click landing on one goes to the page. Markers (real buttons) stay
+    // the affordance for opening a committed comment in Interact.
+    if (!annotateModeActive) return;
     if (e.shiftKey) return; // shift belongs to multi-select
     if (isViewerOverlayNode(e.target)) return; // markers own their clicks
     if (pendingPinEl) return; // an open pinpoint draft owns the surface

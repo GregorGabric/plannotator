@@ -1041,3 +1041,110 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
     expect(received).toEqual([['lost-1']]);
   });
 });
+
+describe.if(hasDom)('Interact/Annotate mode on static (srcdoc) surfaces', () => {
+  async function mountModeViewer(options: {
+    annotateModeActive?: boolean;
+    onAnnotateModeExit?: () => void;
+    onAnnotateModeToggle?: () => void;
+  } = {}) {
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    await act(async () => {
+      root.render(
+        <HtmlViewer
+          rawHtml="<html><body><p>Mode target</p></body></html>"
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+          annotateModeActive={options.annotateModeActive}
+          onAnnotateModeExit={options.onAnnotateModeExit}
+          onAnnotateModeToggle={options.onAnnotateModeToggle}
+        />,
+      );
+    });
+    const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    const postedToIframe: Array<Record<string, unknown>> = [];
+    const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+    (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+      ((data: unknown, ...rest: unknown[]) => {
+        if (data && typeof data === 'object') postedToIframe.push(data as Record<string, unknown>);
+        return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+      }) as typeof iframe.contentWindow.postMessage;
+    const post = async (data: Record<string, unknown>) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: iframe.contentWindow,
+          data,
+        }));
+      });
+    };
+    return { post, postedToIframe };
+  }
+
+  test('static surfaces default to Annotate armed: set-annotate-mode active:true rides every ready', async () => {
+    const { post, postedToIframe } = await mountModeViewer();
+    await post({ type: 'plannotator-bridge-ready' });
+    const modePosts = postedToIframe.filter((m) => m.type === 'plannotator-bridge-set-annotate-mode');
+    expect(modePosts.length).toBe(1);
+    expect(modePosts[0]!.active).toBe(true);
+  });
+
+  test('a host-driven Interact state is pushed instead of the default', async () => {
+    const { post, postedToIframe } = await mountModeViewer({ annotateModeActive: false });
+    await post({ type: 'plannotator-bridge-ready' });
+    const modePosts = postedToIframe.filter((m) => m.type === 'plannotator-bridge-set-annotate-mode');
+    expect(modePosts.length).toBe(1);
+    expect(modePosts[0]!.active).toBe(false);
+  });
+
+  test('parent-side Esc with the draft composer open belongs to the composer, never the mode', async () => {
+    let exits = 0;
+    const { post } = await mountModeViewer({
+      annotateModeActive: true,
+      onAnnotateModeExit: () => { exits += 1; },
+    });
+    await post({
+      type: 'plannotator-bridge-selection',
+      text: 'Mode target',
+      rect: { top: 10, left: 10, width: 120, height: 24 },
+      anchor: { selector: 'p:nth-of-type(1)', tagName: 'p', text: 'Mode target' },
+      pinpoint: true,
+    });
+    expect(document.querySelector('[data-comment-popover]')).not.toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(exits).toBe(0);
+  });
+
+  test('a bare parent-side Esc exits Annotate (the ladder final rung)', async () => {
+    let exits = 0;
+    await mountModeViewer({
+      annotateModeActive: true,
+      onAnnotateModeExit: () => { exits += 1; },
+    });
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(exits).toBe(1);
+  });
+
+  test('a bridge annotate-toggle message invokes the host toggle callback', async () => {
+    let toggles = 0;
+    const { post } = await mountModeViewer({
+      annotateModeActive: false,
+      onAnnotateModeToggle: () => { toggles += 1; },
+    });
+    await post({ type: 'plannotator-bridge-annotate-toggle' });
+    expect(toggles).toBe(1);
+  });
+});
