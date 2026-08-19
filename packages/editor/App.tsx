@@ -494,8 +494,10 @@ const App: React.FC = () => {
   // The restore's own commit still renders pre-restore values; the writer
   // consumes this flag to skip that exact run (see the save effect).
   const skipNextHtmlChromeSaveRef = useRef(false);
-  // Floating comment/attachments cluster over the page, collapsed to its pill.
-  const [htmlControlsCollapsed, setHtmlControlsCollapsed] = useState(false);
+  // Header "Hide tools": removes ALL floating chrome over the page (sidebar
+  // tongue tabs + comment/attachments cluster) from the DOM. The header
+  // button itself is the way back, so hidden state can never strand.
+  const [htmlToolsHidden, setHtmlToolsHidden] = useState(false);
   const [imageBaseDir, setImageBaseDir] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1807,7 +1809,7 @@ const App: React.FC = () => {
     if (chrome.sidebarOpen) sidebar.open();
     else sidebar.close();
     setIsPanelOpen(chrome.panelOpen);
-    setHtmlControlsCollapsed(chrome.controlsCollapsed);
+    setHtmlToolsHidden(chrome.toolsHidden);
     htmlChromeRestoredRef.current = true;
   }, [
     annotateSource,
@@ -1839,8 +1841,8 @@ const App: React.FC = () => {
       skipNextHtmlChromeSaveRef.current = false;
       return;
     }
-    saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, controlsCollapsed: htmlControlsCollapsed });
-  }, [isHtmlSurface, sidebar.isOpen, isPanelOpen, htmlControlsCollapsed]);
+    saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, toolsHidden: htmlToolsHidden });
+  }, [isHtmlSurface, sidebar.isOpen, isPanelOpen, htmlToolsHidden]);
 
   const ensureShareLink = useCallback(async (): Promise<string | null> => {
     const existing = shortShareUrl || shareUrl;
@@ -3592,7 +3594,7 @@ const App: React.FC = () => {
     if (isHtmlSurface) {
       refreshInputMethodStamp(inputMethod);
       if (htmlChromeRestoredRef.current) {
-        saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, controlsCollapsed: htmlControlsCollapsed });
+        saveHtmlChromeState({ sidebarOpen: sidebar.isOpen, panelOpen: isPanelOpen, toolsHidden: htmlToolsHidden });
       }
     }
   };
@@ -4861,6 +4863,8 @@ const App: React.FC = () => {
           htmlSurface={isHtmlSurface}
           htmlAnnotateArmed={htmlAnnotateArmed}
           onToggleHtmlAnnotate={isHtmlSurface && !documentReadOnly ? handleHtmlAnnotateToggle : undefined}
+          htmlToolsHidden={htmlToolsHidden}
+          onToggleHtmlTools={isHtmlSurface ? () => setHtmlToolsHidden((v) => !v) : undefined}
           compactTouchLayout={isCompactTouchLayout}
           compactNavigatorAvailable={compactNavigatorAvailable}
           compactNavigatorOpen={isCompactNavigatorOpen}
@@ -5082,7 +5086,7 @@ const App: React.FC = () => {
             </div>
           )}
           {/* Left Sidebar: collapsed tab flags (when sidebar is closed) */}
-          {!isCompactTouchLayout && wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && (
+          {!isCompactTouchLayout && wideModeType === null && !sidebar.isOpen && !goalSetupMode && !isAgentTerminalOpen && !(isHtmlSurface && htmlToolsHidden) && (
             <SidebarTabs
               activeTab={sidebar.activeTab}
               onToggleTab={toggleSidebarTab}
@@ -5382,8 +5386,7 @@ const App: React.FC = () => {
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     maxWidth={isHtmlSurface ? null : annotateReaderMaxWidth}
                     fullViewport={isHtmlSurface}
-                    controlsCollapsed={htmlControlsCollapsed}
-                    onToggleControlsCollapsed={() => setHtmlControlsCollapsed((v) => !v)}
+                    hideControls={isHtmlSurface && htmlToolsHidden}
                     diffAvailable={!liveApp && !!htmlDiffHtml}
                     diffActive={!liveApp && isPlanDiffActive && !!htmlDiffHtml}
                     onToggleDiff={() => setIsPlanDiffActive((v) => !v)}

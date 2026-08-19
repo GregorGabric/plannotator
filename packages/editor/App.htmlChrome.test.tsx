@@ -1,12 +1,12 @@
 /**
- * HTML-surface chrome contract after the Interact/Annotate simplification
- * (DOM-gated).
+ * HTML-surface chrome contract (DOM-gated).
  *
- * The "Hide tools"/"Show tools" header toggle is REMOVED: annotation chrome
- * is always visible on HTML surfaces, an old cookie recording
- * `toolsHidden: true` must not strand a user with hidden chrome, and the
- * sidebar/panel half of the persisted state still round-trips. The header
- * pen toggle reports the armed-by-default Interact/Annotate state.
+ * The header "Hide tools" eye toggle (left of the pen) removes ALL floating
+ * chrome over the page from the DOM: the sidebar tongue tabs and the
+ * comment/attachments cluster, with no residual artifact. The toggle itself
+ * lives in the header, so a hidden state (including one restored from an old
+ * cookie) always has a way back. Sidebar/panel halves of the persisted state
+ * round-trip; the pen reports the armed-by-default Interact/Annotate state.
  */
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import React, { act } from "react";
@@ -107,6 +107,15 @@ function penToggle(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>("[data-html-annotate-toggle]");
 }
 
+function toolsToggle(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-html-tools-toggle]");
+}
+
+function floatingCluster(): HTMLElement | null {
+  // The full-viewport comment/attachments cluster over the page.
+  return document.querySelector<HTMLElement>('[data-print-hide].absolute.top-3.right-3');
+}
+
 function sidebarTabs(): HTMLElement | null {
   return document.querySelector<HTMLElement>('[data-sidebar-tabs="true"]');
 }
@@ -154,29 +163,55 @@ afterAll(() => {
   resetStorageBackend();
 });
 
-describe.if(hasDom)("HTML annotate chrome (always-visible + pen toggle)", () => {
-  test("no Show/Hide tools button exists and the collapsed sidebar tab flags render", async () => {
+describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
+  test("tools default visible: eye toggle present, tongue tabs + cluster render", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
     await mountHtmlAnnotate();
 
-    expect(findButtonByText("Show tools")).toBeUndefined();
-    expect(findButtonByText("Hide tools")).toBeUndefined();
+    expect(toolsToggle()).not.toBeNull();
+    expect(toolsToggle()!.getAttribute("aria-pressed")).toBe("false");
     expect(sidebarTabs()).not.toBeNull();
+    expect(floatingCluster()).not.toBeNull();
   });
 
-  test("an old cookie recording toolsHidden:true cannot strand a user with hidden chrome", async () => {
+  test("Hide tools removes ALL floating chrome from the DOM, with no residual artifact; Show tools brings it back", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
-    // Pre-simplification cookie: the removed toggle persisted hidden chrome.
+    await mountHtmlAnnotate();
+
+    const toggle = toolsToggle();
+    if (!toggle) throw new Error("tools toggle missing");
+    await act(async () => toggle.click());
+
+    expect(sidebarTabs()).toBeNull();
+    expect(floatingCluster()).toBeNull();
+    // No leftover pill/expander: the toggle in the header is the only way back.
+    expect(toolsToggle()).not.toBeNull();
+    expect(toolsToggle()!.getAttribute("aria-pressed")).toBe("true");
+
+    await act(async () => toolsToggle()!.click());
+    expect(sidebarTabs()).not.toBeNull();
+    expect(floatingCluster()).not.toBeNull();
+  });
+
+  test("a cookie recording toolsHidden:true restores hidden, and the header toggle is the way back", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
     memory.set(
       "plannotator-html-chrome",
       JSON.stringify({ toolsHidden: true, sidebarOpen: false, panelOpen: false, savedAt: Date.now() }),
     );
     await mountHtmlAnnotate();
+    await settle();
 
+    expect(sidebarTabs()).toBeNull();
+    expect(floatingCluster()).toBeNull();
+    const toggle = toolsToggle();
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => toggle!.click());
     expect(sidebarTabs()).not.toBeNull();
-    expect(findButtonByText("Show tools")).toBeUndefined();
   });
 
   test("the sidebar-open half of the persisted chrome still restores", async () => {

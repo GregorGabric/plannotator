@@ -14,10 +14,11 @@ import { isStalePreference } from './preferenceTtl';
  * port). Markdown sessions are untouched. A legacy record without a timestamp
  * has an unknowable age and is treated as expired.
  *
- * The old `toolsHidden` field (the removed "Hide tools" header toggle) is
- * deliberately IGNORED when present in an old cookie: annotation chrome is
- * always visible on HTML surfaces now, so a stale record can never strand a
- * user with hidden chrome.
+ * `toolsHidden` is the header "Hide tools" toggle: while true, ALL floating
+ * chrome over the page (sidebar tongue tabs + the comment/attachments
+ * cluster) is removed from the DOM. Restoring it hidden can never strand a
+ * user: the header button that flips it back is part of the header, not the
+ * hidden chrome.
  */
 
 const STORAGE_KEY = 'plannotator-html-chrome';
@@ -27,16 +28,15 @@ export interface HtmlChromeState {
   sidebarOpen: boolean;
   /** Whether the right annotations drawer was open when the user last left. */
   panelOpen: boolean;
-  /** Whether the floating comment/attachments cluster over the page was
-   *  collapsed to its pill when the user last left. */
-  controlsCollapsed: boolean;
+  /** Whether ALL floating tools over the page were hidden when the user left. */
+  toolsHidden: boolean;
 }
 
 /** Default: both side surfaces closed — the page gets the viewport. */
 export const DEFAULT_HTML_CHROME_STATE: HtmlChromeState = {
   sidebarOpen: false,
   panelOpen: false,
-  controlsCollapsed: false,
+  toolsHidden: false,
 };
 
 /** Pure resolution logic (exported for tests): raw cookie value → state. */
@@ -59,9 +59,9 @@ export function resolveHtmlChromeState(
       panelOpen: typeof record.panelOpen === 'boolean'
         ? record.panelOpen
         : DEFAULT_HTML_CHROME_STATE.panelOpen,
-      controlsCollapsed: typeof record.controlsCollapsed === 'boolean'
-        ? record.controlsCollapsed
-        : DEFAULT_HTML_CHROME_STATE.controlsCollapsed,
+      toolsHidden: typeof record.toolsHidden === 'boolean'
+        ? record.toolsHidden
+        : DEFAULT_HTML_CHROME_STATE.toolsHidden,
     };
   } catch {
     return DEFAULT_HTML_CHROME_STATE;

@@ -190,13 +190,6 @@ export interface HtmlViewerProps {
   /** Hide the floating doc-level controls (attachments + global comment) in
    *  full-viewport mode, so the user can read the page unobstructed. */
   hideControls?: boolean;
-  /** Collapse the full-viewport floating controls down to a small expand
-   *  pill. Unlike hideControls (host-driven, no affordance), collapsing is
-   *  user-driven and always leaves the pill as the way back. */
-  controlsCollapsed?: boolean;
-  /** Present the collapse chevron / expand pill and receive toggles. Absent =
-   *  no collapse affordance (readOnly hosts, review-editor panels). */
-  onToggleControlsCollapsed?: () => void;
   /** A version diff (vs the previous version) is available to toggle. */
   diffAvailable?: boolean;
   /** Whether the diff-highlighted HTML is currently shown. */
@@ -246,8 +239,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       maxWidth,
       fullViewport,
       hideControls,
-      controlsCollapsed,
-      onToggleControlsCollapsed,
       diffAvailable,
       diffActive,
       onToggleDiff,
@@ -815,45 +806,14 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
             )}
             {/* Full-viewport mode has no card chrome, so float the same controls
                 over the top-right of the iframe (with a backdrop so they read over
-                any HTML). The selection toolbar is portaled separately. When the
-                host wires onToggleControlsCollapsed, the cluster carries a
-                collapse chevron and collapses to a small expand pill in the same
-                corner, so the page is never obstructed without a way back. */}
-            {fullViewport && !hideControls && hasActionButtons && !controlsCollapsed && (
+                any HTML). The selection toolbar is portaled separately. */}
+            {fullViewport && !hideControls && hasActionButtons && (
               <div
                 data-print-hide
-                data-html-controls-cluster
                 className="absolute top-3 right-3 z-10 flex items-center gap-1 md:gap-2 rounded-lg border border-border/50 bg-background/80 px-1.5 py-1 shadow-md backdrop-blur-sm"
               >
                 {actionButtons}
-                {onToggleControlsCollapsed && (
-                  <button
-                    onClick={onToggleControlsCollapsed}
-                    data-html-controls-collapse
-                    className="flex items-center px-1 py-1.5 text-muted-foreground hover:text-foreground rounded-md transition-colors cursor-pointer"
-                    title="Hide these controls"
-                    aria-label="Hide document controls"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                    </svg>
-                  </button>
-                )}
               </div>
-            )}
-            {fullViewport && !hideControls && hasActionButtons && controlsCollapsed && onToggleControlsCollapsed && (
-              <button
-                data-print-hide
-                data-html-controls-expand
-                onClick={onToggleControlsCollapsed}
-                className="absolute top-3 right-3 z-10 flex items-center rounded-lg border border-border/50 bg-background/80 px-1.5 py-1.5 shadow-md backdrop-blur-sm text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                title="Show document controls"
-                aria-label="Show document controls"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
             )}
             {/* Live proxied-app mode navigates a real loopback origin: no
                 sandbox (the user's own app needs cookies, storage, and
