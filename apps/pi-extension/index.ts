@@ -520,7 +520,11 @@ export default function plannotator(pi: ExtensionAPI): void {
 		}
 
 		if (profile?.thinking) {
-			pi.setThinkingLevel(profile.thinking);
+			// The config accepts every level current Pi knows, which is a superset
+			// of the `ThinkingLevel` union of the pinned Pi floor (#1304). Pi clamps
+			// a level the running model does not support, so handing it one this
+			// build's types have not heard of yet is safe.
+			pi.setThinkingLevel(profile.thinking as ThinkingLevel);
 		}
 
 		updateStatus(ctx);
