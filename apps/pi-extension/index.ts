@@ -278,6 +278,19 @@ function sendUserMessageWithCurrentSessionFallback(
 	}
 }
 
+/**
+ * Warning for hosts whose extension context lacks `ctx.isProjectTrusted`
+ * (#1353). Two audiences reach this path: real Pi older than 0.79.1 (the
+ * release that added the capability) and forks like oh-my-pi that have not
+ * adopted it. Neither Pi's nor oh-my-pi's extension context exposes a host
+ * name or version, so the two are not reliably distinguishable at runtime —
+ * the message states the capability gap without guessing which host it is,
+ * and must stay true for both. "Bundled and global config still load" is a
+ * fact of loadPlannotatorConfig: only project-local config is trust-gated.
+ */
+export const PROJECT_TRUST_CAPABILITY_WARNING =
+	"This host does not expose project trust (ctx.isProjectTrusted, Pi 0.79.1+). Project-local config (.pi/plannotator.json) is disabled; bundled and global config still load.";
+
 export default function plannotator(pi: ExtensionAPI): void {
 	const currentPiSession = registerCurrentPiSession(pi);
 	let phase: Phase = "idle";
@@ -1690,13 +1703,18 @@ Mark completed steps with [DONE:n] in your response.`
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
+		// Project trust gate (#1291). Capability absent = fail closed: the
+		// project-local config is skipped and the honest capability warning
+		// fires (see PROJECT_TRUST_CAPABILITY_WARNING). A host that provides
+		// the function is honored verbatim — including one that hardcodes
+		// `true` because it has no project-trust gate by policy (oh-my-pi's
+		// planned shim). A throwing trustFn (real Pi throws on a stale
+		// context) propagates deliberately: config loading never runs, so
+		// project-local config still cannot load.
 		const trustFn = ctx.isProjectTrusted as (() => boolean) | undefined;
 		const projectTrusted = typeof trustFn === "function" ? trustFn.call(ctx) : false;
 		if (typeof trustFn !== "function") {
-			ctx.ui.notify(
-				"Plannotator requires Pi 0.79.1 or newer. Update Pi; project-local config is disabled on this host.",
-				"warning",
-			);
+			ctx.ui.notify(PROJECT_TRUST_CAPABILITY_WARNING, "warning");
 		}
 		const loadedConfig = loadPlannotatorConfig(ctx.cwd, {
 			projectTrusted,

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import plannotator from "./index.ts";
+import plannotator, { PROJECT_TRUST_CAPABILITY_WARNING } from "./index.ts";
 
 type Handler = (event: unknown, context: ReturnType<typeof createContext>) => unknown;
 
@@ -386,9 +386,35 @@ describe("Plannotator phase framing messages", () => {
 		const result = await startAgent(runtime, context);
 		expect(result?.message?.content).toContain("[PLANNOTATOR - PLANNING PHASE]");
 		expect(result?.message?.content).not.toContain("untrusted-project-instructions");
+		// An honest trust denial is not a capability gap: the host DID answer,
+		// so the capability warning must not fire (#1353).
+		expect(context.notifications).not.toContainEqual({
+			message: PROJECT_TRUST_CAPABILITY_WARNING,
+			level: "warning",
+		});
 	});
 
-	test("fails closed with an update warning when an older Pi host lacks project trust", async () => {
+	test("loads project Plannotator config when the host reports project trust", async () => {
+		// This is both the trusted real-Pi path and the oh-my-pi path once its
+		// isProjectTrusted() === true shim ships (can1357/oh-my-pi#7958): any
+		// host-provided true is honored, with no warning.
+		const cwd = makeWorkspace({
+			phases: { planning: { instructions: "trusted-project-instructions" } },
+		});
+		const runtime = createRuntime();
+		const context = createContext({ cwd, projectTrusted: true });
+		await runtime.run("session_start", context);
+		await runtime.commands.get("plannotator-plan-mode")?.handler("", context);
+
+		const result = await startAgent(runtime, context);
+		expect(result?.message?.content).toContain("trusted-project-instructions");
+		expect(context.notifications).not.toContainEqual({
+			message: PROJECT_TRUST_CAPABILITY_WARNING,
+			level: "warning",
+		});
+	});
+
+	test("fails closed with the capability warning when the host lacks project trust support", async () => {
 		const cwd = makeWorkspace({
 			phases: { planning: { instructions: "untrusted-project-instructions" } },
 		});
@@ -409,10 +435,37 @@ describe("Plannotator phase framing messages", () => {
 		const result = await startAgent(runtime, context);
 		expect(result?.message?.content).toContain("trusted-global-instructions");
 		expect(result?.message?.content).not.toContain("untrusted-project-instructions");
+		// Deliberate copy pin (#1353): this warning reaches two audiences that
+		// cannot be told apart at runtime (pre-0.79.1 Pi and forks that never
+		// implemented the capability, e.g. oh-my-pi), and the previous text
+		// ("update Pi") misled the fork audience. It must state the capability
+		// gap without guessing the host; do not edit it casually.
 		expect(context.notifications).toContainEqual({
-			message: "Plannotator requires Pi 0.79.1 or newer. Update Pi; project-local config is disabled on this host.",
+			message:
+				"This host does not expose project trust (ctx.isProjectTrusted, Pi 0.79.1+). Project-local config (.pi/plannotator.json) is disabled; bundled and global config still load.",
 			level: "warning",
 		});
+	});
+
+	test("a throwing isProjectTrusted propagates and keeps project config unloaded", async () => {
+		// Real Pi's isProjectTrusted throws on a stale extension context
+		// (runner.assertActive). The guard deliberately does not swallow that:
+		// the session_start handler rejects and config loading never runs, so
+		// project-local config still cannot load (fail closed). Wrapping the
+		// call in a try/catch that defaults to trusted would fail here.
+		const cwd = makeWorkspace({
+			phases: { planning: { instructions: "untrusted-project-instructions" } },
+		});
+		const runtime = createRuntime();
+		const context = createContext({ cwd });
+		(context as { isProjectTrusted: () => boolean }).isProjectTrusted = () => {
+			throw new Error("stale context");
+		};
+
+		await expect(runtime.run("session_start", context)).rejects.toThrow("stale context");
+		await runtime.commands.get("plannotator-plan-mode")?.handler("", context);
+		const result = await startAgent(runtime, context);
+		expect(result?.message?.content ?? "").not.toContain("untrusted-project-instructions");
 	});
 
 	test("persistState records the framing latch on both sides", async () => {
