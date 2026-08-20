@@ -1,6 +1,25 @@
 import { describe, it, expect, mock, afterEach } from "bun:test";
-import { createCookieProxy } from "./cookie-proxy";
+import { applyPanelCookieDefaults, createCookieProxy } from "./cookie-proxy";
 import type { CookieProxy } from "./cookie-proxy";
+
+describe("applyPanelCookieDefaults", () => {
+  it("seeds System mode for a panel that has never stored one", () => {
+    // Plannotator's own default is Dark; inside VS Code the panel should follow
+    // the IDE instead, which is what System resolves to there (issue #1053).
+    expect(applyPanelCookieDefaults({})["plannotator-theme"]).toBe("system");
+  });
+
+  it("never overwrites a mode the user already chose", () => {
+    const seeded = applyPanelCookieDefaults({ "plannotator-theme": "light" });
+    expect(seeded["plannotator-theme"]).toBe("light");
+  });
+
+  it("keeps stored cookies and the auto-close flag", () => {
+    const seeded = applyPanelCookieDefaults({ "plannotator-identity": "tater-42" });
+    expect(seeded["plannotator-identity"]).toBe("tater-42");
+    expect(seeded["plannotator-auto-close"]).toBe("true");
+  });
+});
 
 describe("createCookieProxy", () => {
   let proxy: CookieProxy | undefined;

@@ -1,6 +1,6 @@
 import * as http from "http";
 import { EventEmitter } from "events";
-import { buildThemeListenerScript } from "./vscode-theme";
+import { buildThemeListenerScript, THEME_MODE_COOKIE } from "./vscode-theme";
 
 export interface CookieProxyOptions {
   loadCookies: () => string;
@@ -161,14 +161,36 @@ function parseCookieString(str: string): Record<string, string> {
   return store;
 }
 
+/**
+ * Values the panel starts its virtual cookie jar with, on top of whatever the
+ * user has already stored.
+ *
+ * The theme mode is SEEDED to System on a panel that has never stored one.
+ * Plannotator's own default is Dark, which would leave a first-time user in a
+ * light IDE staring at a dark panel now that the theme bridge no longer forces
+ * the mode onto the app (see vscode-theme.ts). System is what "adapts to your
+ * VS Code color theme" means here. It is a seed and not a write: an already
+ * stored mode is never touched, so the moment the user picks one this stops
+ * applying.
+ */
+export function applyPanelCookieDefaults(
+  store: Record<string, string>,
+): Record<string, string> {
+  const seeded = { ...store, "plannotator-auto-close": "true" };
+  if (!seeded[THEME_MODE_COOKIE]) seeded[THEME_MODE_COOKIE] = "system";
+  return seeded;
+}
+
 function injectScript(html: string, savedCookies: string): string {
-  const initial = JSON.stringify(parseCookieString(savedCookies));
+  const initial = JSON.stringify(
+    applyPanelCookieDefaults(parseCookieString(savedCookies)),
+  );
   const themeListener = buildThemeListenerScript();
 
   // Virtual cookie jar: overrides document.cookie so plannotator works even
   // when the browser blocks third-party cookies inside the iframe.
   const script = themeListener + `<script>(function(){
-      var S=${initial};S["plannotator-auto-close"]="true";
+      var S=${initial};
       Object.defineProperty(document,"cookie",{configurable:true,
         get:function(){return Object.keys(S).map(function(k){return k+"="+S[k]}).join("; ");},
         set:function(v){
