@@ -199,7 +199,15 @@ export async function resolveAnnotateTarget(options: {
       }
       // Probe failure or non-HTML without --app: fall through to the static
       // pipeline, whose own error surfaces verbatim (preserves the legacy
-      // behavior for dead URLs and JSON endpoints).
+      // behavior for dead URLs and JSON endpoints). A failed probe says so
+      // first: a dev server still starting up probes as unreachable, and a
+      // silent downgrade to static conversion reads as a broken live session.
+      if (probeError !== null) {
+        log(
+          `Live probe failed for ${filePath} (${probeError}); using static conversion. `
+          + `If a dev server is still starting up, retry with --app to force live mode.`,
+        );
+      }
     }
 
     const useJina = resolveUseJina(noJina, loadConfig());

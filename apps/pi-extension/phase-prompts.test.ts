@@ -648,6 +648,53 @@ describe("Plannotator plan-mode-off countermand (#1320)", () => {
 		expect(await startAgent(runtime, context)).toBeUndefined();
 	});
 
+	test("resync fallback: a recorded executing phase whose plan file is gone demotes to idle WITH the notice armed", async () => {
+		// The session provably used plan mode (only a persisted executing entry
+		// reaches this fallback), so its framing residue is in history and the
+		// countermand is owed. Deleting the idleNoticePending arm in the
+		// missing-plan-file fallback must fail here.
+		const cwd = makeWorkspace();
+		// Deliberately NO PLAN.md on disk.
+		const runtime = createRuntime();
+		const context = executingContext(cwd, { framingDelivered: true });
+		await runtime.run("session_start", context);
+
+		expect(runtime.lastPersistedState()).toMatchObject({
+			phase: "idle",
+			idleNoticePending: true,
+		});
+		const notice = await startAgent(runtime, context);
+		expect(notice?.message?.content).toContain("[PLANNOTATOR - PLAN MODE OFF]");
+		expect(await startAgent(runtime, context)).toBeUndefined();
+	});
+
+	test("resync fallback: a recorded executing phase with no submitted path demotes to idle WITH the notice armed", async () => {
+		// Same recorded-executing demotion as the missing-file case, hit when
+		// the state entry never captured lastSubmittedPath. Deleting the
+		// idleNoticePending arm in the no-path fallback must fail here.
+		const cwd = makeWorkspace();
+		const runtime = createRuntime();
+		const context = createContext({
+			cwd,
+			entries: [
+				{
+					type: "custom",
+					customType: "plannotator",
+					data: { phase: "executing", framingDelivered: true },
+				},
+			],
+		});
+		await runtime.run("session_start", context);
+
+		expect(runtime.lastPersistedState()).toMatchObject({
+			phase: "idle",
+			idleNoticePending: true,
+		});
+		const notice = await startAgent(runtime, context);
+		expect(notice?.message?.content).toContain("[PLANNOTATOR - PLAN MODE OFF]");
+		expect(await startAgent(runtime, context)).toBeUndefined();
+	});
+
 	test("fresh sessions never deliver the notice: the #1269 inject-nothing promise holds", async () => {
 		const cwd = makeWorkspace();
 		const runtime = createRuntime();

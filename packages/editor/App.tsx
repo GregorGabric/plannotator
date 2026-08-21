@@ -1897,13 +1897,14 @@ const App: React.FC = () => {
 
   // Restore-on-entry: every time the session transitions ONTO an HTML surface
   // (a root raw-HTML session, or a linked .html doc opened from markdown),
-  // apply the sidebar/panel state the user last left an HTML session with
-  // (first-ever run: both closed). The old "Hide tools" chrome flag is gone —
-  // annotation chrome is always visible on HTML surfaces now, and an old
-  // cookie still carrying toolsHidden is simply ignored, so a stale record
-  // can never strand a user with hidden chrome. Re-restoring on each entry is
-  // also what keeps a markdown surface's sidebar state from leaking into the
-  // HTML cookie on the way back.
+  // apply the sidebar/panel/toolsHidden state the user last left an HTML
+  // session with (first-ever run: both closed, tools visible). toolsHidden is
+  // restored into state here but only APPLIED on desktop layouts — the compact
+  // touch shell has neither the eye toggle nor a menu action to undo it, so it
+  // renders tools visible regardless (see the hideControls site) while the
+  // cookie keeps its value for the next desktop visit. Re-restoring on each
+  // entry is also what keeps a markdown surface's sidebar state from leaking
+  // into the HTML cookie on the way back.
   const prevHtmlChromeSurfaceRef = useRef(false);
   useEffect(() => {
     if (isLoading || isLoadingShared) return;
@@ -5490,7 +5491,12 @@ const App: React.FC = () => {
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     maxWidth={isHtmlSurface ? null : annotateReaderMaxWidth}
                     fullViewport={isHtmlSurface}
-                    hideControls={isHtmlSurface && htmlToolsHidden}
+                    // toolsHidden is desktop-only: the eye toggle is hidden on
+                    // the compact touch shell, so applying a restored
+                    // toolsHidden:true there would strand the user with no way
+                    // back. Compact treats tools as visible while the cookie
+                    // keeps its value for the next desktop visit.
+                    hideControls={isHtmlSurface && !isCompactTouchLayout && htmlToolsHidden}
                     diffAvailable={!liveApp && !!htmlDiffHtml}
                     diffActive={!liveApp && isPlanDiffActive && !!htmlDiffHtml}
                     onToggleDiff={() => setIsPlanDiffActive((v) => !v)}

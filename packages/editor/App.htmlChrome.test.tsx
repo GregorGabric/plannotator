@@ -29,6 +29,22 @@ const appModule = hasDom ? await import("./App") : null;
 const App = appModule?.default as typeof import("./App")["default"];
 const originalFetch = globalThis.fetch;
 const originalEventSource = globalThis.EventSource;
+const originalMatchMedia = hasDom ? window.matchMedia : undefined;
+
+// SAFETY: implements the MediaQueryList surface the shell hooks consume.
+// Coarse-pointer matches put the app in its compact touch layout.
+function coarseMatchMedia(query: string): MediaQueryList {
+  return {
+    matches: query.includes("pointer: coarse"),
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => true,
+  } as unknown as MediaQueryList;
+}
 
 const RAW_HTML = "<h1>Rendered page</h1><p>Body copy.</p>";
 
@@ -156,7 +172,10 @@ afterEach(async () => {
   globalThis.EventSource = originalEventSource;
   memory.clear();
   resetStorageBackend();
-  if (hasDom) document.body.replaceChildren();
+  if (hasDom) {
+    if (originalMatchMedia) window.matchMedia = originalMatchMedia;
+    document.body.replaceChildren();
+  }
 });
 
 afterAll(() => {
@@ -212,6 +231,41 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     expect(toggle!.getAttribute("aria-pressed")).toBe("true");
     await act(async () => toggle!.click());
     expect(sidebarTabs()).not.toBeNull();
+  });
+
+  test("a toolsHidden:true cookie is NOT applied on the compact touch layout (no eye toggle there = no way back)", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    memory.set(
+      "plannotator-html-chrome",
+      JSON.stringify({ toolsHidden: true, sidebarOpen: false, panelOpen: false, savedAt: Date.now() }),
+    );
+    window.matchMedia = coarseMatchMedia as typeof window.matchMedia;
+
+    // Compact never renders the pen toggle, so mount manually and wait on the
+    // floating cluster itself: with the fix it must render despite the cookie.
+    globalThis.fetch = annotateFetch;
+    // SAFETY: the App only uses EventSource's constructor, handlers, and close.
+    globalThis.EventSource = SilentEventSource as unknown as typeof EventSource;
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(<App />);
+    });
+    for (let attempt = 0; attempt < 20 && !floatingCluster(); attempt += 1) {
+      await settle();
+    }
+
+    // The chrome renders: toolsHidden is treated as visible on compact.
+    expect(floatingCluster()).not.toBeNull();
+    // Desktop-only toggles are absent, which is exactly why applying the
+    // cookie here would strand the user.
+    expect(toolsToggle()).toBeNull();
+    // The cookie itself is untouched: the next desktop session still restores
+    // the user's hidden preference.
+    const record = JSON.parse(memory.get("plannotator-html-chrome") ?? "{}") as { toolsHidden?: boolean };
+    expect(record.toolsHidden).toBe(true);
   });
 
   test("the sidebar-open half of the persisted chrome still restores", async () => {
