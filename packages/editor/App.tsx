@@ -1898,10 +1898,10 @@ const App: React.FC = () => {
   // Restore-on-entry: every time the session transitions ONTO an HTML surface
   // (a root raw-HTML session, or a linked .html doc opened from markdown),
   // apply the sidebar/panel state the user last left an HTML session with
-  // (first-ever run: both closed). The old "Hide tools" chrome flag is gone —
-  // annotation chrome is always visible on HTML surfaces now, and an old
-  // cookie still carrying toolsHidden is simply ignored, so a stale record
-  // can never strand a user with hidden chrome. Re-restoring on each entry is
+  // (first-ever run: both closed), including the toolsHidden flag behind the
+  // header eye toggle. Restoring it hidden can never strand a user, because
+  // the button that flips it back lives in the header rather than in the
+  // floating chrome it removes. Re-restoring on each entry is
   // also what keeps a markdown surface's sidebar state from leaking into the
   // HTML cookie on the way back.
   const prevHtmlChromeSurfaceRef = useRef(false);
