@@ -113,6 +113,7 @@ import { writeRemoteShareLink } from "@plannotator/server/share-url";
 import { enableTailscaleServe } from "@plannotator/server/tailscale-serve";
 import { writeUrlQr } from "@plannotator/server/qr";
 import { resolveAnnotateTarget } from "./annotate-resolution";
+import { LIVE_APP_REMOTE_MESSAGE } from "@plannotator/shared/live-probe";
 // Bridge sources for live app sessions: the CLI supplies them so
 // @plannotator/server never imports @plannotator/ui (mirrors the existing
 // htmlContent precedent).
@@ -1244,9 +1245,7 @@ if (args[0] === "sessions") {
   // unconditional loopback bind are the others). No override env var exists
   // on purpose: a live proxy relays the user's authenticated dev app.
   if (liveAppResolved && isRemoteSession()) {
-    exitAnnotateStartupFailure(
-      "Live app annotation is unavailable in remote mode (PLANNOTATOR_REMOTE). Run locally, or use --static to annotate a converted snapshot of the page.",
-    );
+    exitAnnotateStartupFailure(LIVE_APP_REMOTE_MESSAGE);
   }
 
   // --tailscale is the same exposure in different clothes: the annotate
