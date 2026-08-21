@@ -1898,13 +1898,12 @@ const App: React.FC = () => {
   // Restore-on-entry: every time the session transitions ONTO an HTML surface
   // (a root raw-HTML session, or a linked .html doc opened from markdown),
   // apply the sidebar/panel/toolsHidden state the user last left an HTML
-  // session with (first-ever run: both closed, tools visible). toolsHidden is
-  // restored into state here but only APPLIED on desktop layouts — the compact
-  // touch shell has neither the eye toggle nor a menu action to undo it, so it
-  // renders tools visible regardless (see the hideControls site) while the
-  // cookie keeps its value for the next desktop visit. Re-restoring on each
-  // entry is also what keeps a markdown surface's sidebar state from leaking
-  // into the HTML cookie on the way back.
+  // session with (first-ever run: both closed, tools visible). A restored
+  // toolsHidden:true always has a way back on every layout: the desktop
+  // header eye toggle, and the compact Options menu "Show tools" action
+  // (compactDocumentActions). Re-restoring on each entry is also what keeps
+  // a markdown surface's sidebar state from leaking into the HTML cookie on
+  // the way back.
   const prevHtmlChromeSurfaceRef = useRef(false);
   useEffect(() => {
     if (isLoading || isLoadingShared) return;
@@ -4714,6 +4713,31 @@ const App: React.FC = () => {
               onSelect: handleEditExitClick,
             }]
           : []),
+        // HTML/live surfaces on the compact touch shell: the desktop pen and
+        // eye toggles are header-only and hidden here, and Mod+Shift+A is
+        // keyboard-only, so without these menu actions a touch user has NO
+        // way to disarm annotate mode (every tap annotates, the page beneath
+        // is unreachable) or to bring hidden tools back.
+        ...(isHtmlSurface && !documentReadOnly
+          ? [{
+              id: 'annotate' as const,
+              label: htmlAnnotateArmed ? 'Interact with page' : 'Annotate page',
+              subtitle: htmlAnnotateArmed
+                ? 'Taps annotate. Switch to use the page itself.'
+                : 'Taps use the page. Switch to add annotations.',
+              onSelect: handleHtmlAnnotateToggle,
+            }]
+          : []),
+        ...(isHtmlSurface
+          ? [{
+              id: 'tools' as const,
+              label: htmlToolsHidden ? 'Show tools' : 'Hide tools',
+              subtitle: htmlToolsHidden
+                ? 'Bring the annotation chrome back over the page'
+                : 'Remove all floating chrome from over the page',
+              onSelect: () => setHtmlToolsHidden((v) => !v),
+            }]
+          : []),
       ];
 
   const planMaxWidth = useMemo(() => {
@@ -5491,12 +5515,11 @@ const App: React.FC = () => {
                     onRemoveGlobalAttachment={handleRemoveGlobalAttachment}
                     maxWidth={isHtmlSurface ? null : annotateReaderMaxWidth}
                     fullViewport={isHtmlSurface}
-                    // toolsHidden is desktop-only: the eye toggle is hidden on
-                    // the compact touch shell, so applying a restored
-                    // toolsHidden:true there would strand the user with no way
-                    // back. Compact treats tools as visible while the cookie
-                    // keeps its value for the next desktop visit.
-                    hideControls={isHtmlSurface && !isCompactTouchLayout && htmlToolsHidden}
+                    // Applied on every layout: desktop has the header eye
+                    // toggle, and the compact touch shell has the Options
+                    // menu "Show tools" action (compactDocumentActions), so
+                    // a restored toolsHidden:true always has a way back.
+                    hideControls={isHtmlSurface && htmlToolsHidden}
                     diffAvailable={!liveApp && !!htmlDiffHtml}
                     diffActive={!liveApp && isPlanDiffActive && !!htmlDiffHtml}
                     onToggleDiff={() => setIsPlanDiffActive((v) => !v)}

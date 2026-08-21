@@ -177,6 +177,34 @@ export interface AnnotateServerResult {
 // --- Server Implementation ---
 
 /**
+ * Run shutdown disposal steps with per-step isolation, then close the
+ * listener. One throwing step (agent-terminal teardown is historically
+ * fragile, #1314) must never skip the steps after it — before this guard, a
+ * throw mid-sequence orphaned the live proxy's listener and its upstream
+ * WebSockets. Failures are reported through `log` (stderr by default) with
+ * the step's name; `closeListener` runs unconditionally, even against a
+ * pathological throw outside the steps.
+ */
+export function runGuardedShutdown(
+  steps: ReadonlyArray<readonly [name: string, dispose: () => void]>,
+  closeListener: () => void,
+  log: (message: string, error: unknown) => void = (message, error) =>
+    console.error(message, error),
+): void {
+  try {
+    for (const [name, dispose] of steps) {
+      try {
+        dispose();
+      } catch (error) {
+        log(`[plannotator] annotate shutdown: ${name} disposal failed:`, error);
+      }
+    }
+  } finally {
+    closeListener();
+  }
+}
+
+/**
  * Start the Annotate server
  *
  * Handles:
@@ -1137,17 +1165,25 @@ export async function startAnnotateServer(
   void warmFileListCache(process.cwd(), "code");
 
   const stop = () => {
-    // try/finally: a throwing disposal must never leave the listener bound.
-    try {
-      closeAllFileBrowserWatchers();
-      clientLease.cancel();
-      clientLease.closeSessions();
-      aiRuntime?.dispose();
-      agentTerminal.dispose();
-      liveProxy?.stop();
-    } finally {
-      server.stop();
-    }
+    // Every disposal step is guarded individually (runGuardedShutdown):
+    // agent-terminal teardown is historically fragile (#1314), and in a flat
+    // sequence one throwing step would skip everything after it — notably
+    // liveProxy.stop(), orphaning the live proxy's listener and its upstream
+    // WebSockets. A failed step is reported and the rest still run; the
+    // listener itself closes regardless.
+    runGuardedShutdown(
+      [
+        ["file browser watchers", () => closeAllFileBrowserWatchers()],
+        ["client lease", () => {
+          clientLease.cancel();
+          clientLease.closeSessions();
+        }],
+        ["AI runtime", () => aiRuntime?.dispose()],
+        ["agent terminal", () => agentTerminal.dispose()],
+        ["live proxy", () => liveProxy?.stop()],
+      ],
+      () => server.stop(),
+    );
   };
 
   // Notify caller that server is ready. An async ready handler that rejects
