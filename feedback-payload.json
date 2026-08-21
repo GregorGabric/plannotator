@@ -1,0 +1,21 @@
+{
+  "draftGeneration": 2,
+  "approved": false,
+  "feedback": "# Code Review Feedback\n\n**Diff:** All changes since `main` (committed + uncommitted + untracked)\n\n## src/alpha.ts\n\n### Lines 497-500 (new) — Outside diff\n_These lines are not part of the diff under review. The file content at review time is quoted below._\nThis whole helper is dead code and should be deleted.\n\n**Code at these lines:**\n```\nexport function alphaPart99(n: number): number {\n  // untouched region of alpha.ts, far below the diff hunk\n  return n + 99;\n}\n```\n\n",
+  "annotations": [
+    {
+      "id": "m2o1gh7",
+      "type": "comment",
+      "scope": "line",
+      "filePath": "src/alpha.ts",
+      "lineStart": 497,
+      "lineEnd": 500,
+      "side": "new",
+      "text": "This whole helper is dead code and should be deleted.",
+      "originalCode": "export function alphaPart99(n: number): number {\n  // untouched region of alpha.ts, far below the diff hunk\n  return n + 99;\n}",
+      "outsideDiff": true,
+      "createdAt": 1787349819013,
+      "author": "fine-coloration-tater"
+    }
+  ]
+}
