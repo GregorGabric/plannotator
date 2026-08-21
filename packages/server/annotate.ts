@@ -177,6 +177,27 @@ export interface AnnotateServerResult {
 // --- Server Implementation ---
 
 /**
+ * Stable identity for a live app session's annotation draft.
+ *
+ * A live session's draft has to key off WHICH APP is being annotated, since
+ * the session holds no document text of its own. Normalizing through the URL
+ * parser first so the same dev server recovers its draft when the target is
+ * spelled slightly differently on a later run (a trailing slash, an uppercase
+ * host, an explicit :80). Unparseable values fall back to the trimmed string:
+ * a target that never reached the URL parser cannot have started a proxy
+ * anyway, and a per-target key that is merely raw is still per-target.
+ */
+export function liveAppDraftIdentity(targetUrl: string): string {
+  try {
+    const url = new URL(targetUrl);
+    const path = url.pathname.replace(/\/+$/, "");
+    return `${url.origin}${path}${url.search}`;
+  } catch {
+    return targetUrl.trim();
+  }
+}
+
+/**
  * Start the Annotate server
  *
  * Handles:
@@ -290,10 +311,23 @@ export async function startAnnotateServer(
     folderAnnotateHistoryCache.set(resolvedFilePath, result);
     return result;
   }
+  // Draft identity. Content-derived for the modes that HAVE content, and
+  // path-derived for the modes that do not.
+  //
+  // A live app session has no document body at all: annotate-app resolves
+  // `markdown` to "" by construction, because the page lives behind the
+  // proxy rather than in a string the server holds. Hashing that empty body
+  // gave EVERY live session on the machine the one hash of "", so two
+  // sessions against different dev servers shared a single draft slot and
+  // deterministically overwrote each other's in-progress annotations. The
+  // session's target is its identity here, exactly as the folder path is the
+  // folder session's identity.
   const draftSource =
-    mode === "annotate-folder" && folderPath
-      ? `folder:${resolvePath(folderPath)}`
-      : renderHtml && rawHtml ? rawHtml : markdown;
+    mode === "annotate-app" && liveApp
+      ? `annotate-app\0${liveAppDraftIdentity(liveApp.targetUrl)}`
+      : mode === "annotate-folder" && folderPath
+        ? `folder:${resolvePath(folderPath)}`
+        : renderHtml && rawHtml ? rawHtml : markdown;
   const draftKey = contentHash(draftSource);
 
   // Durable submit records (#678): the caller consuming waitForDecision() may
