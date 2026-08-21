@@ -188,7 +188,8 @@ function formatFileAnnotations(fileAnnotations: CodeAnnotation[], headingLevel =
     const tokenSuffix = ann.tokenText
       ? ` — \`\`${ann.tokenText.replace(/`/g, '\\`')}\`\`${ann.charStart != null ? ` (chars ${ann.charStart}-${ann.charEnd})` : ''}`
       : '';
-    const outsideSuffix = ann.outsideDiff ? ' — Outside diff' : '';
+    // Bracketed, matching the design doc's proposed "[Outside diff]" shape.
+    const outsideSuffix = ann.outsideDiff ? ' [Outside diff]' : '';
     output += `${headingLevel} ${lineRange} (${ann.side})${tokenSuffix}${outsideSuffix}\n`;
     output += commitMismatchNote(ann, commitShaFromMode(currentDiff?.mode));
     output += gitButlerMismatchNote(ann, currentDiff);
