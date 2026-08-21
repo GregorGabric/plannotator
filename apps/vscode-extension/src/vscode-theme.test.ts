@@ -22,6 +22,11 @@
 // for browser globals by accident. Only this harness runs in a DOM.
 import { describe, it, expect } from "bun:test";
 import { buildThemeListenerScript, DEFAULT_THEME_CLASS } from "./vscode-theme";
+import {
+  applyPanelCookieDefaults,
+  PANEL_SEED_COOKIE,
+  PANEL_SEED_VERSION,
+} from "./cookie-proxy";
 
 const hasDom = typeof document !== "undefined";
 
@@ -181,5 +186,74 @@ describe.skipIf(!hasDom)("theme bridge precedence", () => {
   it("marks the window so the app knows it runs inside VS Code", () => {
     // useEditorAnnotations keys off this flag; the bridge is where it is set.
     expect(mountBridge(DEFAULT_THEME_CLASS).vscodeFlag()).toBe(true);
+  });
+});
+
+/**
+ * The seed and the bridge are correct on their own and were still wrong
+ * together: seeding only an ABSENT mode meant an upgraded panel kept the `dark`
+ * the app had auto-persisted, and the bridge — correctly — read that as a
+ * choice and stayed off. These run the real seeding function into the real
+ * bridge, which is the only place that gap is visible.
+ */
+describe.skipIf(!hasDom)("panel cookie seed feeding the bridge", () => {
+  /** The jar the proxy hands the page, as a cookie string. */
+  function seededCookie(store: Record<string, string>): string {
+    return Object.entries(applyPanelCookieDefaults(store))
+      .map(([k, v]) => `${k}=${v}`)
+      .join("; ");
+  }
+
+  it("upgrades a legacy dark panel to follow a light IDE (issue #1053)", () => {
+    // A panel that ran before the seeding rules: `dark` in the store, written
+    // by the app on first mount, never chosen by anyone.
+    const bridge = mountBridge(
+      DEFAULT_THEME_CLASS,
+      seededCookie({ "plannotator-theme": "dark" }),
+    );
+
+    bridge.post(IDE_LIGHT);
+
+    expect(bridge.root.classList.contains("light")).toBe(true);
+    expect(bridge.override("--background")).toBe("#ffffff");
+  });
+
+  it("keeps a Dark chosen after the migration pinned in a light IDE", () => {
+    const bridge = mountBridge(
+      DEFAULT_THEME_CLASS,
+      seededCookie({
+        "plannotator-theme": "dark",
+        [PANEL_SEED_COOKIE]: PANEL_SEED_VERSION,
+      }),
+    );
+
+    bridge.post(IDE_LIGHT);
+
+    expect(bridge.root.classList.contains("light")).toBe(false);
+    expect(bridge.override("--background")).toBe("");
+  });
+
+  it("still follows the IDE on a fresh install", () => {
+    const bridge = mountBridge(DEFAULT_THEME_CLASS, seededCookie({}));
+
+    bridge.post(IDE_LIGHT);
+
+    expect(bridge.root.classList.contains("light")).toBe(true);
+    expect(bridge.override("--background")).toBe("#ffffff");
+  });
+
+  it("leaves a stored Light pinned in a dark IDE, marked or not", () => {
+    const stores: Record<string, string>[] = [
+      { "plannotator-theme": "light" },
+      { "plannotator-theme": "light", [PANEL_SEED_COOKIE]: PANEL_SEED_VERSION },
+    ];
+    for (const store of stores) {
+      const bridge = mountBridge(`${DEFAULT_THEME_CLASS} light`, seededCookie(store));
+
+      bridge.post(IDE_DARK);
+
+      expect(bridge.root.classList.contains("light")).toBe(true);
+      expect(bridge.override("--background")).toBe("");
+    }
   });
 });

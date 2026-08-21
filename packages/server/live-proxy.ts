@@ -139,17 +139,50 @@ export function isDocumentIntentRequest(headers: Headers): boolean {
 // Byte-level scan (the markers are ASCII, safe in UTF-8) holding back at most
 // 8 bytes across chunk boundaries; a head open tag split across chunks is
 // handled by a state machine rather than unbounded buffering.
+//
+// The scan is comment-aware. Head markers that appear inside a comment are
+// not head markers: a codegen banner like
+//   <!-- generated file; do not edit <head> by hand -->
+// preceding the real document head used to swallow the bridge into a span the
+// browser never executes, so annotation broke with no diagnostic at all. The
+// scanner therefore skips three kinds of ignored span before matching:
+//   - comments:            <!-- ... -->  (also the legacy --!> terminator)
+//   - markup declarations
+//     and bogus comments:  <!...>  (DOCTYPE, CDATA-ish <![CDATA[ ... )
+//   - processing-instruction-ish bogus comments: <?...>
+// The last two end at the first ">", which is exactly how the HTML parser
+// treats them outside foreign content, so `<![CDATA[<head>]]>` hides the same
+// bytes here as it does in a browser.
+//
+// Honestly out of scope: raw-text element contents are NOT tracked, so a
+// literal "<!--" inside a <script> or <style> string that precedes the head
+// markers is read as a comment open. Reaching that requires script/style
+// content before the document head (invalid in the head-open case, since the
+// scan stops at the first <head), and the degraded outcome is the existing
+// no-marker fallback (injection appended at end of stream) rather than a
+// silent injection into dead bytes. Conditional comments and unterminated
+// comments degrade the same way.
 
 const HEAD_OPEN = "<head";
 const HEAD_CLOSE = "</head>";
+const COMMENT_OPEN = "<!--";
+const GT = 0x3e; /* > */
+const LT = 0x3c; /* < */
+const BANG = 0x21; /* ! */
+const QUESTION = 0x3f; /* ? */
+const HYPHEN = 0x2d; /* - */
+/** Longest marker the scan must be able to defer is "</head>" (7 bytes), so
+ * holding back 8 keeps every partial marker available for the next chunk. */
 const HOLDBACK = 8;
 
-type InjectorState = "searching" | "in-head-open-tag" | "done";
+type InjectorState = "searching" | "in-ignored-span" | "in-head-open-tag" | "done";
 
 export function createHtmlInjector(injection: string) {
   const encoder = new TextEncoder();
   const injectionBytes = encoder.encode(injection);
   let state: InjectorState = "searching";
+  /** While in-ignored-span: "comment" ends at --> / --!>, "gt" ends at >. */
+  let ignoredSpanKind: "comment" | "gt" = "comment";
   let carry = new Uint8Array(0);
 
   function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
@@ -183,6 +216,44 @@ export function createHtmlInjector(injection: string) {
       || byte === 0x0d;
   }
 
+  /**
+   * Classify an ignored span starting at a '<'. Returns null when this is not
+   * one, or when the buffer does not yet hold enough bytes to tell "<!--" from
+   * a bogus comment: undecided positions fall through to the holdback and are
+   * re-examined against the next chunk.
+   */
+  function ignoredSpanAt(
+    buf: Uint8Array,
+    i: number,
+  ): { kind: "comment" | "gt"; openLength: number } | null {
+    const next = buf[i + 1];
+    if (next === undefined) return null; // undecided: defer
+    if (next === QUESTION) return { kind: "gt", openLength: 2 };
+    if (next !== BANG) return null;
+    if (matchesAt(buf, i, COMMENT_OPEN)) return { kind: "comment", openLength: COMMENT_OPEN.length };
+    // "<!" that is not yet known to be "<!--" (chunk ends mid-marker): defer.
+    if (i + COMMENT_OPEN.length > buf.length) return null;
+    return { kind: "gt", openLength: 2 };
+  }
+
+  /**
+   * End of the ignored span that is currently open, or -1 when this buffer
+   * does not contain it yet. Comments accept the legacy "--!>" terminator
+   * alongside "-->", matching the HTML parser's comment end states.
+   */
+  function ignoredSpanEnd(buf: Uint8Array, from: number): number {
+    if (ignoredSpanKind === "gt") {
+      const gt = buf.indexOf(GT, from);
+      return gt === -1 ? -1 : gt + 1;
+    }
+    for (let i = from; i + 2 < buf.length; i++) {
+      if (buf[i] !== HYPHEN || buf[i + 1] !== HYPHEN) continue;
+      if (buf[i + 2] === GT) return i + 3;
+      if (buf[i + 2] === BANG && buf[i + 3] === GT) return i + 4;
+    }
+    return -1;
+  }
+
   /** Process buffered bytes, returning output and retaining a small carry. */
   function scan(buf: Uint8Array, flush: boolean): Uint8Array[] {
     const out: Uint8Array[] = [];
@@ -190,11 +261,10 @@ export function createHtmlInjector(injection: string) {
 
     while (cursor < buf.length && state !== "done") {
       if (state === "in-head-open-tag") {
-        const gt = buf.indexOf(0x3e, cursor);
+        const gt = buf.indexOf(GT, cursor);
         if (gt === -1) {
           out.push(buf.subarray(cursor));
           cursor = buf.length;
-          buf = new Uint8Array(0);
           break;
         }
         out.push(buf.subarray(cursor, gt + 1));
@@ -204,10 +274,33 @@ export function createHtmlInjector(injection: string) {
         break;
       }
 
+      if (state === "in-ignored-span") {
+        // Comment / declaration bytes pass through verbatim; only the search
+        // for head markers is suspended until the span closes.
+        const end = ignoredSpanEnd(buf, cursor);
+        if (end === -1) break; // need more bytes: holdback below
+        out.push(buf.subarray(cursor, end));
+        cursor = end;
+        state = "searching";
+        continue;
+      }
+
       // searching: look for the earliest full or partial marker.
       let emitted = false;
       for (let i = cursor; i < buf.length; i++) {
-        if (lowerAt(buf, i) !== 0x3c /* < */) continue;
+        if (buf[i] !== LT) continue;
+        // Comments and declarations hide whatever they contain, head markers
+        // included: enter the span before testing for head markers.
+        const ignored = ignoredSpanAt(buf, i);
+        if (ignored) {
+          const openEnd = i + ignored.openLength;
+          out.push(buf.subarray(cursor, openEnd));
+          cursor = openEnd;
+          ignoredSpanKind = ignored.kind;
+          state = "in-ignored-span";
+          emitted = true;
+          break;
+        }
         // Full </head> (no head open tag seen): inject before it.
         if (matchesAt(buf, i, HEAD_CLOSE)) {
           out.push(buf.subarray(cursor, i));
@@ -249,8 +342,11 @@ export function createHtmlInjector(injection: string) {
       return out;
     }
 
-    // searching: hold back the trailing bytes that could begin a marker.
+    // searching / in-ignored-span: hold back the trailing bytes that could be
+    // a partial marker ("</hea", "<!-", "--"), so the next chunk re-reads them.
     if (flush) {
+      // Stream ended with no usable head marker (including inside an
+      // unterminated comment): append rather than drop the bridge.
       out.push(buf.subarray(cursor));
       out.push(injectionBytes);
       state = "done";
@@ -328,11 +424,24 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
     idleTimeout: 0,
 
     async fetch(req, srv) {
-      const url = new URL(req.url);
-
-      // Host validation first: anything not naming this loopback proxy is
-      // refused before any upstream contact or upgrade.
+      // Host validation FIRST, before req.url is even parsed: an HTTP/1.0
+      // request with no Host header leaves req.url a bare "/", and letting
+      // `new URL` throw on it hands the client Bun's ~67KB internal error
+      // page (stack trace and all) from a port whose whole contract is that
+      // it refuses anything not naming this loopback proxy. The invariant is
+      // "Host validation runs before any upstream contact" for ALL inputs,
+      // well-formed or not.
       if (!isAllowedProxyHost(req.headers.get("host"), srv.port!)) {
+        return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
+      }
+
+      // A Host that passed the check should always yield a parseable URL, but
+      // parsing must not be the thing that decides: an unparseable request
+      // takes the same refusal path rather than any error page.
+      let url: URL;
+      try {
+        url = new URL(req.url);
+      } catch {
         return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
       }
 
@@ -433,7 +542,11 @@ export function startLiveAppProxy(opts: LiveAppProxyOptions): LiveAppProxy {
         if (rewritten !== null) responseHeaders.set("location", rewritten);
       }
 
-      const contentType = responseHeaders.get("content-type") ?? "";
+      // Media types are case-insensitive (RFC 9110 8.3): a dev server that
+      // answers "TEXT/HTML" is serving HTML, and a case-sensitive test would
+      // silently skip both the bridge injection and the framing-header
+      // rewrites for it.
+      const contentType = (responseHeaders.get("content-type") ?? "").toLowerCase();
       const isHtml = contentType.includes("text/html");
 
       if (isHtml) {

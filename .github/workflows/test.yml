@@ -37,6 +37,13 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
+      # The extension has its own tsconfig (Node libs, no DOM) and is not part
+      # of the root typecheck, so nothing was checking it. A type error in the
+      # panel cookie seed shipped that way; this is the step that would have
+      # caught it.
+      - name: Type check VS Code extension
+        run: bun run --cwd apps/vscode-extension lint
+
       - name: Run tests
         run: bun test
 
