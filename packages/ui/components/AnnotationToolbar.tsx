@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useDismissOnOutsideAndEscape } from "../hooks/useDismissOnOutsideAndEscape";
 import { type QuickLabel, getQuickLabels } from "../utils/quickLabels";
 import { copyTextToClipboard } from "../utils/clipboard";
+import { acquireTypeToCommentCapture } from "../shortcuts/plan-review/annotationMode.shortcuts";
 import { FloatingQuickLabelPicker } from "./FloatingQuickLabelPicker";
 
 type PositionMode = 'center-above' | 'top-right';
@@ -151,7 +152,14 @@ export const AnnotationToolbar: React.FC<AnnotationToolbarProps> = ({
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    // While this listener owns printable keys, the Shift+1..4 annotation-mode
+    // shortcuts must not fire: Shift+3 is "#", and a user typing "#" into a
+    // starting comment must not silently arm Redline (#1244 follow-up).
+    const releaseCapture = acquireTypeToCommentCapture();
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      releaseCapture();
+    };
   }, [onClose, onRequestComment, onQuickLabel, quickLabels, showQuickLabels]);
 
   useDismissOnOutsideAndEscape({

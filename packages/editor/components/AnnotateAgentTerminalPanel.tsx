@@ -55,7 +55,7 @@ type TerminalStatus = "idle" | "starting" | "running" | "stopping" | "exited";
 type AgentTerminalFontFamily = "theme" | "system" | "geist";
 type AgentTerminalFontWeight = "light" | "regular" | "medium";
 
-type AgentTerminalDisplaySettings = {
+export type AgentTerminalDisplaySettings = {
   fontFamily: AgentTerminalFontFamily;
   fontSize: number;
   fontWeight: AgentTerminalFontWeight;
@@ -79,7 +79,7 @@ const DISPLAY_STORAGE_KEY = "plannotator-agent-terminal-display";
 const MIN_FONT_SIZE = 10;
 const MAX_FONT_SIZE = 24;
 
-const DEFAULT_DISPLAY_SETTINGS: AgentTerminalDisplaySettings = {
+export const DEFAULT_DISPLAY_SETTINGS: AgentTerminalDisplaySettings = {
   fontFamily: "theme",
   fontSize: 14,
   fontWeight: "regular",
@@ -235,12 +235,6 @@ export const AnnotateAgentTerminalPanel = forwardRef<
     [],
   );
 
-  const resetDisplaySettings = useCallback(() => {
-    setDisplaySettings(DEFAULT_DISPLAY_SETTINGS);
-    writeDisplaySettings(DEFAULT_DISPLAY_SETTINGS);
-    onSideChange("left");
-  }, [onSideChange]);
-
   const selectedAgent =
     availableAgents.find((agent) => agent.id === selectedAgentId) ?? null;
   const canStart =
@@ -354,7 +348,6 @@ export const AnnotateAgentTerminalPanel = forwardRef<
                 side={side}
                 onChange={updateDisplaySettings}
                 onSideChange={onSideChange}
-                onReset={resetDisplaySettings}
               />
               <button
                 type="button"
@@ -537,21 +530,23 @@ function formatExit(event: PtyExit): string {
   return `Exited ${event.exitCode}`;
 }
 
-function AgentTerminalDisplayPopover({
+/** Exported for tests (the surrounding panel needs a live WebTUI session to
+ * render this popover). `defaultOpen` is a test seam only. */
+export function AgentTerminalDisplayPopover({
   settings,
   side,
   onChange,
   onSideChange,
-  onReset,
+  defaultOpen,
 }: {
   settings: AgentTerminalDisplaySettings;
   side: AnnotateAgentTerminalSide;
   onChange: (updates: Partial<AgentTerminalDisplaySettings>) => void;
   onSideChange: (side: AnnotateAgentTerminalSide) => void;
-  onReset: () => void;
+  defaultOpen?: boolean;
 }) {
   return (
-    <Popover>
+    <Popover defaultOpen={defaultOpen}>
       <PopoverTrigger
         render={
           <button
@@ -568,10 +563,16 @@ function AgentTerminalDisplayPopover({
         <div className="space-y-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="text-xs font-medium text-foreground">Display</div>
+            {/* Resets DISPLAY settings only, exactly as the label says.
+                Position is deliberately untouched: it is a durable layout
+                preference (config.json via onSideChange), not a display
+                setting, and the segmented control below is its one explicit,
+                disclosed way to change. Resetting it here silently overwrote
+                a chosen right/hidden placement. */}
             <button
               type="button"
               aria-label="Reset terminal display settings"
-              onClick={onReset}
+              onClick={() => onChange(DEFAULT_DISPLAY_SETTINGS)}
               className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
             >
               <RotateCcw className="h-3.5 w-3.5" />

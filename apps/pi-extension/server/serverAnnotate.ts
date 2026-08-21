@@ -937,18 +937,32 @@ export async function startAnnotateServer(options: {
 		url: buildAdvertisedUrl(port),
 		waitForDecision: () => decisionPromise,
 		stop: () => {
-			// try/finally: a throwing dispose must never leave the listener bound.
-			try {
+			// Per-step guard (mirrors the Bun server's runGuardedShutdown): one
+			// throwing disposal must not skip the steps after it — agent-terminal
+			// teardown is historically fragile (#1314) — and must never leave the
+			// listener bound.
+			const disposals: Array<[string, () => void]> = [
 				// First: watchers hold the embedded host process alive, and a
 				// throwing disposal below must not strand them.
-				closeAllFileBrowserWatchers();
-				clientLease.cancel();
+				["file browser watchers", () => closeAllFileBrowserWatchers()],
 				// Long-lived host process: an unclosed lease stream would keep its
 				// heartbeat timer and socket alive past the session, and would keep
 				// server.close() from ever completing.
-				clientLease.closeSessions();
-				aiRuntime?.dispose();
-				agentTerminal.dispose();
+				["client lease", () => {
+					clientLease.cancel();
+					clientLease.closeSessions();
+				}],
+				["AI runtime", () => aiRuntime?.dispose()],
+				["agent terminal", () => agentTerminal.dispose()],
+			];
+			try {
+				for (const [name, dispose] of disposals) {
+					try {
+						dispose();
+					} catch (error) {
+						console.error(`[plannotator] annotate shutdown: ${name} disposal failed:`, error);
+					}
+				}
 			} finally {
 				server.close();
 				// close() only stops the listener; drain browser keep-alive sockets so a

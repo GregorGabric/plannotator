@@ -177,6 +177,55 @@ export interface AnnotateServerResult {
 // --- Server Implementation ---
 
 /**
+ * Run shutdown disposal steps with per-step isolation, then close the
+ * listener. One throwing step (agent-terminal teardown is historically
+ * fragile, #1314) must never skip the steps after it — before this guard, a
+ * throw mid-sequence orphaned the live proxy's listener and its upstream
+ * WebSockets. Failures are reported through `log` (stderr by default) with
+ * the step's name; `closeListener` runs unconditionally, even against a
+ * pathological throw outside the steps.
+ */
+export function runGuardedShutdown(
+  steps: ReadonlyArray<readonly [name: string, dispose: () => void]>,
+  closeListener: () => void,
+  log: (message: string, error: unknown) => void = (message, error) =>
+    console.error(message, error),
+): void {
+  try {
+    for (const [name, dispose] of steps) {
+      try {
+        dispose();
+      } catch (error) {
+        log(`[plannotator] annotate shutdown: ${name} disposal failed:`, error);
+      }
+    }
+  } finally {
+    closeListener();
+  }
+}
+
+/**
+ * Stable identity for a live app session's annotation draft.
+ *
+ * A live session's draft has to key off WHICH APP is being annotated, since
+ * the session holds no document text of its own. Normalizing through the URL
+ * parser first so the same dev server recovers its draft when the target is
+ * spelled slightly differently on a later run (a trailing slash, an uppercase
+ * host, an explicit :80). Unparseable values fall back to the trimmed string:
+ * a target that never reached the URL parser cannot have started a proxy
+ * anyway, and a per-target key that is merely raw is still per-target.
+ */
+export function liveAppDraftIdentity(targetUrl: string): string {
+  try {
+    const url = new URL(targetUrl);
+    const path = url.pathname.replace(/\/+$/, "");
+    return `${url.origin}${path}${url.search}`;
+  } catch {
+    return targetUrl.trim();
+  }
+}
+
+/**
  * Start the Annotate server
  *
  * Handles:
@@ -290,10 +339,23 @@ export async function startAnnotateServer(
     folderAnnotateHistoryCache.set(resolvedFilePath, result);
     return result;
   }
+  // Draft identity. Content-derived for the modes that HAVE content, and
+  // path-derived for the modes that do not.
+  //
+  // A live app session has no document body at all: annotate-app resolves
+  // `markdown` to "" by construction, because the page lives behind the
+  // proxy rather than in a string the server holds. Hashing that empty body
+  // gave EVERY live session on the machine the one hash of "", so two
+  // sessions against different dev servers shared a single draft slot and
+  // deterministically overwrote each other's in-progress annotations. The
+  // session's target is its identity here, exactly as the folder path is the
+  // folder session's identity.
   const draftSource =
-    mode === "annotate-folder" && folderPath
-      ? `folder:${resolvePath(folderPath)}`
-      : renderHtml && rawHtml ? rawHtml : markdown;
+    mode === "annotate-app" && liveApp
+      ? `annotate-app\0${liveAppDraftIdentity(liveApp.targetUrl)}`
+      : mode === "annotate-folder" && folderPath
+        ? `folder:${resolvePath(folderPath)}`
+        : renderHtml && rawHtml ? rawHtml : markdown;
   const draftKey = contentHash(draftSource);
 
   // Durable submit records (#678): the caller consuming waitForDecision() may
@@ -1137,17 +1199,25 @@ export async function startAnnotateServer(
   void warmFileListCache(process.cwd(), "code");
 
   const stop = () => {
-    // try/finally: a throwing disposal must never leave the listener bound.
-    try {
-      closeAllFileBrowserWatchers();
-      clientLease.cancel();
-      clientLease.closeSessions();
-      aiRuntime?.dispose();
-      agentTerminal.dispose();
-      liveProxy?.stop();
-    } finally {
-      server.stop();
-    }
+    // Every disposal step is guarded individually (runGuardedShutdown):
+    // agent-terminal teardown is historically fragile (#1314), and in a flat
+    // sequence one throwing step would skip everything after it — notably
+    // liveProxy.stop(), orphaning the live proxy's listener and its upstream
+    // WebSockets. A failed step is reported and the rest still run; the
+    // listener itself closes regardless.
+    runGuardedShutdown(
+      [
+        ["file browser watchers", () => closeAllFileBrowserWatchers()],
+        ["client lease", () => {
+          clientLease.cancel();
+          clientLease.closeSessions();
+        }],
+        ["AI runtime", () => aiRuntime?.dispose()],
+        ["agent terminal", () => agentTerminal.dispose()],
+        ["live proxy", () => liveProxy?.stop()],
+      ],
+      () => server.stop(),
+    );
   };
 
   // Notify caller that server is ready. An async ready handler that rejects
