@@ -150,3 +150,17 @@ find generated -name '*.ts' | while read -r f; do
     -e "s|(import[[:space:]]+['\"])(\.\.?/([^'\"/]+/)*[^'\"/.]+)(['\"])|\1\2.ts\4|g" \
     "$f" > "$f.tmp" && mv "$f.tmp" "$f"
 done
+
+# ---------------------------------------------------------------------------
+# Vendor the plannotator knowledge skill so Pi installs it declaratively via
+# the `pi.skills` manifest entry in package.json. Without this, a Pi user gets
+# the extension but none of the CLI reference the other hosts ship as a skill.
+#
+# Deliberately NOT given the `// @generated` header the .ts files above carry:
+# a SKILL.md must open with its YAML frontmatter on line 1, and any prepended
+# comment makes the skill unparseable to every loader that reads it. The copy
+# is kept honest the same way plannotator.html and call-flow-runtime/ are —
+# it is gitignored, so the only copy that can ever exist is this one.
+rm -rf skills
+mkdir -p skills
+cp -R ../skills/core/plannotator skills/plannotator
