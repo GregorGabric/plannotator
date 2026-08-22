@@ -509,7 +509,10 @@ const pasteApiUrl = process.env.PLANNOTATOR_PASTE_URL || undefined;
 //   > Copilot CLI (COPILOT_CLI)
 //   > OpenCode (OPENCODE)
 //   > Gemini CLI (GEMINI_CLI)
-//   > Claude Code (default fallback)
+//   > oh-my-pi harness (OMPCODE) — checked last because OMP exports OMPCODE
+//     into every shell it spawns; runtimes launched from an OMP session must
+//     still be detected as themselves. OMPCODE still wins over the terminal
+//     fallback below.
 //
 // To add a new agent, also add an entry to AGENT_CONFIG in
 // packages/shared/agents.ts (see header comment there).
@@ -520,6 +523,7 @@ const detectedOrigin: Origin =
   process.env.COPILOT_CLI ? "copilot-cli" :
   process.env.OPENCODE ? "opencode" :
   process.env.GEMINI_CLI ? "gemini-cli" :
+  process.env.OMPCODE ? "oh-my-pi" :
   "claude-code";
 
 type OpenCodeBridgeAgent = {
