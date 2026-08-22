@@ -187,6 +187,8 @@ describe("default uninstall", () => {
       "plannotator-review",
       "plannotator-annotate",
       "plannotator-last",
+      // The knowledge-layer CLI reference skill, installed to the same scopes.
+      "plannotator",
     ]) {
       writeText(join(homeDir, ".claude", "skills", skill, "SKILL.md"));
       writeText(join(homeDir, ".agents", "skills", skill, "SKILL.md"));
@@ -379,6 +381,8 @@ describe("default uninstall", () => {
     expect(result.ok).toBe(true);
     expect(existsSync(binary)).toBe(false);
     expect(existsSync(join(homeDir, ".claude", "skills", "plannotator-review"))).toBe(false);
+    expect(existsSync(join(homeDir, ".claude", "skills", "plannotator"))).toBe(false);
+    expect(existsSync(join(homeDir, ".agents", "skills", "plannotator"))).toBe(false);
     expect(existsSync(join(homeDir, ".agents", "skills", "plannotator-compound"))).toBe(true);
     expect(existsSync(join(homeDir, ".agents", "skills", "plannotator-archive"))).toBe(false);
     expect(existsSync(join(homeDir, ".kiro", "skills", "plannotator-setup-goal"))).toBe(false);

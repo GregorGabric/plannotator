@@ -1210,11 +1210,17 @@ if "!CLONE_OK!"=="1" (
                 xcopy /s /i /y /q "apps\skills\claude\%%S" "!CLAUDE_SKILLS_DIR!\%%S\" >nul 2>&1
             )
         )
+        REM The plannotator knowledge skill (CLI reference) has no Claude-only
+        REM injection form, so Claude installs the single-sourced core copy.
+        if exist "apps\skills\core\plannotator" (
+            if exist "!CLAUDE_SKILLS_DIR!\plannotator" rmdir /s /q "!CLAUDE_SKILLS_DIR!\plannotator" >nul 2>&1
+            xcopy /s /i /y /q "apps\skills\core\plannotator" "!CLAUDE_SKILLS_DIR!\plannotator\" >nul 2>&1
+        )
         echo Installed Claude Code skills to !CLAUDE_SKILLS_DIR!\
     )
     if exist "apps\skills\core" (
         if not exist "!AGENTS_SKILLS_DIR!" mkdir "!AGENTS_SKILLS_DIR!"
-        for %%S in (plannotator-review plannotator-annotate plannotator-last) do (
+        for %%S in (plannotator-review plannotator-annotate plannotator-last plannotator) do (
             if exist "apps\skills\core\%%S" (
                 REM Replace rather than merge so files removed upstream don't linger.
                 if exist "!AGENTS_SKILLS_DIR!\%%S" rmdir /s /q "!AGENTS_SKILLS_DIR!\%%S" >nul 2>&1

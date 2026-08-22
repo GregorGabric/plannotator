@@ -43,6 +43,15 @@ const CORE_SKILLS = [
   "plannotator-last",
 ] as const;
 
+// The knowledge-layer CLI reference skill (apps/skills/core/plannotator).
+// Installed to the same two scopes as CORE_SKILLS, but kept out of that list:
+// it never had a legacy slash command or a Codex-home era, so it must not
+// join LEGACY_COMMAND_NAMES (a user's own ~/.claude/commands/plannotator.md
+// would be collateral) or STALE_CODEX_SKILLS.
+const KNOWLEDGE_SKILLS = [
+  "plannotator",
+] as const;
+
 const EXTRA_SKILLS = [
   "plannotator-compound",
   "plannotator-setup-goal",
@@ -601,7 +610,7 @@ function removeInstalledFiles(
   paths: ReturnType<typeof resolveOwnedPaths>,
   state: MutableUninstallResult,
 ): void {
-  for (const skill of CORE_SKILLS) {
+  for (const skill of [...CORE_SKILLS, ...KNOWLEDGE_SKILLS]) {
     removePath(
       join(paths.claudeDir, "skills", skill),
       request,
