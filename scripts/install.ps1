@@ -1202,6 +1202,9 @@ try {
                 # Kiro-specific skills (origin baked in) come from apps/kiro-cli/skills.
                 Copy-SkillIfPresent "apps\kiro-cli\skills\plannotator-review" $kiroSkillsDir
                 Copy-SkillIfPresent "apps\kiro-cli\skills\plannotator-annotate" $kiroSkillsDir
+                # The plannotator knowledge skill (CLI reference) has no Kiro-specific
+                # form, so Kiro receives the single-sourced core copy like every other scope.
+                Copy-SkillIfPresent "apps\skills\core\plannotator" $kiroSkillsDir
                 # Two extras come from apps/skills/extra (not duplicated into apps/kiro-cli/skills).
                 Copy-SkillIfPresent "apps\skills\extra\plannotator-setup-goal" $kiroSkillsDir
                 Copy-SkillIfPresent "apps\skills\extra\plannotator-visual-explainer" $kiroSkillsDir

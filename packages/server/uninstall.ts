@@ -66,6 +66,10 @@ const LEGACY_COMMAND_NAMES = [
 const KIRO_SKILLS = [
   "plannotator-review",
   "plannotator-annotate",
+  // The knowledge skill installs into ~/.kiro/skills like the action skills.
+  // Safe to name here: this list only ever removes ~/.kiro/skills/<name>
+  // directories, never a command file a user may own.
+  "plannotator",
   "plannotator-setup-goal",
   "plannotator-visual-explainer",
   "plannotator-archive",
@@ -634,7 +638,7 @@ function removeInstalledFiles(
 
   cleanupStaleSkillLayout(
     join(paths.claudeDir, "skills", "core"),
-    CORE_SKILLS,
+    [...CORE_SKILLS, ...KNOWLEDGE_SKILLS],
     request,
     state,
   );
@@ -666,6 +670,21 @@ function removeInstalledFiles(
     for (const configDir of paths.configDirs) {
       removePath(
         join(configDir, "opencode", "commands", `${command}.md`),
+        request,
+        state,
+      );
+    }
+  }
+
+  // @plannotator/opencode's postinstall writes the knowledge skill here so
+  // OpenCode's `{skill,skills}/**/SKILL.md` scan under its config dir finds it.
+  // Skills only — the sibling commands/ sweep above is driven by
+  // LEGACY_COMMAND_NAMES precisely so a user's own commands/plannotator.md
+  // stays out of scope.
+  for (const skill of KNOWLEDGE_SKILLS) {
+    for (const configDir of paths.configDirs) {
+      removePath(
+        join(configDir, "opencode", "skills", skill),
         request,
         state,
       );

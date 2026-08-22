@@ -3,17 +3,31 @@
  * (apps/skills/core/plannotator/SKILL.md).
  *
  * The failure this catches: the skill is a prose copy of the CLI surface, and
- * prose copies drift. A subcommand or flag renamed or removed in the CLI
- * leaves the skill teaching agents commands that no longer exist; a new
- * user-facing subcommand added to the CLI leaves the skill silently
- * incomplete. Both directions are asserted against the CLI's own sources:
- * the usage text in cli.ts (plus GUIDE_CLI_USAGE via the guide entry) and
- * the argument-parsing sites in the CLI source files.
+ * prose copies drift. What each assertion actually covers differs, so do not
+ * read this file as a blanket "the skill is complete" proof:
+ *
+ *   - Subcommands: BIDIRECTIONAL. Every subcommand the skill documents must
+ *     exist in the CLI, and every user-facing CLI subcommand must appear in
+ *     the skill. A renamed, removed, or newly added subcommand fails here.
+ *   - Flags: ONE-DIRECTIONAL. Every flag the skill mentions must be accepted
+ *     somewhere in the CLI, so a renamed or deleted flag fails. The reverse
+ *     is NOT asserted: a new CLI flag that the skill never mentions passes.
+ *     Making that bidirectional needs per-subcommand flag scoping (a global
+ *     "every flag must be documented" set would demand the skill list every
+ *     flag of every subcommand) and is deliberately left as follow-up.
+ *   - Origins: BIDIRECTIONAL on values. The PLANNOTATOR_ORIGIN row must name
+ *     every AGENT_CONFIG key and no key the config does not have, so adding
+ *     an origin (like oh-my-pi, #1373) cannot silently leave the row stale.
+ *
+ * Sources of truth: the usage text in cli.ts (plus GUIDE_CLI_USAGE via the
+ * guide entry), the argument-parsing sites in the CLI source files, and
+ * AGENT_CONFIG in packages/core/agents.ts.
  */
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { AGENT_CONFIG } from "@plannotator/shared/agents";
 import {
   formatTopLevelHelp,
   SUBCOMMAND_HELP,
@@ -139,6 +153,35 @@ describe("plannotator knowledge skill freshness", () => {
       expect(
         cliFlags.has(flag),
         `SKILL.md mentions ${flag} but no CLI usage text or parser accepts it — update apps/skills/core/plannotator/SKILL.md`,
+      ).toBe(true);
+    }
+  });
+
+  test("the PLANNOTATOR_ORIGIN row names exactly the origins AGENT_CONFIG defines", () => {
+    // #1373 added oh-my-pi and left this row stale. AGENT_CONFIG is the one
+    // list of valid origins, so bind the row to it in both directions: a new
+    // origin must be added here, and the row may not invent one.
+    const row = skillDoc
+      .split("\n")
+      .find((line) => line.includes("`PLANNOTATOR_ORIGIN`"));
+    expect(
+      row,
+      "SKILL.md no longer has a `PLANNOTATOR_ORIGIN` row — this guard cannot pass vacuously",
+    ).toBeDefined();
+
+    const documentedOrigins = new Set(
+      [...(row ?? "").matchAll(/`([a-z][a-z0-9-]*)`/g)].map((m) => m[1]),
+    );
+    for (const origin of Object.keys(AGENT_CONFIG)) {
+      expect(
+        documentedOrigins.has(origin),
+        `AGENT_CONFIG defines the origin \`${origin}\` but the PLANNOTATOR_ORIGIN row in apps/skills/core/plannotator/SKILL.md does not list it`,
+      ).toBe(true);
+    }
+    for (const origin of documentedOrigins) {
+      expect(
+        origin in AGENT_CONFIG,
+        `The PLANNOTATOR_ORIGIN row in apps/skills/core/plannotator/SKILL.md lists \`${origin}\`, which is not an AGENT_CONFIG origin`,
       ).toBe(true);
     }
   });

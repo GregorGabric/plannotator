@@ -188,6 +188,11 @@ describe("install.sh", () => {
     // Kiro-specific skills (origin baked in) come from apps/kiro-cli/skills.
     expect(script).toContain('copy_skill_if_present apps/kiro-cli/skills/plannotator-review "$KIRO_SKILLS_DIR"');
     expect(script).toContain('copy_skill_if_present apps/kiro-cli/skills/plannotator-annotate "$KIRO_SKILLS_DIR"');
+    // The knowledge skill has no Kiro-specific form either, so Kiro gets the
+    // same single-sourced core copy as Claude and ~/.agents. Kiro shipping
+    // only the action skills and no CLI reference was the #1377 install-reach
+    // gap; assert the copy line so the scope cannot be dropped again.
+    expect(script).toContain('copy_skill_if_present apps/skills/core/plannotator "$KIRO_SKILLS_DIR"');
     // The two extras Kiro keeps receiving come from apps/skills/extra.
     expect(script).toContain('copy_skill_if_present apps/skills/extra/plannotator-setup-goal "$KIRO_SKILLS_DIR"');
     expect(script).toContain('copy_skill_if_present apps/skills/extra/plannotator-visual-explainer "$KIRO_SKILLS_DIR"');
@@ -1192,6 +1197,21 @@ describe("install shared behavior", () => {
       expect(script, name).toContain(
         "To uninstall later: plannotator uninstall",
       );
+    }
+  });
+
+  test("every installer copies the knowledge skill into the Kiro scope", () => {
+    // #1377 install reach: the Kiro leg copied only the two action skills, so
+    // Kiro users got launchers and no CLI reference. Each script spells the
+    // copy differently, so assert the source path reaches the Kiro skills dir
+    // in each dialect rather than one shared string.
+    const kiroKnowledgeSkillCopy: ReadonlyArray<readonly [string, string]> = [
+      ["install.sh", 'copy_skill_if_present apps/skills/core/plannotator "$KIRO_SKILLS_DIR"'],
+      ["install.ps1", 'Copy-SkillIfPresent "apps\\skills\\core\\plannotator" $kiroSkillsDir'],
+      ["install.cmd", 'xcopy /s /i /y /q "apps\\skills\\core\\plannotator" "!KIRO_SKILLS_DIR!\\plannotator\\"'],
+    ];
+    for (const [name, expected] of kiroKnowledgeSkillCopy) {
+      expect(readScript(name), name).toContain(expected);
     }
   });
 

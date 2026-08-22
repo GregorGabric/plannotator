@@ -1259,6 +1259,12 @@ if "!CLONE_OK!"=="1" (
                 xcopy /s /i /y /q "apps\kiro-cli\skills\%%S" "!KIRO_SKILLS_DIR!\%%S\" >nul 2>&1
             )
         )
+        REM The plannotator knowledge skill (CLI reference) has no Kiro-specific
+        REM form, so Kiro receives the single-sourced core copy like every other scope.
+        if exist "apps\skills\core\plannotator" (
+            if exist "!KIRO_SKILLS_DIR!\plannotator" rmdir /s /q "!KIRO_SKILLS_DIR!\plannotator" >nul 2>&1
+            xcopy /s /i /y /q "apps\skills\core\plannotator" "!KIRO_SKILLS_DIR!\plannotator\" >nul 2>&1
+        )
         REM The two extras Kiro keeps receiving come from apps\skills\extra.
         if exist "apps\skills\extra\plannotator-setup-goal" (
             if exist "!KIRO_SKILLS_DIR!\plannotator-setup-goal" rmdir /s /q "!KIRO_SKILLS_DIR!\plannotator-setup-goal" >nul 2>&1

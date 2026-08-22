@@ -1781,6 +1781,10 @@ checkout_failed=0
         # Kiro-specific skills (origin baked in) come from apps/kiro-cli/skills.
         copy_skill_if_present apps/kiro-cli/skills/plannotator-review "$KIRO_SKILLS_DIR"
         copy_skill_if_present apps/kiro-cli/skills/plannotator-annotate "$KIRO_SKILLS_DIR"
+        # The plannotator knowledge skill (CLI reference) has no Kiro-specific
+        # form, so Kiro receives the single-sourced core copy like every other
+        # scope. Without it, Kiro users get the action skills but no reference.
+        copy_skill_if_present apps/skills/core/plannotator "$KIRO_SKILLS_DIR"
         # Extras come from apps/skills/extra (not duplicated into apps/kiro-cli/skills).
         copy_skill_if_present apps/skills/extra/plannotator-setup-goal "$KIRO_SKILLS_DIR"
         copy_skill_if_present apps/skills/extra/plannotator-visual-explainer "$KIRO_SKILLS_DIR"

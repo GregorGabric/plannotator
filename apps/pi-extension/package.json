@@ -21,9 +21,13 @@
     "ai-agent",
     "coding-agent"
   ],
+  "//pi": "skills/ is vendored by vendor.sh from apps/skills/core/plannotator and is gitignored, so the shipped copy cannot drift from the single source.",
   "pi": {
     "extensions": [
       "./"
+    ],
+    "skills": [
+      "skills/plannotator/SKILL.md"
     ]
   },
   "files": [
@@ -42,6 +46,7 @@
     "server/",
     "todo-providers/",
     "generated/",
+    "skills/",
     "README.md",
     "plannotator.html",
     "review-editor.html"
