@@ -143,10 +143,12 @@ type PersistedPlannotatorState = {
 
 /**
  * One-shot countermand delivered on the first prompt after a planning or
- * executing phase returns to idle (#1320). The idle context filter silently
- * strips the phase framing, but the model's own plan-mode turns — and any
- * blocked-write tool results — stay in history and keep steering it, so the
- * end of plan mode must be stated, not just implied by removal.
+ * executing phase returns to idle (#1320). It is the SOLE mechanism ending
+ * plan mode in the conversation: delivered framing stays in history untouched
+ * (#1380 — removing it from mid-history shifted every later message and
+ * invalidated the provider's cached prefix), so the model's plan-mode steering
+ * — its own turns, blocked-write tool results, and the framing itself — is
+ * neutralized by this explicit notice, never by silent removal.
  */
 const PLAN_MODE_OFF_NOTICE = `[PLANNOTATOR - PLAN MODE OFF]
 Plannotator plan mode has ended. Disregard all earlier Plannotator planning or execution instructions from this session: the planning restrictions (markdown-only writes, plan submission for review) and the execution checklist protocol ([DONE:n] markers) no longer apply, and the plan-submission tool is no longer available. Full tool access is restored — respond and use tools normally. If the user wants planning again, they will re-enable plan mode.`;
@@ -1388,14 +1390,13 @@ export default function plannotator(pi: ExtensionAPI): void {
 		if (phase !== "planning" && phase !== "executing") {
 			// Idle injects nothing (#1269) — with one exception: the first
 			// prompt after a planning/executing → idle transition delivers a
-			// one-shot plan-mode-off countermand (#1320). The idle filter
-			// strips the phase framing silently, but the model's own plan-mode
-			// turns and blocked-write tool results remain in history and keep
-			// steering it, so the end of plan mode must be said out loud.
-			// Cache-wise this is free: the notice is a conversation-suffix
-			// append at a boundary where stripping the framing has already
-			// invalidated the cached prefix. Fresh idle sessions never arm the
-			// latch and keep their byte-stable prefix.
+			// one-shot plan-mode-off countermand (#1320). Delivered framing
+			// stays in history (#1380), so this notice is what ends plan mode:
+			// the model's plan-mode turns, blocked-write tool results, and the
+			// framing itself keep steering it until the end is said out loud.
+			// Cache-wise the notice is free unconditionally — a pure
+			// conversation-suffix append on a prefix nothing else perturbs.
+			// Fresh idle sessions never arm the latch and inject nothing.
 			if (phase !== "idle" || !idleNoticePending) return;
 			idleNoticePending = false;
 			persistState();
@@ -1513,79 +1514,20 @@ Mark completed steps with [DONE:n] in your response.`
 		};
 	});
 
-	// Keep plannotator conversation messages coherent with the current phase.
-	// While idle, everything plannotator injected is filtered out — except the
-	// newest plan-mode-off notice (details.phase === "idle"), which is the
-	// countermand for the framing this very filter removes (#1320); stripping
-	// it too would re-create the silent-removal bug it exists to fix.
-	// During a phase, only the newest framing for the CURRENT phase survives:
-	// framing from other phases or earlier cycles is dropped (stale planning
-	// rules cannot leak into execution), along with todo-status messages that
-	// predate the current cycle's framing. The filter is deterministic within a
-	// phase, so it never perturbs the provider's cached prefix mid-phase; the
-	// only mid-history changes happen at phase transitions.
-	pi.on("context", async (event) => {
-		if (phase === "idle") {
-			// Anchor search mirrors the per-phase logic below: the newest idle
-			// framing (the plan-mode-off notice) survives, every other injected
-			// message is stripped. Deterministic across idle turns, so the
-			// filter itself never perturbs the provider's cached prefix while
-			// idle — sessions that never entered plan mode filter nothing.
-			let idleAnchor = -1;
-			for (let i = event.messages.length - 1; i >= 0; i--) {
-				const msg = event.messages[i] as { customType?: string; details?: unknown };
-				if (
-					msg.customType === "plannotator-framing" &&
-					(msg.details as { phase?: string } | undefined)?.phase === "idle"
-				) {
-					idleAnchor = i;
-					break;
-				}
-			}
-			return {
-				messages: event.messages.filter((m, index) => {
-					const msg = m as { customType?: string; role?: string; content?: unknown };
-					if (msg.customType === "plannotator-framing") return index === idleAnchor;
-					if (msg.customType === "plannotator-context") return false;
-					if (msg.role !== "user") return true;
-
-					const content = msg.content;
-					if (typeof content === "string") {
-						return !content.includes("[PLANNOTATOR -");
-					}
-					if (Array.isArray(content)) {
-						return !content.some(
-							(c) =>
-								c.type === "text" &&
-								(c as { text?: string }).text?.includes("[PLANNOTATOR -"),
-						);
-					}
-					return true;
-				}),
-			};
-		}
-
-		let anchor = -1;
-		for (let i = event.messages.length - 1; i >= 0; i--) {
-			const msg = event.messages[i] as { customType?: string; details?: unknown };
-			if (
-				msg.customType === "plannotator-framing" &&
-				(msg.details as { phase?: string } | undefined)?.phase === phase
-			) {
-				anchor = i;
-				break;
-			}
-		}
-
-		return {
-			messages: event.messages.filter((m, index) => {
-				const msg = m as { customType?: string };
-				if (msg.customType === "plannotator-framing") return index === anchor;
-				if (msg.customType === "plannotator-context") return anchor === -1 || index > anchor;
-				return true;
-			}),
-		};
-	});
+	// There is deliberately NO "context" handler (#1380). One existed here and
+	// stripped plannotator-injected messages at phase transitions; Pi applies a
+	// context handler's result only to the outgoing LLM request (the runner
+	// structuredClones history and transformContext shapes the request in
+	// streamAssistantResponse), but the provider's prompt cache keys on the
+	// exact request prefix, so removing an already-sent mid-history message
+	// shifted every later message and re-billed the whole tail as uncached
+	// input (the reporter measured 88 of 119 messages invalidated on one plan
+	// completion). The conversation is append-only instead: delivered framing
+	// and todo snapshots stay in history for the life of the session, and
+	// stale instructions are neutralized by countermands — the executing
+	// framing supersedes planning, and PLAN_MODE_OFF_NOTICE supersedes both —
+	// which models follow by recency. Compaction remains the one boundary that
+	// rewrites history, and it invalidates the provider cache by itself.
 
 	// Track execution progress
 	pi.on("turn_end", async (event, ctx) => {
@@ -1810,8 +1752,10 @@ Mark completed steps with [DONE:n] in your response.`
 	// Compaction summarizes conversation history and can swallow the delivered
 	// framing message (custom messages are ordinary compactable messages), so
 	// reopen the latch: the next prompt re-delivers the phase framing. If the
-	// framing survived in the kept tail, the context filter keeps only the
-	// newest copy, so re-delivery never duplicates.
+	// framing survived in the kept tail, re-delivery duplicates it — accepted
+	// (#1380): the copies are identical instructions, the newest governs, and
+	// compaction already invalidated the cached prefix, so appending a fresh
+	// copy costs nothing while removing the survivor would cost the cache.
 	pi.on("session_compact", async () => {
 		if (phase !== "planning" && phase !== "executing") return;
 		framingDelivered = false;
