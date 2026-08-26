@@ -61,6 +61,8 @@ export interface DocumentWebMcpInputs {
   linkedDoc: {
     isActive: boolean;
     filepath: string | null;
+    /** useLinkedDoc's load error; a failed open lands here rather than rejecting. */
+    error: string | null;
     getDocAnnotations: () => Map<string, CachedDocState>;
     open: (path: string) => Promise<void>;
   };
@@ -146,7 +148,20 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
   const overlayRef = useRef<OptimisticOverlay>({ added: new Map(), patched: new Map(), removed: new Set() });
   // Waiters for `reveal { path }`: resolved by the commit effect below once
   // the navigated document is the open one.
-  const navigationWaitersRef = useRef<Array<{ path: string; resolve: (ok: boolean) => void }>>([]);
+  const navigationWaitersRef = useRef<Array<{ path: string; resolve: (ok: boolean) => void; timer: ReturnType<typeof setTimeout> }>>([]);
+  /** Resolve every waiter for `path` (or all when null) and clear their timers. */
+  const settleWaiter = (path: string | null, ok: boolean) => {
+    const remaining: typeof navigationWaitersRef.current = [];
+    for (const waiter of navigationWaitersRef.current) {
+      if (path === null || waiter.path === path) {
+        clearTimeout(waiter.timer);
+        waiter.resolve(ok);
+      } else {
+        remaining.push(waiter);
+      }
+    }
+    navigationWaitersRef.current = remaining;
+  };
 
   const surface: DocumentSurface = inputs.liveApp ? 'live-app' : inputs.renderAs === 'html' ? 'html' : 'markdown';
   const writable = !inputs.archiveMode && inputs.submitted === null;
@@ -182,27 +197,29 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
     const dirFor = (path: string): string | null =>
       current().fileBrowserDirs.find((d) => !d.isVault && path.startsWith(`${d.path}/`))?.path ?? null;
     /** Navigate to a sibling and resolve once React has committed it as the open document. */
+    /** Whether the session knows `path` at all (folder tree or linked-doc cache). */
+    const knowsPath = (path: string): boolean => {
+      const i = current();
+      if (i.linkedDoc.getDocAnnotations().has(path)) return true;
+      if (i.annotateSource === 'folder') return flattenFileBrowserDirs(i.fileBrowserDirs).some((d) => d.path === path);
+      return false;
+    };
     const navigateTo = (path: string): Promise<boolean> => {
       const i = current();
+      // A path the session cannot know never opens; answer at once instead
+      // of waiting out the commit timeout (linkedDoc.open swallows fetch
+      // failures into its error state).
+      if (!knowsPath(path)) return Promise.resolve(false);
       // Folder sessions open through the file browser's own selection path so
       // the browser's active file, the doc URL (base + doc=1) and the linked
       // document stay in step, exactly like a click in the sidebar.
       const dir = i.annotateSource === 'folder' ? dirFor(path) : null;
       const open = dir && i.openFolderFile ? () => i.openFolderFile!(path, dir) : () => i.linkedDoc.open(path);
       const commit = new Promise<boolean>((resolve) => {
-        navigationWaitersRef.current.push({ path, resolve });
-        setTimeout(() => {
-          const index = navigationWaitersRef.current.findIndex((w) => w.resolve === resolve);
-          if (index >= 0) {
-            navigationWaitersRef.current.splice(index, 1);
-            resolve(false);
-          }
-        }, NAVIGATION_COMMIT_TIMEOUT_MS);
+        const timer = setTimeout(() => settleWaiter(path, false), NAVIGATION_COMMIT_TIMEOUT_MS);
+        navigationWaitersRef.current.push({ path, resolve, timer });
       });
-      void open().catch(() => {
-        const index = navigationWaitersRef.current.findIndex((w) => w.path === path);
-        if (index >= 0) navigationWaitersRef.current.splice(index, 1)[0]!.resolve(false);
-      });
+      void open().catch(() => settleWaiter(path, false));
       return commit;
     };
     return {
@@ -350,14 +367,14 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
   // document the open one (the DOM for it is mounted by then).
   const openFilepath = inputs.linkedDoc.filepath;
   useEffect(() => {
-    if (navigationWaitersRef.current.length === 0) return;
-    const remaining: typeof navigationWaitersRef.current = [];
-    for (const waiter of navigationWaitersRef.current) {
-      if (waiter.path === openFilepath) waiter.resolve(true);
-      else remaining.push(waiter);
-    }
-    navigationWaitersRef.current = remaining;
+    if (openFilepath !== null) settleWaiter(openFilepath, true);
   }, [openFilepath]);
+  // A failed load never becomes the open document: linkedDoc.open swallows
+  // the fetch failure into its error state, so that state fails the waiters.
+  const openError = inputs.linkedDoc.error;
+  useEffect(() => {
+    if (openError) settleWaiter(null, false);
+  }, [openError]);
 
   return result;
 }

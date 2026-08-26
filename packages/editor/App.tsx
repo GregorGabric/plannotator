@@ -3842,6 +3842,7 @@ const App: React.FC = () => {
     linkedDoc: {
       isActive: linkedDocHook.isActive,
       filepath: linkedDocHook.filepath,
+      error: linkedDocHook.error,
       getDocAnnotations: linkedDocHook.getDocAnnotations,
       open: (path: string) => linkedDocHook.open(path),
     },
