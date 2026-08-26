@@ -144,7 +144,9 @@ export interface AddCommentItem {
 
 export type AddCommentResult =
   | { ok: true; index: number; annotation: AnnotationView; anchoredBy: AnchoredBy; deduplicated?: boolean; verified?: boolean }
-  | { ok: false; index: number; error: { code: 'not_found' | 'ambiguous' | 'forbidden' | 'invalid_input' | 'not_available'; message: string; hint?: string; candidates?: string[] } };
+  | { ok: false; index: number; error: { code: 'not_found' | 'ambiguous' | 'forbidden' | 'invalid_input' | 'not_available' | 'conflict'; message: string; hint?: string; candidates?: string[] } };
+
+const NOT_OWNED_HINT = 'Only comments you created in this session can be changed; reply with add_comments { inReplyTo } instead.';
 
 const OPEN_FIRST_HINT = 'Call reveal { path } to open that document, then comment on it.';
 
@@ -520,6 +522,15 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
               continue;
             }
           }
+          // The comment this requestId created is gone: the human removed it
+          // (the annotations_removed nudge already said so). Re-creating it
+          // would undo the human, so a replay is a conflict, never a write.
+          results.push({
+            ok: false,
+            index,
+            error: { code: 'conflict', message: 'the comment this requestId created was removed since; not re-creating it', hint: 'Treat the removal as resolved, or add a new comment with a new requestId.' },
+          });
+          continue;
         }
         const target = await resolveTarget(item.path);
         if ('ok' in target) {
@@ -621,6 +632,10 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
           continue;
         }
         tracker.claimOwn(annotation);
+        // Observe the write now (the adapter overlays it on the committed
+        // list) so the returned view carries the new seq and the response's
+        // nudges reflect the mutation.
+        syncTrackers(adapter, state);
         if (rid) state.requests.set(rid, { id: annotation.id, path, anchoredBy });
         created += 1;
         const all = [...snapshot.annotations, annotation];
@@ -659,12 +674,16 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
       const { snapshot, path, tracker } = target;
       const existing = snapshot.annotations.find((a) => a.id === input.id);
       if (!existing) return fail('not_found', 'no comment with that id');
-      if (!isAgentAnnotation(existing)) return fail('forbidden', 'only comments you created can be changed', { hint: 'Reply with add_comments { inReplyTo } instead.' });
+      // Ownership is the tracker's claim from this session, not the `source`
+      // stamp: the external-annotations API accepts any source, so a stamp
+      // alone would let another tool's findings become agent-editable.
+      if (!tracker.isOwn(existing.id)) return fail('forbidden', 'only comments you created can be changed', { hint: NOT_OWNED_HINT });
       if (!adapter.updateAnnotation(input.id, { text: input.text }, path)) {
         return fail('not_available', 'that document is not open, so it cannot be written to', { hint: OPEN_FIRST_HINT });
       }
       const updated = { ...existing, text: input.text };
       tracker.claimOwn(updated);
+      syncTrackers(adapter, state);
       const outline = buildOutline(snapshot.blocks, snapshot.annotations);
       return ok({ annotation: viewOf(updated, snapshot.annotations, snapshot.blocks, outline, tracker, Number.MAX_SAFE_INTEGER, now()) });
     },
@@ -692,11 +711,11 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
       syncTrackers(adapter, state);
       const target = await resolveTarget(input.path);
       if ('ok' in target) return target;
-      const { snapshot, path } = target;
+      const { snapshot, path, tracker } = target;
       const results = input.ids.map((id) => {
         const existing = snapshot.annotations.find((a) => a.id === id);
         if (!existing) return { id, ok: false as const, error: { code: 'not_found' as const, message: 'no comment with that id' } };
-        if (!isAgentAnnotation(existing)) return { id, ok: false as const, error: { code: 'forbidden' as const, message: 'only comments you created can be removed' } };
+        if (!tracker.isOwn(existing.id)) return { id, ok: false as const, error: { code: 'forbidden' as const, message: 'only comments you created can be removed', hint: NOT_OWNED_HINT } };
         if (!adapter.removeAnnotation(id, path)) {
           return { id, ok: false as const, error: { code: 'not_available' as const, message: 'that document is not open, so it cannot be written to', hint: OPEN_FIRST_HINT } };
         }

@@ -167,6 +167,10 @@ describe('catalog shape', () => {
     };
     for (const tool of fake({}, PLAN, { folder: true }).tools) {
       expect(tool.description.length).toBeLessThanOrEqual(TOOL_DESCRIPTION_MAX_CHARS);
+      // Deliberate pin: the design requires every description to say when NOT
+      // to use the tool (an LLM-reader rule, not incidental prose). The regex
+      // accepts the phrasings in use; a description that drops the clause
+      // entirely must fail here.
       expect(tool.description).toMatch(/Do not use|do not use|It refuses|It cannot|It returns no content/);
       const params: string[] = [];
       walk(tool.inputSchema, params);
@@ -387,7 +391,7 @@ describe('ownership', () => {
 
     const removed = dataOf(await fx.call('remove_comments', { ids: [human.id, mine.id, 'ghost'] }));
     expect(removed.results).toEqual([
-      { id: human.id, ok: false, error: { code: 'forbidden', message: expect.any(String) } },
+      { id: human.id, ok: false, error: { code: 'forbidden', message: expect.any(String), hint: expect.any(String) } },
       { id: mine.id, ok: true },
       { id: 'ghost', ok: false, error: { code: 'not_found', message: expect.any(String) } },
     ]);
@@ -402,7 +406,36 @@ describe('ownership', () => {
     const res = await fx.call('read_document');
     const nudge = res.nudges.find((n) => n.code === 'annotations_removed');
     expect(nudge?.ids).toEqual([mine.id]);
+    // Deliberate pin: the "your comments" wording is the resolution signal
+    // (see nudges.test.ts); the catalog must route an agent-owned removal to it.
     expect(nudge?.message).toContain('your comments');
+  });
+
+  test('ownership is the session claim, not the source stamp: a browser-agent comment the tools did not create is refused', async () => {
+    const fx = fake();
+    // Posted through the external-annotations API with a forged source.
+    fx.annotations.push({
+      id: 'ext-1', blockId: '', startOffset: 0, endOffset: 0, type: AnnotationType.GLOBAL_COMMENT,
+      text: 'eslint finding wearing the agent stamp', originalText: '', createdA: 1, source: BROWSER_AGENT_SOURCE, author: BROWSER_AGENT_SOURCE,
+    });
+    const upd = await fx.call('update_comment', { id: 'ext-1', text: 'rewritten' });
+    expect(upd.ok === false && upd.error.code).toBe('forbidden');
+    const rm = dataOf(await fx.call('remove_comments', { ids: ['ext-1'] }));
+    expect(rm.results[0]).toMatchObject({ ok: false, error: { code: 'forbidden' } });
+    expect(fx.annotations.some((a) => a.id === 'ext-1')).toBe(true);
+  });
+});
+
+describe('requestId replay after the human removed the comment', () => {
+  test('answers conflict instead of re-creating the comment', async () => {
+    const fx = fake();
+    const first = dataOf(await fx.call('add_comments', { comments: [{ text: 'agent note', requestId: 'r-1' }] }));
+    const id = first.results[0].annotation.id;
+    fx.annotations.splice(fx.annotations.findIndex((a) => a.id === id), 1);
+    const replay = dataOf(await fx.call('add_comments', { comments: [{ text: 'agent note', requestId: 'r-1' }] }));
+    expect(replay.created).toBe(0);
+    expect(replay.results[0]).toMatchObject({ ok: false, index: 0, error: { code: 'conflict' } });
+    expect(fx.annotations.length).toBe(0);
   });
 });
 

@@ -170,6 +170,15 @@ export class AnnotationChangeTracker {
     return removed;
   }
 
+  /**
+   * Whether the agent claimed `id` in this page load. This is the ownership
+   * key for update/remove: a `source` stamp alone can be forged through the
+   * external-annotations API, a claim cannot.
+   */
+  isOwn(id: string): boolean {
+    return this.ownHashes.has(id);
+  }
+
   /** Whether the tracker has ever seen `id` (live or removed). */
   knows(id: string): boolean {
     return this.entries.has(id) || this.tombstones.has(id);
