@@ -63,3 +63,10 @@ export {
   type WebMcpActivity,
 } from './activity';
 export { useToolset, type UseToolsetOptions, type UseToolsetResult } from './useToolset';
+export {
+  WEBMCP_TOOLS_COOKIE,
+  getWebMcpToolsEnabled,
+  setWebMcpToolsEnabled,
+  subscribeWebMcpToolsEnabled,
+  useWebMcpToolsEnabled,
+} from './preference';

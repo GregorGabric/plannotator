@@ -4,6 +4,7 @@ import type { AnnotateAgentTerminalSide } from '@plannotator/core/agent-terminal
 import type { Origin } from '@plannotator/core/agents';
 import type { DiffLineBgIntensity } from '@plannotator/core/config-types';
 import { configStore, useConfigValue, setReviewPanelView, setReviewDefaultDiffType } from '../config';
+import { setWebMcpToolsEnabled, useWebMcpToolsEnabled } from '../webmcp/preference';
 import { loadDiffFont } from '../utils/diffFonts';
 import { TaterSpritePullup } from './TaterSpritePullup';
 import { getIdentity, regenerateIdentity, setCustomIdentity, isIdentityEditable } from '../utils/identity';
@@ -853,7 +854,7 @@ const CommentsTab: React.FC = () => {
 };
 
 export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange, onIdentityChange, origin, mode = 'plan', onUIPreferencesChange, externalOpen, onExternalClose, aiProviders = [], gitUser, sinceBaseUnavailable, isCompactTouchLayout = false, onDetectObsidianVaults, agentTerminalAvailable = false, webmcpAvailable = false }) => {
-  const webmcpTools = useConfigValue('webmcpTools');
+  const webmcpTools = useWebMcpToolsEnabled();
   const [showDialog, setShowDialog] = useState(false);
   const settingsWasOpenRef = useRef(false);
   const [themePreview, setThemePreview] = useState(false);
@@ -1289,7 +1290,8 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
 
                     {/* Agent tools (WebMCP). Shown only when the browser
                         exposes document.modelContext; off unregisters the
-                        tools for this browser. Cookie-only, default on. */}
+                        tools for this browser. Cookie-only and idle at its
+                        default: no cookie exists until the user opts out. */}
                     {webmcpAvailable && (
                       <>
                         <div className="border-t border-border" />
@@ -1304,7 +1306,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                             role="switch"
                             aria-checked={webmcpTools}
                             aria-label="Agent tools"
-                            onClick={() => configStore.set('webmcpTools', !webmcpTools)}
+                            onClick={() => setWebMcpToolsEnabled(!webmcpTools)}
                             className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                               webmcpTools ? 'bg-primary' : 'bg-muted'
                             }`}

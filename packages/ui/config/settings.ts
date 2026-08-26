@@ -247,20 +247,6 @@ export const SETTINGS = {
     serverKey: undefined, fromServer: undefined, toServer: undefined,
   },
 
-  // WebMCP tools (browser-agent read-and-comment tools on plan review and
-  // annotate). Cookie-only: it is a per-browser opt-out, and the API only
-  // exists in a browser the user chose for its agent. Default on. The
-  // Settings row is shown only when `document.modelContext` exists.
-  webmcpTools: {
-    defaultValue: true as boolean,
-    fromCookie: () => {
-      const value = storage.getItem('plannotator-webmcp-tools');
-      return value === 'true' ? true : value === 'false' ? false : undefined;
-    },
-    toCookie: (value: boolean) => storage.setItem('plannotator-webmcp-tools', String(value)),
-    serverKey: undefined, fromServer: undefined, toServer: undefined,
-  },
-
   // Compact left-panel preferences. These are deliberately cookie-only: they
   // shape the local file-list chrome without changing review semantics or the
   // repository state, and should follow the reviewer across review sessions.
