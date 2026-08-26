@@ -3847,6 +3847,7 @@ const App: React.FC = () => {
     },
     fileBrowserDirs: fileBrowser.dirs,
     fileBrowserActiveFile: fileBrowser.activeFile,
+    openFolderFile: handleFileBrowserSelect,
     viewerRef,
     scrollViewport,
     addAnnotation: handleAddAnnotation,

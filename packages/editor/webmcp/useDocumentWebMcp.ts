@@ -68,6 +68,8 @@ export interface DocumentWebMcpInputs {
   fileBrowserDirs: DocumentWebMcpFileBrowserDir[];
   /** Folder sessions: the absolute path the file browser has selected. */
   fileBrowserActiveFile: string | null;
+  /** Folder sessions: App's file-browser selection handler (absolute path + its directory). */
+  openFolderFile?: (absolutePath: string, dirPath: string) => Promise<void>;
   viewerRef: RefObject<ViewerHandle | null>;
   scrollViewport: HTMLElement | null;
   addAnnotation: (annotation: Annotation) => void;
@@ -176,9 +178,17 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
       }, PAINT_DELAY_MS);
     };
     const isOpen = (path: string | null) => path === null || path === openPath();
+    /** The file browser directory that contains `path` (folder sessions). */
+    const dirFor = (path: string): string | null =>
+      current().fileBrowserDirs.find((d) => !d.isVault && path.startsWith(`${d.path}/`))?.path ?? null;
     /** Navigate to a sibling and resolve once React has committed it as the open document. */
     const navigateTo = (path: string): Promise<boolean> => {
       const i = current();
+      // Folder sessions open through the file browser's own selection path so
+      // the browser's active file, the doc URL (base + doc=1) and the linked
+      // document stay in step, exactly like a click in the sidebar.
+      const dir = i.annotateSource === 'folder' ? dirFor(path) : null;
+      const open = dir && i.openFolderFile ? () => i.openFolderFile!(path, dir) : () => i.linkedDoc.open(path);
       const commit = new Promise<boolean>((resolve) => {
         navigationWaitersRef.current.push({ path, resolve });
         setTimeout(() => {
@@ -189,7 +199,7 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
           }
         }, NAVIGATION_COMMIT_TIMEOUT_MS);
       });
-      void i.linkedDoc.open(path).catch(() => {
+      void open().catch(() => {
         const index = navigationWaitersRef.current.findIndex((w) => w.path === path);
         if (index >= 0) navigationWaitersRef.current.splice(index, 1)[0]!.resolve(false);
       });
@@ -235,9 +245,12 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
         }
         if (i.annotateSource !== 'folder' && !cached) return null;
         try {
-          const result = await getDocPreviewFetcher()(path);
-          if (!result || typeof result.contents !== 'string') return null;
-          return { path, text: result.contents, blocks: parseMarkdownToBlocks(result.contents), annotations: cached?.annotations ?? [] };
+          // /api/doc answers `{ markdown }` for annotatable documents and
+          // `{ contents }` for code files; a folder file is the former.
+          const result = (await getDocPreviewFetcher()(path, dirFor(path) ?? undefined)) as { contents?: string; markdown?: string } | null;
+          const text = typeof result?.markdown === 'string' ? result.markdown : typeof result?.contents === 'string' ? result.contents : null;
+          if (text === null) return null;
+          return { path, text, blocks: parseMarkdownToBlocks(text), annotations: cached?.annotations ?? [] };
         } catch {
           return null;
         }
