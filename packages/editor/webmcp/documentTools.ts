@@ -719,8 +719,12 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
         if (!adapter.removeAnnotation(id, path)) {
           return { id, ok: false as const, error: { code: 'not_available' as const, message: 'that document is not open, so it cannot be written to', hint: OPEN_FIRST_HINT } };
         }
+        // The agent's own removal must not come back to it as "the human
+        // removed your comment" (the resolution signal).
+        tracker.claimRemoved(id);
         return { id, ok: true as const };
       });
+      syncTrackers(adapter, state);
       return ok({ results, removed: results.filter((r) => r.ok).length });
     },
   });

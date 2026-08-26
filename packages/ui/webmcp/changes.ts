@@ -63,6 +63,8 @@ export class AnnotationChangeTracker {
   /** Hash the agent wrote for an id; the seq assigned to that exact state is never "new" to the agent. */
   private readonly ownHashes = new Map<string, string>();
   private readonly ownSeqs = new Map<string, number>();
+  /** Ids the agent removed itself; their tombstones are never reported back to it. */
+  private readonly agentRemoved = new Set<string>();
   private counter = 0;
   private mark = 0;
   /** Wall-clock time of the last seq change (null until anything changes). */
@@ -110,6 +112,14 @@ export class AnnotationChangeTracker {
     if (entry && entry.hash === this.ownHashes.get(annotation.id)) this.ownSeqs.set(annotation.id, entry.seq);
   }
 
+  /**
+   * Record that the agent removed `id` itself, so the resulting tombstone
+   * is not attributed to the human (`removedSince` skips it).
+   */
+  claimRemoved(id: string): void {
+    this.agentRemoved.add(id);
+  }
+
   /** One O(n) pass over the current list; assigns seqs and tombstones. */
   observe(list: ReadonlyArray<TrackedAnnotation>): ObserveDelta {
     const delta: ObserveDelta = { added: [], changed: [], removed: [] };
@@ -141,6 +151,8 @@ export class AnnotationChangeTracker {
       this.tombstones.set(id, tombstone);
       delta.removed.push(tombstone);
     }
+    // A re-added id is a fresh record: forget any agent-removal claim on it.
+    for (const id of seen) this.agentRemoved.delete(id);
     if (touched) this.lastActivity = this.now();
     return delta;
   }
@@ -163,10 +175,12 @@ export class AnnotationChangeTracker {
     return ids;
   }
 
-  /** Tombstones written after `since`. */
+  /** Tombstones written after `since`, excluding removals the agent made itself. */
   removedSince(since: number = this.mark): Tombstone[] {
     const removed: Tombstone[] = [];
-    for (const tombstone of this.tombstones.values()) if (tombstone.seq > since) removed.push(tombstone);
+    for (const tombstone of this.tombstones.values()) {
+      if (tombstone.seq > since && !this.agentRemoved.has(tombstone.id)) removed.push(tombstone);
+    }
     return removed;
   }
 

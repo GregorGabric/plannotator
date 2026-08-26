@@ -399,6 +399,16 @@ describe('ownership', () => {
     expect(fx.annotations.map((a) => a.id)).toEqual([human.id]);
   });
 
+  test('the agent removing its own comment is never reported back to it as a human removal', async () => {
+    const fx = fake();
+    const mine = dataOf(await fx.call('add_comments', { comments: [{ text: 'agent note' }] })).results[0].annotation;
+    const removed = await fx.call('remove_comments', { ids: [mine.id] });
+    expect(removed.ok && removed.data.removed).toBe(1);
+    expect(removed.nudges.map((n) => n.code)).not.toContain('annotations_removed');
+    const next = await fx.call('read_document');
+    expect(next.nudges.map((n) => n.code)).not.toContain('annotations_removed');
+  });
+
   test('the human removing an agent comment surfaces as annotations_removed on the next call', async () => {
     const fx = fake();
     const mine = dataOf(await fx.call('add_comments', { comments: [{ text: 'agent note' }] })).results[0].annotation;
