@@ -3845,6 +3845,7 @@ const App: React.FC = () => {
       getDocAnnotations: linkedDocHook.getDocAnnotations,
       open: (path: string) => linkedDocHook.open(path),
     },
+    fileBrowserDirs: fileBrowser.dirs,
     fileBrowserActiveFile: fileBrowser.activeFile,
     viewerRef,
     scrollViewport,
