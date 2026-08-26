@@ -60,7 +60,7 @@ import {
 	type FolderAnnotateHistory,
 } from "./reference.ts";
 import { closeAllFileBrowserWatchers, handleFileBrowserStreamRequest } from "./file-browser-watch.ts";
-import { getExtraMarkdownExtensions, resolveUserPath, warmFileListCache } from "../generated/resolve-file.ts";
+import { getExtraMarkdownExtensions, MAX_ANNOTATABLE_FILE_BYTES, resolveUserPath, warmFileListCache } from "../generated/resolve-file.ts";
 import { createExternalAnnotationHandler } from "./external-annotations.ts";
 import { createNodeAgentTerminalBridge } from "./agent-terminal.ts";
 import {
@@ -442,6 +442,27 @@ export async function startAnnotateServer(options: {
 		return false;
 	}
 
+	// A local rendered-HTML root is served from its CURRENT bytes, not the
+	// startup snapshot: the reviewer can Refresh in-app or reload the tab after
+	// an agent edits the file, and both /api/plan and /api/share-html must then
+	// describe the page the annotations were placed on. The snapshot is only
+	// the fallback when the file is gone or has grown past the annotate cap.
+	const rootHtmlSourcePath =
+		options.renderHtml && options.rawHtml && !/^https?:\/\//i.test(options.filePath)
+			? resolvePath(options.filePath)
+			: null;
+	type RootHtmlRead =
+		| { kind: "current"; html: string }
+		| { kind: "snapshot"; reason: "missing" | "too-large" };
+	function readRootHtml(): RootHtmlRead | null {
+		if (!rootHtmlSourcePath) return null;
+		if (!existsSync(rootHtmlSourcePath)) return { kind: "snapshot", reason: "missing" };
+		if (statSync(rootHtmlSourcePath).size > MAX_ANNOTATABLE_FILE_BYTES) {
+			return { kind: "snapshot", reason: "too-large" };
+		}
+		return { kind: "current", html: readFileSync(rootHtmlSourcePath, "utf-8") };
+	}
+
 	function handleShareHtml(res: import("node:http").ServerResponse, url: URL): void {
 		if (/^https?:\/\//i.test(options.filePath)) {
 			json(res, { error: "Raw HTML sharing is unavailable for URL annotations" }, 400);
@@ -462,9 +483,17 @@ export async function startAnnotateServer(options: {
 		}
 
 		try {
-			const htmlContent = options.renderHtml && options.rawHtml && requestedPath === sourcePath
-				? options.rawHtml
-				: readFileSync(requestedPath, "utf-8");
+			let htmlContent: string;
+			if (rootHtmlSourcePath && requestedPath === rootHtmlSourcePath) {
+				const read = readRootHtml();
+				if (read?.kind === "snapshot" && read.reason === "too-large") {
+					json(res, { error: "File too large to share (max 2MB)" }, 413);
+					return;
+				}
+				htmlContent = read?.kind === "current" ? read.html : options.rawHtml!;
+			} else {
+				htmlContent = readFileSync(requestedPath, "utf-8");
+			}
 			json(res, { shareHtml: htmlAssets.inlineHtml(htmlContent, requestedPath) });
 		} catch {
 			json(res, { error: "Failed to prepare share HTML" }, 500);
@@ -624,15 +653,28 @@ export async function startAnnotateServer(options: {
 				},
 			});
 		} else if (url.pathname === "/api/plan" && req.method === "GET") {
-			const displayRawHtml = options.renderHtml && options.rawHtml
-				? htmlAssets.rewriteHtml(options.rawHtml, options.filePath)
+			// Local rendered-HTML roots serve their current bytes (see
+			// readRootHtml); every other session serves what it started with.
+			const rootRead = readRootHtml();
+			const servedHtml = rootRead?.kind === "current" ? rootRead.html : options.rawHtml;
+			// The version-diff fields (previousPlan/versionInfo/diffCurrent and
+			// the rendered diffHtml) describe the STARTUP snapshot, which is
+			// the version history saved. Once the served bytes differ from it
+			// they are omitted rather than recomputed: the current bytes are
+			// not a saved version, so version metadata for them would be
+			// wrong, and re-snapshotting would turn a read into a history
+			// write. This mirrors what the client does after an in-app
+			// Refresh, so refresh and reload converge on the same state.
+			const servedIsSnapshot = servedHtml === options.rawHtml;
+			const displayRawHtml = options.renderHtml && servedHtml
+				? htmlAssets.rewriteHtml(servedHtml, options.filePath)
 				: undefined;
 			// For HTML, render the version diff as the real page with inline
 			// <ins>/<del> highlights (tag-aware htmlDiff), asset-rewritten the
 			// same way as the live page so it renders identically.
 			const diffHtml =
-				options.renderHtml && options.rawHtml && annotateHistory?.previousPlan
-					? htmlAssets.rewriteHtml(htmlDiff(annotateHistory.previousPlan, options.rawHtml), options.filePath)
+				options.renderHtml && servedHtml && servedIsSnapshot && annotateHistory?.previousPlan
+					? htmlAssets.rewriteHtml(htmlDiff(annotateHistory.previousPlan, servedHtml), options.filePath)
 					: undefined;
 			const primarySource = getPrimarySource();
 			json(res, {
@@ -652,7 +694,7 @@ export async function startAnnotateServer(options: {
 				...(displayRawHtml ? { rawHtml: displayRawHtml } : {}),
 				...(diffHtml ? { diffHtml } : {}),
 				convertHtml: options.convertHtml ?? false,
-				...(annotateHistory
+				...(annotateHistory && servedIsSnapshot
 					? {
 							previousPlan: annotateHistory.previousPlan,
 							versionInfo: annotateHistory.versionInfo,
