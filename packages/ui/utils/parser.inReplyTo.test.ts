@@ -29,6 +29,9 @@ describe('exportAnnotations with inReplyTo', () => {
     expect(out).toContain('## 2. ');
     expect(out).not.toContain('## 3. ');
     const parentAt = out.indexOf('This invalidates in-flight uploads.');
+    // Deliberate pin: the `- **Reply (author):** text` line is the export
+    // contract the coding agent parses a thread from; changing its shape is a
+    // product decision, not a wording tweak.
     const replyAt = out.indexOf('- **Reply (tater):** Agreed, proposing a grace window.');
     const laterAt = out.indexOf('Which flag?');
     expect(parentAt).toBeGreaterThan(0);

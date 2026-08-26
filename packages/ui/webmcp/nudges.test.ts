@@ -65,6 +65,9 @@ describe('buildNudges', () => {
     const nudges = buildNudges(quiet({ annotations: [{ id: 'h1' }], annotationCount: 1, since: tracker.watermark }), tracker, toolName);
     const removed = nudges.find((n) => n.code === 'annotations_removed');
     expect(removed?.ids).toEqual(['g1']);
+    // Deliberate pin: "your comments" is the phrase that tells the agent the
+    // removal was of ITS OWN comment (the resolution signal), as opposed to the
+    // neutral wording for someone else's; the two branches must stay distinct.
     expect(removed?.message).toContain('your comments');
   });
 
