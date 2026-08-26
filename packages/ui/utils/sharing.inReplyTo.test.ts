@@ -10,7 +10,7 @@ import { AnnotationType, type Annotation } from '../types';
 import { fromShareable, toShareable } from './sharing';
 
 const PARENT: Annotation = {
-  id: 'p', blockId: 'block-1', startOffset: 0, endOffset: 5, type: AnnotationType.COMMENT,
+  id: 'p', blockId: 'blk-a', startOffset: 0, endOffset: 5, type: AnnotationType.COMMENT,
   text: 'Parent', originalText: 'quote', createdA: 1, author: 'ramos',
 };
 const REPLY: Annotation = { ...PARENT, id: 'r', text: 'Reply', author: 'tater', source: 'browser-agent', inReplyTo: 'p', createdA: 2 };

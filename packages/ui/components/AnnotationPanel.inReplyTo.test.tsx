@@ -14,7 +14,7 @@ const panelModule = hasDom ? await import('./AnnotationPanel') : null;
 const AnnotationPanel = panelModule?.AnnotationPanel as NonNullable<typeof panelModule>['AnnotationPanel'];
 
 function ann(id: string, createdA: number, extra: Partial<Annotation> = {}): Annotation {
-  return { id, blockId: 'block-1', startOffset: 0, endOffset: 3, type: AnnotationType.COMMENT, text: `text ${id}`, originalText: 'abc', createdA, ...extra };
+  return { id, blockId: 'blk-a', startOffset: 0, endOffset: 3, type: AnnotationType.COMMENT, text: `text ${id}`, originalText: 'abc', createdA, ...extra };
 }
 
 let root: Root | null = null;
