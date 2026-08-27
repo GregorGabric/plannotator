@@ -102,13 +102,23 @@ describe("Windows PATH scripts", () => {
     // %VARS% in unrelated entries survive.
     expect(scripts.remove).toContain("DoNotExpandEnvironmentNames");
     expect(scripts.remove).toContain("$k.SetValue('Path',$n,$kind)");
-    // The rollback echo must come after the write and before the broadcast.
-    const writeIndex = scripts.remove.indexOf("$k.SetValue(");
-    const echoIndex = scripts.remove.indexOf("Write-Output (ConvertTo-Json");
-    const broadcastIndex = scripts.remove.indexOf("SendMessageTimeout(");
-    expect(writeIndex).toBeGreaterThan(-1);
-    expect(echoIndex).toBeGreaterThan(writeIndex);
-    expect(broadcastIndex).toBeGreaterThan(echoIndex);
+    // The completed-write echo must come after the write and before the
+    // broadcast in BOTH scripts: it is what lets the caller trust a write
+    // whose process was killed or faulted while broadcasting.
+    const echoes = {
+      remove: "Write-Output (ConvertTo-Json",
+      restore: "Write-Output 'PLANNOTATOR_PATH_RESTORED'",
+    } as const;
+    for (const [name, script] of Object.entries(scripts) as Array<
+      [keyof typeof scripts, string]
+    >) {
+      const writeIndex = script.indexOf("$k.SetValue(");
+      const echoIndex = script.indexOf(echoes[name]);
+      const broadcastIndex = script.indexOf("SendMessageTimeout(");
+      expect(`${name}: ${writeIndex}`).not.toBe(`${name}: -1`);
+      expect(echoIndex).toBeGreaterThan(writeIndex);
+      expect(broadcastIndex).toBeGreaterThan(echoIndex);
+    }
   });
 
   test("stay single-quoted so they survive -Command argv quoting", () => {
@@ -1715,6 +1725,136 @@ describe("host and platform integrations", () => {
     expect(fixture.scheduledDeletes).toEqual([
       { target: currentExe, parent: dirname(currentExe) },
     ]);
+  });
+
+  test("treats a non-zero exit after the rollback echo as a completed PATH edit", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+    const originalPath = `C:\\Before;${dirname(currentExe)};C:\\After;;`;
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        // A native fault inside Add-Type / SendMessageTimeout is not
+        // catchable and ends the process with an NTSTATUS code; the echo
+        // already on stdout still proves the write completed.
+        runCommand: async () => ({
+          exitCode: -1073741819,
+          timedOut: false,
+          stdout: `${JSON.stringify(originalPath)}\n`,
+        }),
+      },
+    );
+
+    const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.removed).toContain(pathLabel);
+    expect(result.warnings.some((w) => w.includes("exit -1073741819"))).toBe(true);
+    expect(fixture.scheduledDeletes).toEqual([
+      { target: currentExe, parent: dirname(currentExe) },
+    ]);
+  });
+
+  test("treats a restore that printed its sentinel as completed however the process ended", async () => {
+    for (const ending of [
+      { exitCode: 124, timedOut: true, needle: "timed out" },
+      { exitCode: -1073741819, timedOut: false, needle: "exit -1073741819" },
+    ]) {
+      const fixture = createFixture();
+      const localAppData = join(fixture.homeDir, "AppData", "Local");
+      const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+      writeText(currentExe);
+      let commandCount = 0;
+
+      const result = await runPlannotatorUninstall(
+        { purge: false, dryRun: false },
+        {
+          ...fixture.environment,
+          platform: "win32",
+          execPath: currentExe,
+          env: { LOCALAPPDATA: localAppData },
+          which: () => "C:\\Windows\\powershell.exe",
+          runCommand: async () => {
+            commandCount += 1;
+            if (commandCount === 1) {
+              return {
+                exitCode: 0,
+                timedOut: false,
+                stdout: JSON.stringify(
+                  `C:\\Before;${dirname(currentExe)};C:\\After;;`,
+                ),
+              };
+            }
+            return {
+              exitCode: ending.exitCode,
+              timedOut: ending.timedOut,
+              stdout: "PLANNOTATOR_PATH_RESTORED\r\n",
+            };
+          },
+          scheduleWindowsSelfDelete: async () => false,
+        },
+      );
+
+      const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+      expect(result.ok).toBe(false);
+      expect(existsSync(currentExe)).toBe(true);
+      expect(result.errors.some((e) => e.includes("Could not restore"))).toBe(false);
+      expect(result.removed).not.toContain(pathLabel);
+      expect(result.preserved).toContain(`${pathLabel} (restored for retry)`);
+      expect(
+        result.warnings.some(
+          (w) => w.startsWith("Restored ") && w.includes(ending.needle),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  test("reports a restore that never printed its sentinel as failed", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+    let commandCount = 0;
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        runCommand: async () => {
+          commandCount += 1;
+          if (commandCount === 1) {
+            return {
+              exitCode: 0,
+              timedOut: false,
+              stdout: JSON.stringify(
+                `C:\\Before;${dirname(currentExe)};C:\\After;;`,
+              ),
+            };
+          }
+          return { exitCode: 124, timedOut: true, stdout: "" };
+        },
+        scheduleWindowsSelfDelete: async () => false,
+      },
+    );
+
+    const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+    expect(result.ok).toBe(false);
+    expect(result.removed).toContain(pathLabel);
+    expect(result.errors).toContain(
+      `Could not restore ${dirname(currentExe)} to the Windows user PATH after self-delete scheduling failed (command timed out).`,
+    );
   });
 
   test("restores Windows PATH when scheduling self-delete fails", async () => {

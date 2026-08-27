@@ -162,6 +162,13 @@ export const WINDOWS_PATH_SCRIPT = [
 ].join("; ");
 
 /**
+ * Line the restore script prints right after its registry write and before the
+ * broadcast, so the caller can tell a completed restore from one that never
+ * reached the write even when the process was killed or died afterwards.
+ */
+const WINDOWS_PATH_RESTORED_SENTINEL = "PLANNOTATOR_PATH_RESTORED";
+
+/**
  * Writes the echoed original PATH back with the kind the value currently has
  * (the kind the removal preserved), falling back to REG_EXPAND_SZ when the
  * value is gone entirely. Same decoupled broadcast as the removal.
@@ -177,6 +184,7 @@ export const WINDOWS_PATH_RESTORE_SCRIPT = [
   "try{$kind=$k.GetValueKind('Path')}catch{}",
   "$k.SetValue('Path',$original,$kind)",
   "$k.Close()",
+  `Write-Output '${WINDOWS_PATH_RESTORED_SENTINEL}'`,
   ...WINDOWS_PATH_BROADCAST_STATEMENTS,
 ].join("; ");
 
@@ -943,14 +951,16 @@ async function removeWindowsPathEntry(
     { PLANNOTATOR_UNINSTALL_PATH: paths.windowsInstallDir },
   );
   // The script echoes the original PATH only after the registry write
-  // succeeded, so a parseable echo proves the edit happened even when the
-  // process was later killed while broadcasting the change.
+  // succeeded, so a parseable echo proves the edit happened however the
+  // process ended afterwards: killed by the timeout while broadcasting, or
+  // taken down by a native fault inside Add-Type / SendMessageTimeout that no
+  // try/catch can intercept and that exits with an NTSTATUS code.
   const echoedOriginalPath = parseEchoedWindowsPath(result.stdout);
-  if (result.exitCode === 0 || (result.timedOut && echoedOriginalPath !== null)) {
+  if (result.exitCode === 0 || echoedOriginalPath !== null) {
     state.removed.push(label);
-    if (result.timedOut) {
+    if (result.exitCode !== 0) {
       state.warnings.push(
-        `Removed ${paths.windowsInstallDir} from the Windows user PATH, but notifying open windows of the change timed out; new terminals pick up the change after you sign in again.`,
+        `Removed ${paths.windowsInstallDir} from the Windows user PATH, but notifying open windows of the change ${result.timedOut ? "timed out" : `failed (exit ${result.exitCode})`}; new terminals pick up the change after you sign in again.`,
       );
     }
     if (echoedOriginalPath !== null) return echoedOriginalPath;
@@ -1065,7 +1075,13 @@ async function restoreWindowsPathEntry(
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PATH_RESTORE_SCRIPT],
     { PLANNOTATOR_UNINSTALL_ORIGINAL_PATH: originalPath },
   );
-  if (result.exitCode !== 0) {
+  // Same proof as the removal: the sentinel is printed only after the
+  // registry write, so its presence means the restore completed even if the
+  // broadcast then timed out or faulted.
+  const restored = (result.stdout ?? "")
+    .split(/\r?\n/)
+    .some((line) => line.trim() === WINDOWS_PATH_RESTORED_SENTINEL);
+  if (result.exitCode !== 0 && !restored) {
     state.errors.push(
       `Could not restore ${paths.windowsInstallDir} to the Windows user PATH after self-delete scheduling failed (${result.timedOut ? "command timed out" : `exit ${result.exitCode}`}).`,
     );
@@ -1073,6 +1089,11 @@ async function restoreWindowsPathEntry(
       `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry could not be restored. Run that full path to retry, then restore PATH manually if needed.`,
     );
     return;
+  }
+  if (result.exitCode !== 0) {
+    state.warnings.push(
+      `Restored ${paths.windowsInstallDir} to the Windows user PATH, but notifying open windows of the change ${result.timedOut ? "timed out" : `failed (exit ${result.exitCode})`}; new terminals pick up the change after you sign in again.`,
+    );
   }
 
   const label = `Windows user PATH entry ${paths.windowsInstallDir}`;
