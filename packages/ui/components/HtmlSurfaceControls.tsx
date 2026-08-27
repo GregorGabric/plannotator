@@ -55,9 +55,10 @@ export interface HtmlSurfaceControlsProps {
   onToggleArmed?: () => void;
   /** Whether the floating tools over the page are hidden (eye-off). */
   toolsHidden?: boolean;
-  /** Flip the tools. The eye (and the refresh beside it) render only when provided. */
+  /** Flip the tools. The eye renders only when provided. */
   onToggleTools?: () => void;
-  /** Whether a refresh is offered for this document. */
+  /** Whether a refresh is offered for this document. The refresh renders
+   *  whenever this is true and `onRefresh` is passed, with or without the eye. */
   canRefresh?: boolean;
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -80,15 +81,21 @@ export function HtmlSurfaceControls({
   if (compact) return null;
   const text = { ...DEFAULT_HTML_SURFACE_CONTROL_LABELS, ...labels };
   const penLabel = armed ? labels?.annotateLabel : labels?.interactLabel;
+  const showRefresh = canRefresh && !!onRefresh;
   return (
     <>
-      {/* Show/hide tools: removes ALL floating chrome (sidebar tongue tabs +
+      {/* The refresh and the eye share one group, left of the pen. Each
+          renders on its own terms: the refresh whenever it is offered
+          (canRefresh + onRefresh), the eye whenever onToggleTools is passed,
+          so a host without the tools toggle still gets its refresh.
+
+          Show/hide tools: removes ALL floating chrome (sidebar tongue tabs +
           the comment/attachments cluster) from the DOM, leaving nothing over
-          the page. Sits left of the pen; this button is the only way back,
-          so it never hides itself. Eye = tools visible, eye-off = hidden. */}
-      {onToggleTools && (
+          the page. This button is the only way back, so it never hides
+          itself. Eye = tools visible, eye-off = hidden. */}
+      {(showRefresh || onToggleTools) && (
         <div className="ml-1 flex items-center gap-0.5">
-          {canRefresh && onRefresh && (
+          {showRefresh && (
             <button
               type="button"
               data-html-refresh
@@ -117,6 +124,7 @@ export function HtmlSurfaceControls({
               <span className="hidden sm:inline">{isRefreshing ? text.refreshing : text.refresh}</span>
             </button>
           )}
+          {onToggleTools && (
           <button
             type="button"
             data-html-tools-toggle
@@ -137,6 +145,7 @@ export function HtmlSurfaceControls({
             )}
             <span className="sr-only">{toolsHidden ? text.showTools : text.hideTools}</span>
           </button>
+          )}
         </div>
       )}
 
