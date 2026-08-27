@@ -9,6 +9,7 @@ import { setExternalAnnotationTransport, type ExternalAnnotationTransport } from
 import { setAITransport, type AITransport } from './hooks/useAIChat';
 import { setSkillCatalogTransport, setSkillContentTransport, type SkillCatalogTransport, type SkillContentTransport } from './utils/skillCatalog';
 import { setWebMcpPolicy, type WebMcpPolicy } from './webmcp/policy';
+import { setMathRendererLoader, type MathRenderer, type MathRendererLoader } from './utils/math';
 import { setIdentityGenerator, type IdentityGenerator } from './utils/generateIdentity';
 import { configStore } from './config';
 import type { ServerSyncFn } from './config/configStore';
@@ -34,6 +35,8 @@ export type {
   SkillContentTransport,
   ServerSyncFn,
   WebMcpPolicy,
+  MathRenderer,
+  MathRendererLoader,
   IdentityGenerator,
 };
 
@@ -68,6 +71,14 @@ export interface PlannotatorUIConfig {
    */
   webmcp?: WebMcpPolicy;
   /**
+   * How the math renderer is loaded when no renderer is registered before the
+   * first math node renders. Default: `import('katex')` (JS only; the
+   * stylesheet stays the host's job). A host that wants KaTeX and its CSS on
+   * one lazy chunk passes a loader that imports both. Hosts that want math
+   * typeset on the first commit instead import `@plannotator/ui/utils/math-eager`.
+   */
+  mathRendererLoader?: MathRendererLoader;
+  /**
    * Synchronous generator for the default "tater" display name, used only when
    * no `identityProvider` is installed. Default: a small built-in pool of the
    * same `adjective-noun-tater` shape. Plannotator registers the full
@@ -92,6 +103,7 @@ export function configurePlannotatorUI(config: PlannotatorUIConfig): void {
   if (config.skillContentTransport) setSkillContentTransport(config.skillContentTransport);
   if (config.serverSync) configStore.setServerSync(config.serverSync);
   if (config.webmcp) setWebMcpPolicy(config.webmcp);
+  if (config.mathRendererLoader) setMathRendererLoader(config.mathRendererLoader);
   if (config.identityGenerator) setIdentityGenerator(config.identityGenerator);
   // Re-hydrate AFTER storageBackend is installed (load-bearing order — gated last).
   if (config.loadSettingsFromBackend) configStore.loadFromBackend();

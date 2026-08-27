@@ -9,7 +9,8 @@ import { getImageSrc } from "./ImageThumbnail";
 import { useCodePathValidation, type CodePathValidationContextValue } from "./CodePathValidationContext";
 import type { ValidationEntry } from "../hooks/useValidatedCodePaths";
 import { CodeFilePicker } from "./CodeFilePicker";
-import { normalizeMathTex, renderMathToHtml } from "./blocks/MathBlock";
+import { normalizeMathTex, renderMathToHtml } from "../utils/math";
+import { useMathRenderer } from "../hooks/useMathRenderer";
 
 export interface DocPreviewResult {
   contents?: string;
@@ -312,7 +313,23 @@ const CodeFileIcon = () => (
 
 const InlineMath: React.FC<{ tex: string }> = ({ tex }) => {
   const normalizedTex = normalizeMathTex(tex);
-  const html = useMemo(() => renderMathToHtml(normalizedTex, false), [normalizedTex]);
+  const renderer = useMathRenderer();
+  const html = useMemo(() => renderMathToHtml(normalizedTex, false, renderer), [normalizedTex, renderer]);
+
+  // Same wrapper in both branches (see MathBlock): the placeholder carries the
+  // attributes annotation restore keys on, with the TeX as a text child.
+  if (html === null) {
+    return (
+      <span
+        className="math-inline math-annotatable text-foreground"
+        data-math-tex={normalizedTex}
+        data-math-display="false"
+        aria-label={normalizedTex}
+      >
+        {normalizedTex}
+      </span>
+    );
+  }
 
   return (
     <span

@@ -1,7 +1,10 @@
-// Eager identity registration (side-effect import, evaluated before every
-// other module below). Keeps Plannotator's tater names byte-identical now that
-// @plannotator/ui loads the username dictionary lazily for hosts. Guarded by
-// tests/entry-assets.test.ts; do not drop or reorder this line.
+// Eager renderer registration (side-effect imports, evaluated before every
+// other module below). These keep Plannotator's first paint and identity
+// minting byte-identical now that @plannotator/ui loads KaTeX and the username
+// dictionary lazily for hosts: math is typeset on the first commit and names
+// come from the full dictionary. Guarded by tests/entry-assets.test.ts; do not
+// drop or reorder either line.
+import '@plannotator/ui/utils/math-eager';
 import '@plannotator/ui/utils/identity-tater';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { toast, Toaster } from 'sonner';
