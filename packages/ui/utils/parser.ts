@@ -1,5 +1,6 @@
 import type { Block, Annotation, CodeAnnotation, EditorAnnotation, ImageAttachment } from '../types';
 import { planDenyFeedback } from '@plannotator/core/feedback-templates';
+import { resolveReplyParents } from '@plannotator/core/annotation-threads';
 import { skillReferenceExportBlock } from './skillReferences';
 
 /**
@@ -1210,14 +1211,17 @@ export const exportAnnotations = (
 
   // Threaded replies (`inReplyTo`): a reply is emitted as a nested exchange
   // under its parent's entry rather than as its own numbered entry, so the
-  // coding agent reads the conversation in order. Replies whose parent is
-  // not in the export render as ordinary entries. With no `inReplyTo`
+  // coding agent reads the conversation in order. The threading rule is the
+  // shared one (resolveReplyParents): a reply whose parent is not in the
+  // export, a self-reference, and every member of an inReplyTo cycle render
+  // as ordinary entries in original order, so no annotation is ever dropped
+  // and the header count always equals what is emitted. With no `inReplyTo`
   // anywhere the output is byte-identical to the ungrouped export.
-  const exportedIds = new Set(sortedAnns.map((a: any) => a.id));
-  const isReply = (a: any) => typeof a.inReplyTo === 'string' && a.inReplyTo !== a.id && exportedIds.has(a.inReplyTo);
+  const replyParents = resolveReplyParents(sortedAnns as any[]);
+  const isReply = (a: any) => replyParents.get(a.id) != null;
   const hasReplies = sortedAnns.some(isReply);
   const repliesOf = (parent: any): any[] =>
-    hasReplies ? sortedAnns.filter((a: any) => isReply(a) && a.inReplyTo === parent.id).sort((a: any, b: any) => a.createdA - b.createdA) : [];
+    hasReplies ? sortedAnns.filter((a: any) => replyParents.get(a.id) === parent.id).sort((a: any, b: any) => a.createdA - b.createdA) : [];
   if (hasReplies) {
     emitOrder = emitOrder.filter((a) => !isReply(a));
     // Numbers stay consecutive over the entries that are actually emitted.

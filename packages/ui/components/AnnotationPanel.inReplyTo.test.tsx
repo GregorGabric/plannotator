@@ -55,6 +55,14 @@ describe.skipIf(!hasDom)('AnnotationPanel inReplyTo threading', () => {
     expect([...el.querySelectorAll('[data-annotation-id]')].map((n) => n.getAttribute('data-annotation-id'))).toEqual(['a', 'r']);
   });
 
+  test('an inReplyTo cycle renders every member as a top-level card, in order, and a reply to one still threads', async () => {
+    const el = await render([ann('x', 1, { inReplyTo: 'y' }), ann('y', 2, { inReplyTo: 'x' }), ann('r', 3, { inReplyTo: 'x' })]);
+    expect([...el.querySelectorAll('[data-annotation-id]')].map((n) => n.getAttribute('data-annotation-id'))).toEqual(['x', 'r', 'y']);
+    const replies = el.querySelectorAll('[data-annotation-reply="true"]');
+    expect(replies.length).toBe(1);
+    expect(replies[0].querySelector('[data-annotation-id="r"]')).not.toBeNull();
+  });
+
   test('without replies there is no reply wrapper and the order is creation order', async () => {
     const el = await render([ann('b', 2), ann('a', 1)]);
     expect(el.querySelectorAll('[data-annotation-reply="true"]').length).toBe(0);

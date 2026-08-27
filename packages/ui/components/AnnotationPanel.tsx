@@ -7,6 +7,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { OverlayScrollArea } from './OverlayScrollArea';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
+import { resolveReplyParents } from '@plannotator/core/annotation-threads';
 
 // Card type-word colors. Deletion uses `destructive` (reliably red on every
 // theme, matching the in-document .deletion highlight). Comment uses the
@@ -40,34 +41,33 @@ const TrashCardIcon = () => (
 
 /**
  * Order annotations so every reply follows its parent (replies among
- * themselves stay in creation order). A reply whose parent is absent renders
- * as a top-level card. Without any `inReplyTo` the input order is returned
- * unchanged, so annotations without replies render exactly as before.
+ * themselves stay in creation order). The threading rule is the shared one
+ * (resolveReplyParents, also what the export applies): a reply whose parent
+ * is absent, a self-reference, and every member of an `inReplyTo` cycle
+ * render as top-level cards in input order, so nothing is ever dropped.
+ * Without any `inReplyTo` the input order is returned unchanged, so
+ * annotations without replies render exactly as before.
  */
 export function threadReplies(sorted: Annotation[]): Array<{ annotation: Annotation; isReply: boolean }> {
   if (!sorted.some((a) => a.inReplyTo)) return sorted.map((annotation) => ({ annotation, isReply: false }));
-  const ids = new Set(sorted.map((a) => a.id));
+  const parents = resolveReplyParents(sorted);
   const byParent = new Map<string, Annotation[]>();
   for (const a of sorted) {
-    if (a.inReplyTo && ids.has(a.inReplyTo) && a.inReplyTo !== a.id) {
-      const list = byParent.get(a.inReplyTo) ?? [];
-      list.push(a);
-      byParent.set(a.inReplyTo, list);
-    }
+    const parent = parents.get(a.id);
+    if (!parent) continue;
+    const list = byParent.get(parent) ?? [];
+    list.push(a);
+    byParent.set(parent, list);
   }
   const out: Array<{ annotation: Annotation; isReply: boolean }> = [];
-  const emitted = new Set<string>();
   const emit = (a: Annotation, isReply: boolean) => {
-    if (emitted.has(a.id)) return;
-    emitted.add(a.id);
     out.push({ annotation: a, isReply });
     for (const reply of byParent.get(a.id) ?? []) emit(reply, true);
   };
   for (const a of sorted) {
-    if (a.inReplyTo && ids.has(a.inReplyTo) && a.inReplyTo !== a.id) continue;
+    if (parents.get(a.id)) continue;
     emit(a, false);
   }
-  for (const a of sorted) emit(a, false);
   return out;
 }
 

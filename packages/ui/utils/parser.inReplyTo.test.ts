@@ -47,6 +47,27 @@ describe('exportAnnotations with inReplyTo', () => {
     expect(out).not.toContain('**Reply');
   });
 
+  // Reachable through PATCH /api/external-annotations before ingest refused
+  // it, and still possible in drafts: a cycle used to be dropped from the
+  // body while the header still counted it.
+  test('an inReplyTo cycle drops nothing: its members are roots in original order and the count matches', () => {
+    const x = comment('x', 'Rotate the key', 'X says', { inReplyTo: 'y', createdA: 1 });
+    const y = comment('y', 'Rotate the key', 'Y says', { inReplyTo: 'x', createdA: 2 });
+    const self = comment('s', 'Ship behind a flag', 'Self says', { inReplyTo: 's', createdA: 3 });
+    const reply = comment('r', 'Rotate the key', 'Reply to X', { inReplyTo: 'x', author: 'tater', createdA: 4 });
+    const out = exportAnnotations(blocks, [x, y, self, reply]);
+    expect(out).toContain('have 4 pieces of feedback');
+    for (const text of ['X says', 'Y says', 'Self says']) expect(out).toContain(text);
+    // Three roots, numbered consecutively; the valid reply nests under x.
+    expect(out).toContain('## 1. ');
+    expect(out).toContain('## 2. ');
+    expect(out).toContain('## 3. ');
+    expect(out).not.toContain('## 4. ');
+    expect(out).toContain('- **Reply (tater):** Reply to X');
+    expect(out.indexOf('X says')).toBeLessThan(out.indexOf('Y says'));
+    expect(out.indexOf('Reply to X')).toBeLessThan(out.indexOf('Y says'));
+  });
+
   test('without any inReplyTo the export is byte-identical to the plain export', () => {
     const a = comment('a', 'Rotate the key', 'one');
     const b = comment('b', 'Ship behind a flag', 'two', { createdA: 2 });
