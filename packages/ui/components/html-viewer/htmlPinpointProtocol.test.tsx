@@ -14,6 +14,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Annotation } from '../../types';
 import { AnnotationType } from '../../types';
+import { BRIDGE_PROTOCOL_VERSION } from './bridge-script';
 
 const hasDom = typeof document !== 'undefined';
 const hookModule = hasDom ? await import('./useHtmlAnnotation') : null;
@@ -431,7 +432,7 @@ describe.if(hasDom)('ordered saved-annotation sync (placed-marker numbering)', (
       await act(async () => {
         window.dispatchEvent(new MessageEvent('message', {
           source: iframe.contentWindow,
-          data: { type: 'plannotator-bridge-ready' },
+          data: { type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION },
         }));
       });
     };
@@ -1123,7 +1124,7 @@ describe.if(hasDom)('readOnly view-only contract', () => {
 
   test('readOnly still restores markers and syncs export-matching numbers on ready', async () => {
     const { post, postedToIframe } = await mountReadOnly([committed('ro-1'), committed('ro-2')]);
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
 
     const restores = postedToIframe.filter((m) => m.type === 'plannotator-bridge-find-and-mark');
     expect(restores.map((m) => m.id)).toEqual(['ro-1', 'ro-2']);
@@ -1141,14 +1142,14 @@ describe.if(hasDom)('readOnly view-only contract', () => {
   test('readOnly marker clicks still navigate via onSelectAnnotation', async () => {
     const selected: Array<string | null> = [];
     const { post } = await mountReadOnly([committed('ro-1')], (id) => selected.push(id));
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     await post({ type: 'plannotator-bridge-mark-click', id: 'ro-1' });
     expect(selected).toEqual(['ro-1']);
   });
 
   test('readOnly ignores selection messages: no toolbar, no composer', async () => {
     const { post } = await mountReadOnly([committed('ro-1')]);
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     await post({
       type: 'plannotator-bridge-selection',
       text: 'Read-only target',
@@ -1274,7 +1275,7 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
         window.dispatchEvent(new MessageEvent('message', { source: iframe.contentWindow, data }));
       });
     };
-    const ready = () => post({ type: 'plannotator-bridge-ready' });
+    const ready = () => post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     return { render, post, ready, added, postedToIframe };
   }
 
@@ -1407,7 +1408,7 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
 
     // Host swapped: its list carries the server row only.
     await render([pageRow('srv-1')]);
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     await post({ type: MSG, ids: [localId, 'srv-1'] });
     expect(received.at(-1)).toEqual(['srv-1']);
 
@@ -1467,7 +1468,7 @@ describe.if(hasDom)('Interact/Annotate mode on static (srcdoc) surfaces', () => 
 
   test('static surfaces default to Annotate armed: set-annotate-mode active:true rides every ready', async () => {
     const { post, postedToIframe } = await mountModeViewer();
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     const modePosts = postedToIframe.filter((m) => m.type === 'plannotator-bridge-set-annotate-mode');
     expect(modePosts.length).toBe(1);
     expect(modePosts[0]!.active).toBe(true);
@@ -1475,7 +1476,7 @@ describe.if(hasDom)('Interact/Annotate mode on static (srcdoc) surfaces', () => 
 
   test('a host-driven Interact state is pushed instead of the default', async () => {
     const { post, postedToIframe } = await mountModeViewer({ annotateModeActive: false });
-    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     const modePosts = postedToIframe.filter((m) => m.type === 'plannotator-bridge-set-annotate-mode');
     expect(modePosts.length).toBe(1);
     expect(modePosts[0]!.active).toBe(false);

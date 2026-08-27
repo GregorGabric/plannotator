@@ -3,6 +3,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AnnotationType } from '../../types';
+import { BRIDGE_PROTOCOL_VERSION } from './bridge-script';
 
 const hasDom = typeof document !== 'undefined';
 const htmlViewerModule = hasDom ? await import('./HtmlViewer') : null;
@@ -66,7 +67,7 @@ describe.if(hasDom)('HtmlViewer Vim HUD bridge', () => {
       }));
     };
 
-    act(() => dispatchBridgeMessage({ type: 'plannotator-bridge-ready' }));
+    act(() => dispatchBridgeMessage({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION }));
     act(() => dispatchBridgeMessage({
       type: 'plannotator-bridge-unanchored',
       ids: ['removed-text'],

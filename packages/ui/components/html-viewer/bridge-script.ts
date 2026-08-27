@@ -210,6 +210,18 @@ body[data-plannotator-vim-focus-owner]:focus {
 }
 `;
 
+/**
+ * Bridge protocol version. Stamped on the bridge's `ready` message
+ * (`protocolVersion`) and compared by the parent (HtmlViewer) against this
+ * same constant. Bump it whenever a message shape changes in a way an older
+ * bridge or an older parent would misread. The inline srcdoc path and the
+ * live proxy always ship the bridge from the same bundle as the parent, so
+ * they match by construction; the check exists for hosts that serve the
+ * generated `bridge-script.asset.js` separately (`bridgeScriptUrl`), where a
+ * cached asset from a previous package version can outlive the parent code.
+ */
+export const BRIDGE_PROTOCOL_VERSION = 1;
+
 export const BRIDGE_SCRIPT = `(function() {
   var PREFIX = 'plannotator-bridge-';
 
@@ -4572,7 +4584,7 @@ export const BRIDGE_SCRIPT = `(function() {
     // pinpoint: show the cursor affordance immediately instead of waiting for
     // the parent's first set-input-method/set-annotate-mode round trip.
     updatePinpointCursor();
-    var readyMsg = { type: PREFIX + 'ready' };
+    var readyMsg = { type: PREFIX + 'ready', protocolVersion: ${BRIDGE_PROTOCOL_VERSION} };
     if (LIVE) readyMsg.pageUrl = currentPageUrl();
     postToParent(readyMsg);
   }

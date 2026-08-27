@@ -41,6 +41,8 @@ import { buildSyncNumbering } from "./annotationNumbering";
 import { mergeUnanchoredIds } from "./unanchored";
 import {
   MAX_PAGE_URL_LENGTH,
+  checkBridgeProtocolVersion,
+  formatBridgeProtocolWarning,
   rejectsLiveMessage,
   useHtmlAnnotation,
   type HtmlLiveSession,
@@ -130,6 +132,38 @@ function parseVimBridgeHelp(value: unknown): boolean | null {
 }
 
 const MAX_VIM_COPY_TEXT_LENGTH = 2 * 1024 * 1024;
+
+/** Default wait for the bridge's `ready` on the `bridgeScriptUrl` path. */
+export const DEFAULT_BRIDGE_READY_TIMEOUT_MS = 5000;
+
+/**
+ * Why the bridge could not be established on the `bridgeScriptUrl` path.
+ * Never produced on the inline path (the bridge and the parent are one
+ * bundle there, and no ready timer runs).
+ */
+export type BridgeUnavailableInfo =
+  | {
+      kind: "timeout";
+      url: string;
+      /** The wait that elapsed without a `ready`. */
+      timeoutMs: number;
+    }
+  | {
+      kind: "version-mismatch";
+      url: string;
+      expectedVersion: number;
+      /** Absent when the ready carried no stamp (a pre-stamp asset). */
+      reportedVersion?: number;
+    };
+
+/** User-facing message for the in-surface error banner. */
+export function formatBridgeUnavailableMessage(info: BridgeUnavailableInfo): string {
+  if (info.kind === "timeout") {
+    return `Annotation tools did not load: the bridge script at ${info.url} sent no ready signal within ${info.timeoutMs} ms. The page is shown without annotation. Check that the URL is reachable and that your Content Security Policy allows script-src for that origin.`;
+  }
+  const reported = info.reportedVersion === undefined ? "no version" : `version ${info.reportedVersion}`;
+  return `Annotation tools may not work: this viewer expects bridge protocol version ${info.expectedVersion}, but the script at ${info.url} reported ${reported}. Serve the bridge-script asset from the same @plannotator/ui version as the viewer.`;
+}
 
 function parseVimBridgeCopy(value: unknown): string | null {
   return isRecord(value)
@@ -221,6 +255,29 @@ export interface HtmlViewerProps {
   scrollBehavior?: 'smooth' | 'auto';
   /** Accessible iframe title. */
   title?: string;
+  /**
+   * Opt-in: load the annotation bridge into the srcdoc document through a
+   * classic `<script src>` from this URL (the package's generated
+   * `components/html-viewer/bridge-script.asset.js`, served by the host)
+   * instead of inlining the 185 KB script into every document. Absent (the
+   * default, and Plannotator's only path): inline, unchanged. The srcdoc
+   * frame is an opaque origin, so the script needs no CORS and no
+   * `crossorigin` attribute is set; a CSP header on the host page is
+   * inherited by the frame and must allow `script-src` for the asset origin.
+   * Ignored in live (`src`) mode, where the proxy injects the bridge.
+   */
+  bridgeScriptUrl?: string;
+  /**
+   * How long to wait for the bridge's `ready` after each document load on
+   * the `bridgeScriptUrl` path before the surface shows an error state.
+   * Default 5000 ms. No timer runs on the inline path.
+   */
+  bridgeReadyTimeoutMs?: number;
+  /** The bridge could not be established on the `bridgeScriptUrl` path (no
+   *  ready within the timeout, or a protocol version mismatch). The surface
+   *  shows its own banner as well; this lets the host react (telemetry, a
+   *  retry affordance). Never called on the inline path. */
+  onBridgeUnavailable?: (info: BridgeUnavailableInfo) => void;
 }
 
 /**
@@ -263,6 +320,9 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       maxAdditionalTargets,
       scrollBehavior,
       title = "HTML Plan Viewer",
+      bridgeScriptUrl,
+      bridgeReadyTimeoutMs = DEFAULT_BRIDGE_READY_TIMEOUT_MS,
+      onBridgeUnavailable,
     },
     ref,
   ) => {
@@ -320,6 +380,11 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // themselves); arbitrary HTML renders untouched, like a standalone tab.
     const hostTheme = useMemo(() => !liveMode && hasHostThemeOptIn(rawHtml), [liveMode, rawHtml]);
 
+    // The URL path is srcdoc-only: live mode has the proxy inject the bridge.
+    const bridgeUrl = !liveMode && bridgeScriptUrl ? bridgeScriptUrl : undefined;
+    const bridgeUrlRef = useRef(bridgeUrl);
+    bridgeUrlRef.current = bridgeUrl;
+
     const srcdoc = useMemo(() => {
       if (liveMode) return undefined; // src mode: the proxy injects the bridge
       const injection = buildSrcdocInjection({
@@ -327,9 +392,35 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         isLight: isLightTheme(),
         hostTheme,
         diffActive: !!diffActive,
+        bridgeScriptUrl: bridgeUrl,
       });
       return injectIntoHead(rawHtml, injection);
-    }, [liveMode, rawHtml, hostTheme, diffActive]);
+    }, [liveMode, rawHtml, hostTheme, diffActive, bridgeUrl]);
+
+    // Error state for the bridgeScriptUrl path only: the inline path never
+    // sets it (no timer, and a version mismatch there can only be a forged
+    // message, which is warned about and otherwise ignored).
+    const [bridgeError, setBridgeError] = useState<BridgeUnavailableInfo | null>(null);
+    const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const onBridgeUnavailableRef = useRef(onBridgeUnavailable);
+    onBridgeUnavailableRef.current = onBridgeUnavailable;
+    useEffect(() => {
+      if (!bridgeUrl || srcdoc === undefined) return;
+      setBridgeError(null);
+      const url = bridgeUrl;
+      const timeoutMs = bridgeReadyTimeoutMs;
+      readyTimerRef.current = setTimeout(() => {
+        readyTimerRef.current = null;
+        setBridgeError({ kind: "timeout", url, timeoutMs });
+      }, timeoutMs);
+      return () => {
+        if (readyTimerRef.current !== null) clearTimeout(readyTimerRef.current);
+        readyTimerRef.current = null;
+      };
+    }, [bridgeUrl, srcdoc, bridgeReadyTimeoutMs]);
+    useEffect(() => {
+      if (bridgeError) onBridgeUnavailableRef.current?.(bridgeError);
+    }, [bridgeError]);
 
     const handleResize = useCallback((height: number) => {
       if (liveMode) return; // live surfaces are full-viewport; height is ignored
@@ -516,6 +607,33 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         const live = liveSessionRef.current;
         if (live && rejectsLiveMessage(live, e.origin, e.data)) return;
         if (isBridgeReadyMessage(e.data)) {
+          // Protocol stamp: one console warning on drift, naming both
+          // versions. The ready is still honored (an older bridge answers
+          // every message shape it knows); on the bridgeScriptUrl path the
+          // surface additionally shows its error banner, because there the
+          // drift is a real deployment state (a cached asset from a previous
+          // package version) rather than a forged message.
+          const verdict = checkBridgeProtocolVersion(e.data);
+          const url = bridgeUrlRef.current;
+          if (!verdict.ok) {
+            console.warn(formatBridgeProtocolWarning(verdict, url));
+          }
+          if (url) {
+            if (readyTimerRef.current !== null) {
+              clearTimeout(readyTimerRef.current);
+              readyTimerRef.current = null;
+            }
+            setBridgeError(
+              verdict.ok
+                ? null
+                : {
+                    kind: "version-mismatch",
+                    url,
+                    expectedVersion: verdict.expected,
+                    reportedVersion: verdict.reported,
+                  },
+            );
+          }
           setIframeReadyVersion((version) => version + 1);
           setVimBridgePhase("inactive");
           setVimHudCommand(null);
@@ -914,6 +1032,20 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
                 className="absolute top-3 right-3 z-10 flex items-center gap-1 md:gap-2 rounded-lg border border-border/50 bg-background/80 px-1.5 py-1 shadow-md backdrop-blur-sm"
               >
                 {actionButtons}
+              </div>
+            )}
+            {/* bridgeScriptUrl path only: the bridge did not come up (no
+                ready within the timeout, or a stale asset's version). Floated
+                over the top of the iframe so it never changes the layout the
+                page renders in; the page itself stays visible. */}
+            {bridgeError && (
+              <div
+                role="alert"
+                data-print-hide
+                data-bridge-error={bridgeError.kind}
+                className="absolute inset-x-0 top-0 z-20 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive backdrop-blur-sm"
+              >
+                {formatBridgeUnavailableMessage(bridgeError)}
               </div>
             )}
             {/* Live proxied-app mode navigates a real loopback origin: no
