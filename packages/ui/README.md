@@ -50,7 +50,7 @@ The sidebar/panel resize handle exposes seams for hosts that want different edge
 
 Building your own tooltip and removing the built-in double-click reset are host-side concerns (override `onDoubleClick` where you render the handle).
 
-### Lazy renderers and the eager entries (`utils/math`, `utils/generateIdentity`, `utils/mermaid`)
+### Lazy renderers and the eager entries (`utils/math`, `utils/generateIdentity`, `utils/mermaid`; 0.32.0)
 
 The Mermaid runtime, the Graphviz engine, KaTeX and the username dictionary are off the static import graph of `Viewer`, so a host that bundles by route does not download them for a plain markdown read. Graphviz needs nothing from you (the block imports the engine inside its render effect and shows the source fence until the SVG lands, as it always did). Mermaid, KaTeX and the dictionary sit behind synchronous slots:
 
@@ -98,9 +98,9 @@ Requires `@plannotator/markdown-editor ^0.4.0` and `@plannotator/atomic-editor ^
 
 `components/html-viewer` is supported host surface as of 0.29.0: the overlay-projection annotation viewer for raw HTML (placed comment markers, pinpoint element anchors, shift-click multi-target comments). Its contract is **props plus the validated iframe message protocol** — not `configurePlannotatorUI()`, which only governs the backend surfaces around it. Drive the `annotations` prop (marker numbering derives from its array order); `readOnly` keeps markers painted and clickable while disabling all authoring. **0.29.0 also carries a breaking migration:** highlight.js is gone and `.hljs` selectors are inert — style code via the exported `pn-code` class (`CODE_BLOCK_CLASS` in `utils/codeHighlight`). See HANDOFF.md § "Raw-HTML annotation viewer + syntax-highlighting migration (0.29.0)" before upgrading from 0.28.0.
 
-#### HTML annotation parity seams
+#### HTML annotation parity seams (0.32.0)
 
-Everything a host needs around `HtmlViewer` to match Plannotator's HTML annotation experience, all additive and all defaulting to today's behavior:
+Everything a host needs around `HtmlViewer` to match Plannotator's HTML annotation experience, all additive and all defaulting to today's behavior. Requires `@plannotator/core` 0.25.0 (the `html-anchor` subpath), so install and publish core before ui:
 
 - **`projectHostThreads(threads, { openOnly?, documentLevel?, maxTargets? })`** and **`buildPersistedHtmlAnchor(source, { maxBytes?, maxTargets? })`** from `components/html-viewer` (pure, from `@plannotator/core/html-anchor`): project stored rows onto the `annotations` prop in the order that becomes the marker numbering, and trim a composed comment's anchor for persistence with cap drops and size drops reported separately. A row with nothing restorable projects as a document-level `GLOBAL_COMMENT` by default (`documentLevel: 'global'`, never reported as unanchored) or, with `documentLevel: 'unanchored'`, as a textless page `COMMENT` the unanchored report names.
 - **`onUnanchoredChange`** is keyed to the bridge's restore (one complete report per document after the restore batch, the empty set included) and complete over the `annotations` prop: textless page rows are reported without being posted, and a locally minted id the host swapped out of its list is not. It replaces a host's `mark-applied` bookkeeping for the unanchored set; the local-to-server mark swap itself stays host-side.
@@ -112,12 +112,12 @@ Everything a host needs around `HtmlViewer` to match Plannotator's HTML annotati
 
 See HANDOFF.md § "HTML annotation parity seams".
 
-#### Also blessed: `shortcuts` and `utils/inputMethod`
+#### Also blessed in 0.32.0: `shortcuts` and `utils/inputMethod`
 
 - **`@plannotator/ui/shortcuts`**: the declarative keyboard-shortcut engine (`defineShortcutScope`, `useShortcutScope`) and the per-surface scopes, including `useHtmlAnnotateShortcuts` for the Mod+Shift+A Annotate/Interact chord on HTML surfaces. Pure React plus `utils/platform`; no backend.
 - **`@plannotator/ui/utils/inputMethod`**: `getInputMethod(surface)` / `saveInputMethod(method, surface)` / `refreshInputMethodStamp(method)`, the per-surface pinpoint-or-drag preference with its TTL, persisted through the `storageBackend` seam.
 
-### WebMCP provider (`@plannotator/ui/webmcp`)
+### WebMCP provider (`@plannotator/ui/webmcp`; 0.32.0)
 
 The engine that lets a browser-integrated agent (Chrome/Edge WebMCP, `document.modelContext`) call in-page tools on a document surface. Feature-detected once; a browser without the API sees no registration, no DOM, no network, no timers. Seam: `configurePlannotatorUI({ webmcp: { enabled, namePrefix } })`, default enabled with the `plannotator.` prefix; pass `enabled: false` to keep a host page tool-free, or your own prefix to namespace the tools beside your own. There is deliberately no confirmation seam: the catalog is read-and-comment only (no approve / submit / close tools), and the agent may only edit or remove comments stamped `source: "browser-agent"`.
 
@@ -152,7 +152,7 @@ npm install @plannotator/ui @plannotator/core
 - `@plannotator/core` — pure utils + types, zero deps, browser-safe (CI enforces no `node:` imports). Published.
 - `@plannotator/ui` — React components/hooks + theme + `configure()`. Depends on `@plannotator/core` (exact-version lockstep). Published.
 - `@plannotator/shared`, `@plannotator/ai` — stay private to the monorepo; `shared` re-exports `core`'s modules via shims so Plannotator's internals are untouched.
-- Versioned in lockstep with the repo. Publish `core` then `ui`: build each tarball with **`bun pm pack`** (resolves `workspace:*` to the exact version at pack time), then **`npm publish *.tgz --provenance --access public`** — the repo's existing flow.
+- Versioned in lockstep with the repo (currently `@plannotator/core` 0.25.0 with `@plannotator/ui` 0.32.0). Publish `core` then `ui`: build each tarball with **`bun pm pack`** (resolves `workspace:*` to the exact version at pack time, from `bun.lock`, so run `bun install` after a bump), then **`npm publish *.tgz --provenance --access public`** — the repo's existing flow (`--provenance` needs CI OIDC; local publishes drop it, see HANDOFF.md "Publishing & versioning").
 
 ## The one rule
 

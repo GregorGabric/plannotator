@@ -406,7 +406,7 @@ Consumer-enablement round for wiki-links (Workspaces' `[[doc_01XYZ|label]]` link
 
 ---
 
-## Embed media picker (unreleased)
+## Embed media picker (0.31.0)
 
 The package now owns the reusable two-stage `/embed` authoring flow. The host still owns its target catalog, serialized embed grammar, and upload UI/API. This is a per-editor extension seam, not a `configurePlannotatorUI()` backend seam.
 
@@ -449,7 +449,7 @@ Behavior is pinned by `components/MarkdownEditor.embedPicker.test.ts`, the suppo
 
 ---
 
-## Lazy renderers and eager entries (unreleased)
+## Lazy renderers and eager entries (0.32.0)
 
 Four modules that used to ride every document read for a host that bundles by route now load on demand: the Mermaid runtime, the Graphviz engine, KaTeX, and the username dictionary. Plannotator's own apps register KaTeX and the dictionary eagerly in both the plan editor and the review editor, and the plan editor also registers the Mermaid runtime eagerly (the review editor never renders a Mermaid block and deliberately does not), so every surface renders exactly as before; the single-file builds are unchanged in size and first paint and the portal entry chunk keeps Mermaid as on main (the built-HTML markers and the A/B proof live in `tests/entry-assets.test.ts` and the PR that shipped this).
 
@@ -547,7 +547,7 @@ Pinned by "unanchored ids are reported on change" in `components/html-viewer/src
 
 ---
 
-## HTML annotation parity seams (unreleased)
+## HTML annotation parity seams (0.32.0)
 
 Nine additive seams so a host can run the raw-HTML annotation surface with the same experience Plannotator ships, without app-local code around `HtmlViewer`. Every default reproduces 0.31.0 behavior; Plannotator's own app passes the same defaults and renders the same DOM (proven by a real-browser A/B of the header, the overlay markers and the annotations panel on a main build versus this build).
 
@@ -571,11 +571,17 @@ Nine additive seams so a host can run the raw-HTML annotation surface with the s
 
 Behavior is pinned by `../core/html-anchor.test.ts`, `components/html-viewer/unanchored.test.ts` and the "unanchored report" suite in `components/html-viewer/htmlPinpointProtocol.test.tsx`, `hooks/useHtmlRefresh.test.tsx`, `components/HtmlSurfaceControls.test.tsx`, `components/AnnotationPanel.unanchored.test.tsx`, and the cap and scroll-to cases in `components/html-viewer/srcdoc.test.ts` and `htmlPinpointProtocol.test.tsx`.
 
+### `@plannotator/core` 0.25.0
+
+Additive only, but required: `@plannotator/ui` 0.32.0 imports the new `@plannotator/core/html-anchor` subpath (`projectHostThreads`, `buildPersistedHtmlAnchor`), absent from published core 0.24.0, so core 0.25.0 must be installed/published first. Also carries the regenerated `guide-viewer-manifest` that pins the guides.show stylesheet with the `HtmlSurfaceControls` rules (see "Publishing & versioning").
+
+0.32.0 also ships the WebMCP provider engine (`@plannotator/ui/webmcp`, the `webmcp` seam on `configurePlannotatorUI`, and the additive `Annotation.inReplyTo` field); see README.md "WebMCP provider".
+
 ---
 
 ## Publishing & versioning
 
-- The next pair is `@plannotator/ui` `0.32.0` with `@plannotator/core` `0.25.0`. **Publish `core` first**: ui 0.32.0 imports the new `@plannotator/core/html-anchor` subpath, which no published core (0.24.0 and earlier) has, just as ui 0.29.0 needed core 0.23.0 for `@plannotator/core/annotatable`. The ui→core dependency resolves exactly at pack time.
+- The current pair is `@plannotator/ui` `0.32.0` with `@plannotator/core` `0.25.0`. **Publish `core` first**: ui 0.32.0 imports the new `@plannotator/core/html-anchor` subpath, which no earlier published core (0.24.0 and before) has, just as ui 0.29.0 needed core 0.23.0 for `@plannotator/core/annotatable`. The ui→core dependency resolves exactly at pack time, from the lockfile: after a version bump, run `bun install` so `bun.lock` carries the new workspace versions, or `bun pm pack` will still stamp the previous core version into ui's tarball (the 0.31.0 lesson).
 - The HTML annotation seams also changed the guides.show viewer **stylesheet** (five utility rules from `HtmlSurfaceControls`; the viewer JS is unchanged), so `packages/core/guide-viewer-manifest.ts` now pins a CSS hash that exists on guides.show only after the deploy workflow has published this build's `/v1/` assets. A guide exported from this build before that deploy would pin a stylesheet the host does not serve yet: **deploy guides.show before any release that ships this manifest.**
 - They depend on each other via `workspace:*`. At publish time that must resolve to the **exact** version in the tarball, so publish with a tool that does that resolution (the repo's existing flow uses `bun pm pack` to build the tarball, then `npm publish *.tgz --access public`). Publish **`core` first, then `ui`**.
 - **`--provenance` only works from a supported CI environment (GitHub Actions OIDC)** — a local publish fails with `Automatic provenance generation not supported for provider: null`. Until a CI publish job exists for these two packages, local publishes drop the flag. Publishing under `--tag next` first lets the consumer preflight before `npm dist-tag add <pkg>@<version> latest` promotes it.
