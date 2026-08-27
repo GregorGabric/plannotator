@@ -2,6 +2,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import type { Viz } from '@viz-js/viz';
 import type { Block } from '../types';
+import { createRuntimeRetryEpoch } from '../utils/runtimeRetry';
 
 interface ViewBox {
   x: number;
@@ -59,6 +60,9 @@ export function __setVizLoaderForTests(
 }
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** One Retry re-attempts every block whose engine import failed (see utils/runtimeRetry). */
+const vizRetryEpoch = createRuntimeRetryEpoch();
 
 function parseViewBox(svgEl: SVGSVGElement): ViewBox | null {
   const raw = svgEl.getAttribute('viewBox');
@@ -153,6 +157,16 @@ export const GraphvizBlock: React.FC<{ block: Block }> = ({ block }) => {
   const [retryToken, setRetryToken] = useState(0);
   const [showSource, setShowSource] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // A sibling's Retry re-attempts this block too, but only while its own
+  // failure was the shared engine import; a healthy block or a dot syntax
+  // error is left alone.
+  const runtimeUnavailableRef = useRef(runtimeUnavailable);
+  runtimeUnavailableRef.current = runtimeUnavailable;
+  useEffect(() => vizRetryEpoch.subscribe(() => {
+    if (!runtimeUnavailableRef.current) return;
+    setError(null);
+    setRetryToken((token) => token + 1);
+  }), []);
 
   const zoomLevelRef = useRef(1);
   const isDraggingRef = useRef(false);
@@ -431,10 +445,7 @@ export const GraphvizBlock: React.FC<{ block: Block }> = ({ block }) => {
           {runtimeUnavailable && (
             <button
               type="button"
-              onClick={() => {
-                setError(null);
-                setRetryToken((token) => token + 1);
-              }}
+              onClick={() => vizRetryEpoch.bump()}
               className="ml-auto rounded-md border border-destructive/30 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10"
               title="Retry loading the diagram renderer"
             >

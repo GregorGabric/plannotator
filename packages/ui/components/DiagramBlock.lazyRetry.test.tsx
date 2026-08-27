@@ -145,6 +145,43 @@ describe.each(cases)('$name lazy runtime', ({ install, runtime, element, source,
     expect(el.textContent).not.toContain(errorTitle);
   });
 
+  test.skipIf(!hasDom)('one Retry re-attempts every sibling block that failed on the shared runtime', async () => {
+    // The runtime is memoized per module, so all blocks fail together; a
+    // Retry that bumped only its own block left the siblings on stale error
+    // panels after the runtime had recovered.
+    let healthy = false;
+    let calls = 0;
+    install(() => {
+      calls += 1;
+      return healthy ? Promise.resolve(runtime) : Promise.reject(new Error('down'));
+    });
+    const el = await mount(
+      <>
+        <div id="a">{element}</div>
+        <div id="b">{element}</div>
+      </>,
+    );
+    await settle(RETRY_DELAY_MS * 5);
+    const a = el.querySelector('#a')!;
+    const b = el.querySelector('#b')!;
+    expect(a.textContent).toContain(errorTitle);
+    expect(b.textContent).toContain(errorTitle);
+
+    healthy = true;
+    const callsBeforeRetry = calls;
+    const retry = a.querySelector<HTMLButtonElement>('button[title="Retry loading the diagram renderer"]');
+    await act(async () => {
+      retry!.click();
+    });
+    await settle(RETRY_DELAY_MS * 5);
+
+    expect(a.innerHTML).toContain('data-sentinel="diagram"');
+    expect(b.innerHTML).toContain('data-sentinel="diagram"');
+    expect(b.textContent).not.toContain(errorTitle);
+    // Both blocks re-attempt in the same commit and share one memoized load.
+    expect(calls).toBe(callsBeforeRetry + 1);
+  });
+
   test.skipIf(!hasDom)('a diagram syntax error keeps the existing panel without a Retry button', async () => {
     const broken = { initialize() {}, render: async () => { throw new Error('Parse error'); }, renderString: async () => { throw new Error('Parse error'); } } as never;
     let calls = 0;
