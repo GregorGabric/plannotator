@@ -38,6 +38,7 @@ import {
   type ComposerYieldState,
 } from "./composerYield";
 import { buildSyncNumbering } from "./annotationNumbering";
+import { mergeUnanchoredIds } from "./unanchored";
 import {
   MAX_PAGE_URL_LENGTH,
   rejectsLiveMessage,
@@ -203,8 +204,21 @@ export interface HtmlViewerProps {
   /** Reports the full set of annotation ids with no live representation on
    *  the page (fail-closed anchors hide markers rather than guess). Called
    *  with the complete current set whenever it changes, including back to
-   *  empty on recovery. Fires in readOnly mode too. */
+   *  empty on recovery. Fires in readOnly mode too. Complete over the
+   *  `annotations` prop: page rows with nothing to restore by (no quoted
+   *  text, no element anchor) are reported even though the bridge never
+   *  sees them, and an id this viewer minted for a local comment that the
+   *  host swapped out of `annotations` for its own id is not reported. */
   onUnanchoredChange?: (ids: string[]) => void;
+  /** Product cap on additional (shift-click) targets per comment, 0..16.
+   *  Enforced at the trust boundary, on submit and on restore, and carried
+   *  to the bridge so the in-page toggle stops at the same number. Default
+   *  16 (the package cap); absent leaves every message unchanged. */
+  maxAdditionalTargets?: number;
+  /** scrollIntoView behavior when a selected annotation is scrolled into
+   *  view inside the page. Default 'smooth'; pass 'auto' to carry the
+   *  parent's reduced-motion preference across the iframe boundary. */
+  scrollBehavior?: 'smooth' | 'auto';
   /** Accessible iframe title. */
   title?: string;
 }
@@ -246,6 +260,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       onAskAI,
       readOnly = false,
       onUnanchoredChange,
+      maxAdditionalTargets,
+      scrollBehavior,
       title = "HTML Plan Viewer",
     },
     ref,
@@ -359,6 +375,63 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       [handleYieldPointer],
     );
 
+    // Unanchored union: the bridge reports ids with no live representation,
+    // completed here with what the bridge cannot see (textless page rows it
+    // was never asked to restore) and minus locally minted ids the host
+    // swapped out of `annotations`. Bridge reports deliver as they arrive
+    // (pass-through timing); a prop-side change delivers only when the union
+    // actually changes, so a viewer with nothing to complete delivers exactly
+    // the bridge list, exactly when the bridge posts it.
+    const onUnanchoredChangeRef = useRef(onUnanchoredChange);
+    onUnanchoredChangeRef.current = onUnanchoredChange;
+    const annotationsRef = useRef(annotations);
+    annotationsRef.current = annotations;
+    const bridgeUnanchoredRef = useRef<readonly string[]>([]);
+    const lastDeliveredUnanchoredRef = useRef("[]");
+    const createdIdsRef = useRef<ReadonlySet<string>>(new Set());
+    // The bridge's first report for the current document is the one that
+    // follows the restore batch (the parent asks for it with
+    // report-unanchored, and the bridge answers after its next complete
+    // pass, empty set included). Nothing is delivered before it: a host
+    // that acknowledges "the first report after a reload" must get the
+    // post-restore set, never a prop-side set computed at mount.
+    const bridgeReportedRef = useRef(false);
+    // An in-place document swap (rawHtml or src changes on one instance):
+    // the old document may still emit through the same contentWindow before
+    // the new one is ready. From the swap until the next ready, bridge
+    // reports belong to the old document and are dropped, and the
+    // last-delivered key is reset so the new document's first answer is
+    // delivered even when it equals the old one. First mount is not a swap.
+    const awaitingReadyRef = useRef(false);
+    const documentIdentityRef = useRef<{ rawHtml: string; src: string | undefined } | null>(null);
+    const previousIdentity = documentIdentityRef.current;
+    if (previousIdentity && (previousIdentity.rawHtml !== rawHtml || previousIdentity.src !== src)) {
+      awaitingReadyRef.current = true;
+      bridgeReportedRef.current = false;
+      lastDeliveredUnanchoredRef.current = "[]";
+      bridgeUnanchoredRef.current = [];
+    }
+    documentIdentityRef.current = { rawHtml, src };
+    const deliverUnanchored = useCallback((ids: string[], onlyIfChanged: boolean) => {
+      const key = JSON.stringify(ids);
+      if (onlyIfChanged && key === lastDeliveredUnanchoredRef.current) return;
+      lastDeliveredUnanchoredRef.current = key;
+      onUnanchoredChangeRef.current?.(ids);
+    }, []);
+    const handleBridgeUnanchored = useCallback((ids: string[]) => {
+      if (awaitingReadyRef.current) return;
+      bridgeUnanchoredRef.current = ids;
+      bridgeReportedRef.current = true;
+      deliverUnanchored(
+        mergeUnanchoredIds({
+          bridgeIds: ids,
+          annotations: annotationsRef.current,
+          createdIds: createdIdsRef.current,
+        }),
+        false,
+      );
+    }, [deliverUnanchored]);
+
     const hook = useHtmlAnnotation({
       iframeRef,
       enabled: !readOnly,
@@ -371,8 +444,23 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       live: liveSession,
       onPageChange,
       onBridgePointer: handleBridgePointer,
-      onUnanchoredChange,
+      onUnanchoredChange: handleBridgeUnanchored,
+      maxAdditionalTargets,
+      scrollBehavior,
     });
+    createdIdsRef.current = hook.createdAnnotationIds;
+
+    useEffect(() => {
+      if (!bridgeReportedRef.current) return;
+      deliverUnanchored(
+        mergeUnanchoredIds({
+          bridgeIds: bridgeUnanchoredRef.current,
+          annotations,
+          createdIds: hook.createdAnnotationIds,
+        }),
+        true,
+      );
+    }, [annotations, hook.createdAnnotationIds, deliverUnanchored]);
 
     const multiSelectActive = !readOnly && !!hook.commentPopover && hook.draftTargets.length > 0;
 
@@ -548,6 +636,13 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       if (restorable.length > 0) {
         hook.applyAnnotations(restorable);
       }
+      // A fresh document: the bridge starts from an empty set and would stay
+      // silent when everything restores. Ask for one complete report after
+      // this restore batch (posted after it, so the answering pass sees it),
+      // which becomes this document's first delivery, empty set included.
+      awaitingReadyRef.current = false;
+      bridgeReportedRef.current = false;
+      postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Live page navigation with a ready iframe: explicitly clear the previous
@@ -570,6 +665,11 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         type: `${PREFIX}sync-annotations`,
         annotations: buildSyncNumbering(annotations),
       });
+      // A new page is a new restore batch: report its complete set once, and
+      // deliver nothing computed against the previous page's report until
+      // that answer arrives.
+      bridgeReportedRef.current = false;
+      postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [currentPageUrl, iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Placed-marker numbering is parent-authoritative and matches the

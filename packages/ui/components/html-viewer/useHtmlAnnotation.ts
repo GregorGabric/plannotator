@@ -18,6 +18,13 @@ function nextHtmlAnnId(): string {
   return `html-ann-${Date.now().toString(36)}-${(htmlAnnSeq++).toString(36)}`;
 }
 
+/** Ids minted by this module for locally created annotations (create-mark).
+ * Module-scoped like the sequence above: a host that swaps a local id for
+ * its own server id keeps the local mark until it removes it, and the
+ * unanchored union needs to recognise such ids whichever viewer instance
+ * minted them. Bounded: only ids from this page load, one entry per create. */
+const mintedHtmlAnnIds = new Set<string>();
+
 function htmlCommentDraftKey(
   text: string,
   anchor?: HtmlElementAnchor | null,
@@ -129,6 +136,20 @@ export interface UseHtmlAnnotationOptions {
    *  empty on recovery. Delivered in readOnly mode too: view-only surfaces
    *  are exactly where silently missing markers would go unnoticed. */
   onUnanchoredChange?: (ids: string[]) => void;
+  /** Product cap on additional (shift-click) targets per comment, 0..16.
+   *  Applied at the trust boundary, on submit, on restore, and carried to
+   *  the bridge on arm-multi-select so the in-page toggle stops at the
+   *  same number. Absent: the package's 16, and the arm message is unchanged. */
+  maxAdditionalTargets?: number;
+  /** scrollIntoView behavior for scroll-to (selecting an annotation).
+   *  Absent: smooth, as before; pass 'auto' to honor reduced motion. */
+  scrollBehavior?: 'smooth' | 'auto';
+}
+
+/** Clamp a host cap into the package's bound; anything unusable is the default. */
+export function resolveMaxAdditionalTargets(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return MAX_ADDITIONAL_TARGETS;
+  return Math.max(0, Math.min(MAX_ADDITIONAL_TARGETS, Math.floor(value)));
 }
 
 function postToIframe(
@@ -365,6 +386,8 @@ export function useHtmlAnnotation({
   onPageChange,
   onBridgePointer,
   onUnanchoredChange,
+  maxAdditionalTargets,
+  scrollBehavior,
 }: UseHtmlAnnotationOptions): Omit<
   UseAnnotationHighlighterReturn,
   "highlighterRef" | "highlightRange" | "highlightMathElement"
@@ -380,6 +403,10 @@ export function useHtmlAnnotation({
   /** Composer one-click "Looks good": submits the hardcoded positive label
    *  with the same anchor and multi-select targets a typed comment would carry. */
   handleCommentLooksGood: () => void;
+  /** Ids this module minted for locally created annotations (create-mark),
+   *  for the unanchored union: a minted id the host never listed is a
+   *  swapped-out local mark, not a host row. Read-only, stable identity. */
+  createdAnnotationIds: ReadonlySet<string>;
 } {
   const [toolbarState, setToolbarState] = useState<ToolbarState | null>(null);
   const [commentPopover, setCommentPopover] = useState<CommentPopoverState | null>(null);
@@ -420,6 +447,12 @@ export function useHtmlAnnotation({
   liveRef.current = live ?? null;
   const onPageChangeRef = useRef(onPageChange);
   onPageChangeRef.current = onPageChange;
+  // The effective cap and whether the host set one: only an explicit cap
+  // rides on arm-multi-select, so an unconfigured viewer posts today's message.
+  const maxTargetsRef = useRef(resolveMaxAdditionalTargets(maxAdditionalTargets));
+  maxTargetsRef.current = resolveMaxAdditionalTargets(maxAdditionalTargets);
+  const hostCapRef = useRef(maxAdditionalTargets !== undefined);
+  hostCapRef.current = maxAdditionalTargets !== undefined;
 
   const anchorRef = useRef<HTMLDivElement | null>(null);
 
@@ -580,6 +613,7 @@ export function useHtmlAnnotation({
             post({
               type: `${PREFIX}arm-multi-select`,
               key: message.targetKey,
+              ...(hostCapRef.current ? { max: maxTargetsRef.current } : {}),
             });
           }
         } else {
@@ -599,7 +633,7 @@ export function useHtmlAnnotation({
         if (
           commentPopoverRef.current
           && targets.length > 0
-          && targets.length < 1 + MAX_ADDITIONAL_TARGETS
+          && targets.length < 1 + maxTargetsRef.current
           && !targets.some((t) => t.key === message.key)
         ) {
           setDraftTargets([
@@ -715,6 +749,9 @@ export function useHtmlAnnotation({
       post({
         type: `${PREFIX}scroll-to`,
         id: selectedAnnotationId,
+        // Only an explicit host preference rides along; the default message
+        // is unchanged and the bridge scrolls smoothly as before.
+        ...(scrollBehavior ? { behavior: scrollBehavior } : {}),
       });
     } else {
       post({
@@ -722,7 +759,7 @@ export function useHtmlAnnotation({
         id: null,
       });
     }
-  }, [selectedAnnotationId, post]);
+  }, [selectedAnnotationId, post, scrollBehavior]);
 
   const handleAnnotate = useCallback(
     (type: AnnotationType) => {
@@ -731,6 +768,7 @@ export function useHtmlAnnotation({
       if (!text || type !== AnnotationType.DELETION) return;
 
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "deletion" });
       onAddRef.current?.({
         id,
@@ -781,7 +819,7 @@ export function useHtmlAnnotation({
       const targets = draftTargetsRef.current;
       const additionalTargets: HtmlAnnotationTarget[] | undefined =
         targets.length > 1
-          ? targets.slice(1, 1 + MAX_ADDITIONAL_TARGETS).map((t) => ({
+          ? targets.slice(1, 1 + maxTargetsRef.current).map((t) => ({
               label: t.label,
               text: t.text,
               anchor: t.anchor ?? undefined,
@@ -789,6 +827,7 @@ export function useHtmlAnnotation({
           : undefined;
 
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -826,7 +865,7 @@ export function useHtmlAnnotation({
     const targets = draftTargetsRef.current;
     const additionalTargets: HtmlAnnotationTarget[] | undefined =
       targets.length > 1
-        ? targets.slice(1, 1 + MAX_ADDITIONAL_TARGETS).map((t) => ({
+        ? targets.slice(1, 1 + maxTargetsRef.current).map((t) => ({
             label: t.label,
             text: t.text,
             anchor: t.anchor ?? undefined,
@@ -834,6 +873,7 @@ export function useHtmlAnnotation({
         : undefined;
 
     const id = nextHtmlAnnId();
+    mintedHtmlAnnIds.add(id);
     post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
     onAddRef.current?.({
       id,
@@ -893,6 +933,7 @@ export function useHtmlAnnotation({
       const text = pendingTextRef.current;
       if (!text) return;
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -953,7 +994,7 @@ export function useHtmlAnnotation({
         const additionalAnchors = (ann.htmlAdditionalTargets ?? [])
           .map((t) => t.anchor)
           .filter((a): a is HtmlElementAnchor => !!a)
-          .slice(0, MAX_ADDITIONAL_TARGETS);
+          .slice(0, maxTargetsRef.current);
         post({
           type: `${PREFIX}find-and-mark`,
           id: ann.id,
@@ -989,5 +1030,6 @@ export function useHtmlAnnotation({
     removeDraftTarget,
     flashDraftTarget,
     composerFocusToken,
+    createdAnnotationIds: mintedHtmlAnnIds,
   };
 }

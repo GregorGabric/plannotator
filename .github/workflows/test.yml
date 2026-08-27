@@ -148,6 +148,9 @@ jobs:
           packages/editor/App.archiveReadOnly.test.tsx
           packages/editor/App.htmlChrome.test.tsx
           packages/editor/components/HtmlSurfaceActions.test.tsx
+          packages/ui/components/HtmlSurfaceControls.test.tsx
+          packages/ui/components/AnnotationPanel.unanchored.test.tsx
+          packages/ui/hooks/useHtmlRefresh.test.tsx
           packages/ui/hooks/useSharing.contentRevision.test.tsx
           packages/ui/components/AnnotationToolbar.commentOnly.test.tsx
           packages/ui/components/CommentPopover.quickLookGood.test.tsx

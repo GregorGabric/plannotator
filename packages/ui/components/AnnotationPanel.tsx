@@ -135,6 +135,10 @@ interface PanelProps {
   /** Embed only the timeline body in a host-owned stage. The host owns the
     *  title, close control, visible-viewport geometry, and focus boundary. */
   presentation?: 'panel' | 'embedded';
+  /** Ids of annotations with no live location in the document (e.g. the
+    *  HTML viewer's onUnanchoredChange report after a refresh). Matching
+    *  cards show a small "Unanchored" chip. Absent: no chip, DOM unchanged. */
+  unanchoredIds?: ReadonlySet<string>;
 }
 
 export const AnnotationPanel: React.FC<PanelProps> = ({
@@ -161,6 +165,7 @@ export const AnnotationPanel: React.FC<PanelProps> = ({
   renderCardFooter,
   readOnly = false,
   presentation = 'panel',
+  unanchoredIds,
 }) => {
   const isMobile = useIsMobile();
   const embedded = presentation === 'embedded';
@@ -291,6 +296,7 @@ export const AnnotationPanel: React.FC<PanelProps> = ({
                       onEdit={onEdit ? (updates: Partial<Annotation>) => onEdit(entry.annotation.id, updates) : undefined}
                       readOnly={readOnly}
                       footer={renderCardFooter?.(entry.annotation)}
+                      unanchored={unanchoredIds?.has(entry.annotation.id) ?? false}
                     />
                   </div>
                 ) : (
@@ -304,6 +310,7 @@ export const AnnotationPanel: React.FC<PanelProps> = ({
                   onEdit={onEdit ? (updates: Partial<Annotation>) => onEdit(entry.annotation.id, updates) : undefined}
                   readOnly={readOnly}
                   footer={renderCardFooter?.(entry.annotation)}
+                  unanchored={unanchoredIds?.has(entry.annotation.id) ?? false}
                 />
                 )
               ) : (
@@ -532,7 +539,9 @@ const AnnotationCard: React.FC<{
   onEdit?: (updates: Partial<Annotation>) => void;
   readOnly?: boolean;
   footer?: React.ReactNode;
-}> = ({ annotation, isSelected, isMe, onSelect, onDelete, onEdit, readOnly = false, footer }) => {
+  /** The annotation has no live location in the document (host-reported). */
+  unanchored?: boolean;
+}> = ({ annotation, isSelected, isMe, onSelect, onDelete, onEdit, readOnly = false, footer, unanchored = false }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(annotation.text || '');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -635,6 +644,15 @@ const AnnotationCard: React.FC<{
             title={annotation.pageUrl}
           >
             {annotation.pageUrl}
+          </span>
+        )}
+        {unanchored && (
+          <span
+            data-annotation-unanchored="true"
+            className="text-[9px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground"
+            title="This comment no longer matches a location in the document"
+          >
+            Unanchored
           </span>
         )}
         <span className="text-[10px] text-muted-foreground/50 truncate">

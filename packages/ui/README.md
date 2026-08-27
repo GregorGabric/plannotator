@@ -86,6 +86,25 @@ Requires `@plannotator/markdown-editor ^0.4.0` and `@plannotator/atomic-editor ^
 
 `components/html-viewer` is supported host surface as of 0.29.0: the overlay-projection annotation viewer for raw HTML (placed comment markers, pinpoint element anchors, shift-click multi-target comments). Its contract is **props plus the validated iframe message protocol** — not `configurePlannotatorUI()`, which only governs the backend surfaces around it. Drive the `annotations` prop (marker numbering derives from its array order); `readOnly` keeps markers painted and clickable while disabling all authoring. **0.29.0 also carries a breaking migration:** highlight.js is gone and `.hljs` selectors are inert — style code via the exported `pn-code` class (`CODE_BLOCK_CLASS` in `utils/codeHighlight`). See HANDOFF.md § "Raw-HTML annotation viewer + syntax-highlighting migration (0.29.0)" before upgrading from 0.28.0.
 
+#### HTML annotation parity seams
+
+Everything a host needs around `HtmlViewer` to match Plannotator's HTML annotation experience, all additive and all defaulting to today's behavior:
+
+- **`projectHostThreads(threads, { openOnly?, documentLevel?, maxTargets? })`** and **`buildPersistedHtmlAnchor(source, { maxBytes?, maxTargets? })`** from `components/html-viewer` (pure, from `@plannotator/core/html-anchor`): project stored rows onto the `annotations` prop in the order that becomes the marker numbering, and trim a composed comment's anchor for persistence with cap drops and size drops reported separately. A row with nothing restorable projects as a document-level `GLOBAL_COMMENT` by default (`documentLevel: 'global'`, never reported as unanchored) or, with `documentLevel: 'unanchored'`, as a textless page `COMMENT` the unanchored report names.
+- **`onUnanchoredChange`** is keyed to the bridge's restore (one complete report per document after the restore batch, the empty set included) and complete over the `annotations` prop: textless page rows are reported without being posted, and a locally minted id the host swapped out of its list is not. It replaces a host's `mark-applied` bookkeeping for the unanchored set; the local-to-server mark swap itself stays host-side.
+- **`hooks/useHtmlRefresh({ fetchSnapshot, onSnapshot, onUnanchored?, onResult? })`**: the refresh cycle with the stale-response and document-change guards, backend behind `fetchSnapshot`.
+- **`components/HtmlSurfaceControls`**: the eye / refresh / pen header controls with Plannotator's markup and `labels` overrides.
+- **`AnnotationPanel` `unanchoredIds`**: an "Unanchored" chip on the listed cards.
+- **`HtmlViewer` `scrollBehavior`** (`'auto'` for reduced motion) and **`maxAdditionalTargets`** (a product cap the bridge honors too).
+- An `ExternalAnnotationTransport` whose `subscribe` emits `snapshot` on a host push keeps `useExternalAnnotations` off its fallback poll.
+
+See HANDOFF.md § "HTML annotation parity seams".
+
+#### Also blessed: `shortcuts` and `utils/inputMethod`
+
+- **`@plannotator/ui/shortcuts`**: the declarative keyboard-shortcut engine (`defineShortcutScope`, `useShortcutScope`) and the per-surface scopes, including `useHtmlAnnotateShortcuts` for the Mod+Shift+A Annotate/Interact chord on HTML surfaces. Pure React plus `utils/platform`; no backend.
+- **`@plannotator/ui/utils/inputMethod`**: `getInputMethod(surface)` / `saveInputMethod(method, surface)` / `refreshInputMethodStamp(method)`, the per-surface pinpoint-or-drag preference with its TTL, persisted through the `storageBackend` seam.
+
 ### WebMCP provider (`@plannotator/ui/webmcp`)
 
 The engine that lets a browser-integrated agent (Chrome/Edge WebMCP, `document.modelContext`) call in-page tools on a document surface. Feature-detected once; a browser without the API sees no registration, no DOM, no network, no timers. Seam: `configurePlannotatorUI({ webmcp: { enabled, namePrefix } })`, default enabled with the `plannotator.` prefix; pass `enabled: false` to keep a host page tool-free, or your own prefix to namespace the tools beside your own. There is deliberately no confirmation seam: the catalog is read-and-comment only (no approve / submit / close tools), and the agent may only edit or remove comments stamped `source: "browser-agent"`.

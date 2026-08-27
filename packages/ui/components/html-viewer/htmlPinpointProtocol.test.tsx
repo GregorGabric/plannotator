@@ -673,6 +673,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
   async function mountViewer(
     onAdd: (ann: Annotation) => void,
     mode: 'selection' | 'quickLabel' = 'selection',
+    extraProps: { maxAdditionalTargets?: number } = {},
   ) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
     const HtmlViewer = htmlViewerModule.HtmlViewer;
@@ -683,6 +684,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     await act(async () => {
       root.render(
         <HtmlViewer
+          {...extraProps}
           rawHtml="<html><body><p>Pinpoint target</p></body></html>"
           annotations={[]}
           onAddAnnotation={onAdd}
@@ -880,6 +882,50 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     expect(added[0]!.htmlAdditionalTargets!.length).toBe(16);
   });
 
+  test('maxAdditionalTargets lowers the cap end to end: chips, the saved array, and the bridge arm', async () => {
+    // A host with a product cap of 3 must see the cap in the draft (chips
+    // stop growing), in the saved annotation, and in what the bridge is
+    // armed with, so the in-page toggle stops at the same number.
+    const added: Annotation[] = [];
+    const { post, postedToIframe } = await mountViewer((ann) => added.push(ann), 'selection', { maxAdditionalTargets: 3 });
+    await post(primarySelection());
+    expect(postedToIframe).toContainEqual({
+      type: 'plannotator-bridge-arm-multi-select',
+      key: 'ht-1',
+      max: 3,
+    });
+    for (let i = 0; i < 8; i++) {
+      await post(addedTarget(`host-cap-${i}`, `Target ${i}`));
+    }
+    expect(chips().length).toBe(4); // primary + 3
+
+    await typeComment('Host capped');
+    await save();
+    expect(added[0]!.htmlAdditionalTargets!.length).toBe(3);
+
+    // The composer's one-click "Looks good" path submits under the same cap.
+    await post(primarySelection({ targetKey: 'ht-2' }));
+    for (let i = 0; i < 8; i++) {
+      await post(addedTarget(`host-cap-b-${i}`, `Target ${i}`));
+    }
+    const looksGood = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'),
+    ).find((b) => b.title.startsWith('Add "Looks good"'));
+    if (!looksGood) throw new Error('Looks good button missing');
+    await act(async () => { looksGood.click(); });
+    expect(added[1]!.isQuickLabel).toBe(true);
+    expect(added[1]!.htmlAdditionalTargets!.length).toBe(3);
+  });
+
+  test('without maxAdditionalTargets the arm message and the 16 cap are unchanged', async () => {
+    const added: Annotation[] = [];
+    const { post, postedToIframe } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    const arm = postedToIframe.find((m) => m.type === 'plannotator-bridge-arm-multi-select');
+    expect(arm).toEqual({ type: 'plannotator-bridge-arm-multi-select', key: 'ht-1' });
+    expect('max' in arm!).toBe(false);
+  });
+
   test('adds are ignored when no pinpoint draft is open (drag selections stay single-target)', async () => {
     const { post, postedToIframe } = await mountViewer(() => {});
     // Drag selection (no pinpoint flag): opens the toolbar, arms nothing.
@@ -1021,6 +1067,60 @@ describe.if(hasDom)('readOnly view-only contract', () => {
     } as Annotation;
   }
 
+  test('scroll-to carries the host scrollBehavior only when one is passed', async () => {
+    // Reduced motion cannot be observed inside the sandbox, so the host
+    // passes it. Absent, the message must be exactly today's shape so the
+    // bridge keeps scrolling smoothly for hosts that never set it.
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const mountWith = async (scrollBehavior?: 'smooth' | 'auto') => {
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      mountedRoots.push(root);
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml="<html><body><p>Read-only target</p></body></html>"
+            annotations={[committed('sel-1')]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="selection"
+            inputMethod="pinpoint"
+            scrollBehavior={scrollBehavior}
+          />,
+        );
+      });
+      const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+      if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+      const posted: Array<Record<string, unknown>> = [];
+      const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+      (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+        ((data: unknown, ...rest: unknown[]) => {
+          if (data && typeof data === 'object') posted.push(data as Record<string, unknown>);
+          return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+        }) as typeof iframe.contentWindow.postMessage;
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml="<html><body><p>Read-only target</p></body></html>"
+            annotations={[committed('sel-1')]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId="sel-1"
+            mode="selection"
+            inputMethod="pinpoint"
+            scrollBehavior={scrollBehavior}
+          />,
+        );
+      });
+      return posted.filter((m) => m.type === 'plannotator-bridge-scroll-to');
+    };
+    expect(await mountWith(undefined)).toEqual([{ type: 'plannotator-bridge-scroll-to', id: 'sel-1' }]);
+    expect(await mountWith('auto')).toEqual([{ type: 'plannotator-bridge-scroll-to', id: 'sel-1', behavior: 'auto' }]);
+  });
+
   test('readOnly still restores markers and syncs export-matching numbers on ready', async () => {
     const { post, postedToIframe } = await mountReadOnly([committed('ro-1'), committed('ro-2')]);
     await post({ type: 'plannotator-bridge-ready' });
@@ -1119,6 +1219,201 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
       }));
     });
     expect(received).toEqual([['lost-1']]);
+  });
+
+  function pageRow(id: string, overrides: Partial<Annotation> = {}): Annotation {
+    return {
+      id,
+      blockId: '',
+      startOffset: 0,
+      endOffset: 0,
+      type: AnnotationType.COMMENT,
+      text: 'noted',
+      originalText: 'Page',
+      createdA: 1,
+      ...overrides,
+    };
+  }
+
+  async function mountUnion(initial: Annotation[], received: string[][]) {
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    const added: Annotation[] = [];
+    const render = async (annotations: Annotation[], rawHtml = '<html><body><p>Page</p></body></html>') => {
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml={rawHtml}
+            annotations={annotations}
+            onAddAnnotation={(ann) => added.push(ann)}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="comment"
+            inputMethod="pinpoint"
+            onUnanchoredChange={(ids) => received.push(ids)}
+          />,
+        );
+      });
+    };
+    await render(initial);
+    const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    const postedToIframe: Array<Record<string, unknown>> = [];
+    const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+    (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+      ((data: unknown, ...rest: unknown[]) => {
+        if (data && typeof data === 'object') postedToIframe.push(data as Record<string, unknown>);
+        return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+      }) as typeof iframe.contentWindow.postMessage;
+    const post = async (data: Record<string, unknown>) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', { source: iframe.contentWindow, data }));
+      });
+    };
+    const ready = () => post({ type: 'plannotator-bridge-ready' });
+    return { render, post, ready, added, postedToIframe };
+  }
+
+  test('on ready the viewer asks the bridge for one complete report AFTER its restore batch', async () => {
+    // The bridge only posts when its set changes from empty, so a fresh
+    // document where everything restores would stay silent. The parent asks
+    // for the post-restore set explicitly, after the find-and-marks, so the
+    // answering pass sees every restore.
+    const received: string[][] = [];
+    const { ready, postedToIframe } = await mountUnion([pageRow('a-1'), pageRow('a-2')], received);
+    await ready();
+    const types = postedToIframe.map((m) => m.type);
+    const restores = types.filter((t) => t === 'plannotator-bridge-find-and-mark');
+    expect(restores.length).toBe(2);
+    expect(types.lastIndexOf('plannotator-bridge-find-and-mark')).toBeLessThan(
+      types.indexOf('plannotator-bridge-report-unanchored'),
+    );
+    // Nothing is delivered until the bridge answers.
+    expect(received).toEqual([]);
+  });
+
+  test('textless page rows join the FIRST bridge report; document-level comments do not; nothing is delivered before it', async () => {
+    // A page row with no quoted text and no element anchor is never posted
+    // to the bridge (nothing to find it by), so the bridge can never name
+    // it; the viewer completes the bridge's report with it. Delivery waits
+    // for the bridge's post-restore answer: a host acknowledging "the first
+    // report after a reload" must get the restore set, not a set computed
+    // at mount. A GLOBAL_COMMENT has no page location and is never flagged.
+    const received: string[][] = [];
+    const { post, ready } = await mountUnion([
+      pageRow('anchored-1'),
+      pageRow('textless-1', { originalText: '' }),
+      pageRow('global-1', { originalText: '', type: AnnotationType.GLOBAL_COMMENT }),
+    ], received);
+    await ready();
+    expect(received).toEqual([]);
+    await post({ type: MSG, ids: [] });
+    expect(received).toEqual([['textless-1']]);
+
+    // Later bridge reports union with it, pass-through timing kept.
+    await post({ type: MSG, ids: ['anchored-1'] });
+    expect(received.at(-1)).toEqual(['anchored-1', 'textless-1']);
+    await post({ type: MSG, ids: [] });
+    expect(received.at(-1)).toEqual(['textless-1']);
+  });
+
+  test('one textless row plus one real orphan: the first delivered report carries the orphan', async () => {
+    // The refresh acknowledgement consumes the first report per reload, so
+    // that report must be the post-restore one, with the orphan in it.
+    const received: string[][] = [];
+    const { post, ready } = await mountUnion([
+      pageRow('textless-1', { originalText: '' }),
+      pageRow('orphan-1'),
+    ], received);
+    await ready();
+    await post({ type: MSG, ids: ['orphan-1'] });
+    expect(received).toEqual([['orphan-1', 'textless-1']]);
+  });
+
+  test('re-anchoring: a document whose restore succeeds reports the empty set once, clearing a prior orphan', async () => {
+    // Delete, refresh: the bridge names the orphan. Restore, refresh: a new
+    // document restores everything; the forced report is the empty set, and
+    // the host clears its chip from it.
+    const received: string[][] = [];
+    const { post, ready } = await mountUnion([pageRow('a-1')], received);
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1']]);
+    // A new document (srcdoc reload): the bridge starts empty and answers
+    // the parent's request with its complete, empty set.
+    await ready();
+    await post({ type: MSG, ids: [] });
+    expect(received).toEqual([['a-1'], []]);
+  });
+
+  test('an in-place rawHtml swap drops old-document reports until the new ready, then delivers afresh', async () => {
+    // One instance, new srcdoc: the old document can still emit through the
+    // same contentWindow before the new one is ready. Those reports belong
+    // to a document that no longer exists and must not reach the host; the
+    // new document's first answer is delivered even when it equals the last
+    // set the old document delivered.
+    const received: string[][] = [];
+    const { render, post, ready } = await mountUnion([pageRow('a-1')], received);
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1']]);
+
+    await render([pageRow('a-1')], '<html><body><p>Page v2</p></body></html>');
+    // Stale emission from the old document, before the new ready.
+    await post({ type: MSG, ids: [] });
+    expect(received).toEqual([['a-1']]);
+    // A prop-side change before the new ready delivers nothing either.
+    await render([pageRow('a-1'), pageRow('textless-1', { originalText: '' })], '<html><body><p>Page v2</p></body></html>');
+    expect(received).toEqual([['a-1']]);
+
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1'], ['a-1', 'textless-1']]);
+  });
+
+  test('a locally minted id the host swapped out of annotations never reaches the report', async () => {
+    // The create swap: the composer mints a local id (create-mark), the host
+    // persists the comment under its own id and lists only that one. If the
+    // kept local mark later dies, the bridge names the local id, which the
+    // host holds no card for. The union drops it; the host id passes.
+    const received: string[][] = [];
+    const { render, post, added } = await mountUnion([], received);
+    await post({
+      type: 'plannotator-bridge-selection',
+      text: 'Page',
+      rect: { top: 10, left: 10, width: 120, height: 24 },
+      pinpoint: true,
+      targetKey: 'ht-1',
+      anchor: { selector: 'p', tagName: 'p', text: 'Page' },
+    });
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-comment-popover] textarea');
+    if (!textarea) throw new Error('composer textarea missing');
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(textarea), 'value')?.set;
+    await act(async () => {
+      if (setter) setter.call(textarea, 'swap me');
+      else textarea.value = 'swap me';
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const save = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'))
+      .find((b) => b.textContent === 'Save');
+    if (!save) throw new Error('Save button missing');
+    await act(async () => { save.click(); });
+    const localId = added[0]?.id;
+    if (!localId) throw new Error('no created annotation');
+
+    // Host swapped: its list carries the server row only.
+    await render([pageRow('srv-1')]);
+    await post({ type: 'plannotator-bridge-ready' });
+    await post({ type: MSG, ids: [localId, 'srv-1'] });
+    expect(received.at(-1)).toEqual(['srv-1']);
+
+    // A minted id the host DOES keep in its list is a real row and passes.
+    await render([pageRow('srv-1'), pageRow(localId)]);
+    expect(received.at(-1)).toEqual([localId, 'srv-1'].sort());
   });
 });
 

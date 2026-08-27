@@ -10,7 +10,8 @@ import type { CallbackConfig } from '@plannotator/ui/utils/callback';
 import type { UIPreferences } from '@plannotator/ui/utils/uiPreferences';
 import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
 import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
-import { HtmlSurfaceActions } from './HtmlSurfaceActions';
+import { HtmlSurfaceControls } from '@plannotator/ui/components/HtmlSurfaceControls';
+import { PLANNOTATOR_HTML_REFRESH_LABELS } from './HtmlSurfaceActions';
 
 interface AppHeaderProps {
   /** Mobile document-scroll surfaces let Safari own the top edge and scroll
@@ -365,46 +366,23 @@ export const AppHeader = React.memo<AppHeaderProps>(({
           </>
         )}
 
-        {/* Interact/Annotate toggle — HTML and live-app surfaces only. A PEN
-            icon (deliberately not a speech bubble: the annotations-panel
-            button beside it is already a bubble, and the two must be
-            distinguishable at a glance — also distinct from the AI sparkles).
-            Always the same icon: armed shows the accent color plus a visible
-            border; unarmed is muted with a TRANSPARENT border of the same
-            width, so the button's box is pixel-identical in both states. */}
-        {/* Show/hide tools — removes ALL floating chrome (sidebar tongue tabs +
-            the comment/attachments cluster) from the DOM, leaving nothing over
-            the page. Sits left of the pen; this button is the only way back,
-            so it never hides itself. Eye = tools visible, eye-off = hidden. */}
-        {!compactTouchLayout && htmlSurface && onToggleHtmlTools && (
-          <HtmlSurfaceActions
-            canRefresh={!!canRefreshHtml && !!onRefreshHtml}
-            isRefreshing={!!isRefreshingHtml}
+        {/* HTML and live-app surfaces only: the eye (show/hide tools, the
+            only way back from hidden), the refresh, and the Interact/Annotate
+            pen, in that order. The published control carries the markup;
+            the compact touch shell offers the same actions in its Options
+            menu instead. */}
+        {htmlSurface && (onToggleHtmlTools || onToggleHtmlAnnotate) && (
+          <HtmlSurfaceControls
+            compact={compactTouchLayout}
+            armed={!!htmlAnnotateArmed}
+            onToggleArmed={onToggleHtmlAnnotate}
             toolsHidden={!!htmlToolsHidden}
-            onRefresh={() => onRefreshHtml?.()}
             onToggleTools={onToggleHtmlTools}
+            canRefresh={!!canRefreshHtml && !!onRefreshHtml}
+            onRefresh={() => onRefreshHtml?.()}
+            isRefreshing={!!isRefreshingHtml}
+            labels={PLANNOTATOR_HTML_REFRESH_LABELS}
           />
-        )}
-
-        {!compactTouchLayout && htmlSurface && onToggleHtmlAnnotate && (
-          <button
-            type="button"
-            data-html-annotate-toggle
-            onClick={onToggleHtmlAnnotate}
-            aria-pressed={!!htmlAnnotateArmed}
-            className={`p-1.5 rounded-md border text-xs font-medium transition-all cursor-pointer ${
-              htmlAnnotateArmed
-                ? 'border-primary/60 bg-primary/15 text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted'
-            }`}
-            title={htmlAnnotateArmed
-              ? 'Annotate mode: click an element or select text to comment. Esc to interact'
-              : 'Interact mode: clicks reach the page (text selection still comments). Click to annotate'}
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.862 4.487zm0 0L19.5 7.125" />
-            </svg>
-          </button>
         )}
 
         {/* WebMCP activity indicator. Deliberately absent until a browser
