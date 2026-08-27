@@ -50,9 +50,21 @@ export interface NudgeSnapshot {
 }
 
 export const MAX_OTHER_DOCUMENT_NUDGES = 10;
+/** Ids listed on one nudge; a burst past this names the first ones and says how many more. */
+export const MAX_NUDGE_IDS = 100;
 
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/** The first MAX_NUDGE_IDS ids plus a suffix for the message when some are left out. */
+function capIds(ids: string[]): { ids: string[]; suffix: string } {
+  if (ids.length <= MAX_NUDGE_IDS) return { ids, suffix: '' };
+  const more = ids.length - MAX_NUDGE_IDS;
+  return {
+    ids: ids.slice(0, MAX_NUDGE_IDS),
+    suffix: ` The first ${MAX_NUDGE_IDS} ids are listed; ${more} more ${more === 1 ? 'is' : 'are'} not (read the document for the rest).`,
+  };
 }
 
 export function buildNudges(
@@ -71,29 +83,32 @@ export function buildNudges(
   });
   const plain = fresh.filter((id) => !replies.includes(id));
   if (plain.length > 0) {
+    const capped = capIds(plain);
     nudges.push({
       code: 'annotations_new',
-      message: `The human added or edited ${plural(plain.length, 'comment')} since your last read.`,
-      ids: plain,
+      message: `The human added or edited ${plural(plain.length, 'comment')} since your last read.${capped.suffix}`,
+      ids: capped.ids,
     });
   }
   if (replies.length > 0) {
+    const capped = capIds(replies);
     nudges.push({
       code: 'replies_new',
-      message: `The human replied to your comments (${replies.length} new ${replies.length === 1 ? 'reply' : 'replies'}).`,
-      ids: replies,
+      message: `The human replied to your comments (${replies.length} new ${replies.length === 1 ? 'reply' : 'replies'}).${capped.suffix}`,
+      ids: capped.ids,
     });
   }
 
   const removed = tracker.removedSince(since);
   if (removed.length > 0) {
     const own = removed.filter((t) => t.agent);
+    const capped = capIds(removed.map((t) => t.id));
     nudges.push({
       code: 'annotations_removed',
-      message: own.length > 0
+      message: (own.length > 0
         ? `The human removed ${own.length} of your comments; treat that as resolved and do not re-add them.`
-        : `${plural(removed.length, 'comment')} you had seen ${removed.length === 1 ? 'was' : 'were'} removed.`,
-      ids: removed.map((t) => t.id),
+        : `${plural(removed.length, 'comment')} you had seen ${removed.length === 1 ? 'was' : 'were'} removed.`) + capped.suffix,
+      ids: capped.ids,
     });
   }
 
