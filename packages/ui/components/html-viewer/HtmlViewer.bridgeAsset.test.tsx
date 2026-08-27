@@ -39,6 +39,7 @@ type MountProps = {
   bridgeScriptUrl?: string;
   bridgeReadyTimeoutMs?: number;
   onBridgeUnavailable?: (info: BridgeUnavailableInfo) => void;
+  bridgeErrorDisplay?: 'banner' | 'none';
   rawHtml?: string;
 };
 
@@ -70,6 +71,7 @@ async function mount(props: MountProps) {
           bridgeScriptUrl={next.bridgeScriptUrl}
           bridgeReadyTimeoutMs={next.bridgeReadyTimeoutMs}
           onBridgeUnavailable={next.onBridgeUnavailable}
+          bridgeErrorDisplay={next.bridgeErrorDisplay}
         />,
       );
     });
@@ -238,6 +240,47 @@ describe.if(hasDom)('HtmlViewer bridgeScriptUrl', () => {
     await act(async () => { await wait(70); });
     expect(timedOut.banner()?.getAttribute('data-bridge-error')).toBe('timeout');
     expect(timedOut.host.querySelector('[data-bridge-error-dismiss]')).toBeNull();
+  });
+
+  // 0.34.0: a host that renders its own notice from onBridgeUnavailable
+  // could not suppress the package strip, so both showed. What regresses:
+  // 'none' still renders a strip (double banner), or 'none' also mutes the
+  // callback or the version-mismatch console warning the host relies on.
+  test("bridgeErrorDisplay='none' renders no strip while the callback and the mismatch warning still fire", async () => {
+    const warnings = captureWarnings();
+    const unavailable: BridgeUnavailableInfo[] = [];
+    const { postReady, banner, host } = await mount({
+      bridgeScriptUrl: ASSET_URL,
+      bridgeErrorDisplay: 'none',
+      onBridgeUnavailable: (info) => unavailable.push(info),
+    });
+    await postReady({ type: 'plannotator-bridge-ready' });
+    expect(banner()).toBeNull();
+    expect(host.querySelector('[data-bridge-error-dismiss]')).toBeNull();
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain(`expects ${BRIDGE_PROTOCOL_VERSION}`);
+    expect(unavailable.map((info) => info.kind)).toEqual(['version-mismatch']);
+
+    const timedOut = await mount({
+      bridgeScriptUrl: ASSET_URL,
+      bridgeErrorDisplay: 'none',
+      bridgeReadyTimeoutMs: 20,
+      onBridgeUnavailable: (info) => unavailable.push(info),
+    });
+    await act(async () => { await wait(70); });
+    expect(timedOut.banner()).toBeNull();
+    expect(unavailable.map((info) => info.kind)).toEqual(['version-mismatch', 'timeout']);
+  });
+
+  test("bridgeErrorDisplay='banner' is the default and renders the strip as before", async () => {
+    captureWarnings();
+    const explicit = await mount({ bridgeScriptUrl: ASSET_URL, bridgeErrorDisplay: 'banner' });
+    await explicit.postReady({ type: 'plannotator-bridge-ready' });
+    expect(explicit.banner()?.getAttribute('data-bridge-error')).toBe('version-mismatch');
+
+    const implicit = await mount({ bridgeScriptUrl: ASSET_URL });
+    await implicit.postReady({ type: 'plannotator-bridge-ready' });
+    expect(implicit.banner()?.getAttribute('data-bridge-error')).toBe('version-mismatch');
   });
 
   test('inline path: no timer, no banner, no callback; a stamp-less ready only warns', async () => {

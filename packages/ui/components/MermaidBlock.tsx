@@ -9,6 +9,8 @@ import {
   loadMermaidRuntime,
   __setMermaidRuntimeLoaderForTests,
 } from '../utils/mermaid';
+import { loadMathRenderer } from '../utils/math';
+import { hasMermaidMath } from '../utils/mermaid-math-slot';
 
 // Re-exported: the config pin test and the lazy-retry test import them from here.
 export { MERMAID_CONFIG, __setMermaidRuntimeLoaderForTests };
@@ -208,6 +210,20 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
         return;
       }
       try {
+        // A `$$` label makes Mermaid render KaTeX. On a host that redirects
+        // Mermaid's `katex` import to `utils/mermaid-math-slot` the label is
+        // typeset through the math slot, which must be filled by then: warm
+        // it with the registered loader first. A filled slot (Plannotator's
+        // eager entry) resolves at once; a load failure is left to the
+        // render, whose error panel names it with the source.
+        if (hasMermaidMath(block.content)) {
+          try {
+            await loadMathRenderer();
+          } catch {
+            // Reported by the render below.
+          }
+          if (cancelled) return;
+        }
         const id = `mermaid-${block.id}`;
         const { svg: renderedSvg } = await mermaid.render(id, block.content);
         if (!cancelled) {

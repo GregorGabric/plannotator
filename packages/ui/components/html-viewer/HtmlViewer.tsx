@@ -281,9 +281,19 @@ export interface HtmlViewerProps {
   bridgeReadyTimeoutMs?: number;
   /** The bridge could not be established on the `bridgeScriptUrl` path (no
    *  ready within the timeout, or a protocol version mismatch). The surface
-   *  shows its own banner as well; this lets the host react (telemetry, a
-   *  retry affordance). Never called on the inline path. */
+   *  shows its own banner as well unless `bridgeErrorDisplay` is `'none'`;
+   *  this lets the host react (telemetry, a retry affordance). Never called
+   *  on the inline path. */
   onBridgeUnavailable?: (info: BridgeUnavailableInfo) => void;
+  /**
+   * Who renders the bridge-failure strip on the `bridgeScriptUrl` path.
+   * `'banner'` (default): the package renders its `[data-bridge-error]`
+   * strip over the frame, as in 0.33.0. `'none'`: no strip is rendered and
+   * the host owns the display through `onBridgeUnavailable`, which fires
+   * exactly as before (and a version mismatch still logs its one console
+   * warning). Meaningless on the inline path, which never shows a strip.
+   */
+  bridgeErrorDisplay?: "banner" | "none";
 }
 
 /**
@@ -329,6 +339,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       bridgeScriptUrl,
       bridgeReadyTimeoutMs = DEFAULT_BRIDGE_READY_TIMEOUT_MS,
       onBridgeUnavailable,
+      bridgeErrorDisplay = "banner",
     },
     ref,
   ) => {
@@ -1061,8 +1072,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
             {/* bridgeScriptUrl path only: the bridge did not come up (no
                 ready within the timeout, or a stale asset's version). Floated
                 over the top of the iframe so it never changes the layout the
-                page renders in; the page itself stays visible. */}
-            {bridgeError && !bridgeErrorDismissed && (
+                page renders in; the page itself stays visible. A host that
+                renders its own notice from onBridgeUnavailable passes
+                bridgeErrorDisplay="none" and no strip is rendered at all. */}
+            {bridgeError && !bridgeErrorDismissed && bridgeErrorDisplay !== "none" && (
               <div
                 role="alert"
                 data-print-hide

@@ -105,6 +105,11 @@ describe('review entry assets', () => {
     expect(read('packages/ui/utils/math.ts')).toContain("from './math-default-loader'");
     expect(read('packages/ui/utils/math-default-loader.ts')).not.toMatch(staticImport('katex'));
     expect(read('packages/ui/utils/math-default-loader.ts')).toContain("import('katex')");
+    // The alias target for Mermaid's own `import("katex")` renders through
+    // the slot; if it ever named katex itself, a host's redirect would
+    // re-create the chunk it removes.
+    expect(read('packages/ui/utils/mermaid-math-slot.ts')).not.toMatch(staticImport('katex'));
+    expect(read('packages/ui/utils/mermaid-math-slot.ts')).not.toMatch(/[^`'"]import\(['"]katex['"]\)/);
     expect(read('packages/ui/components/MermaidBlock.tsx')).not.toMatch(staticImport('mermaid'));
     expect(read('packages/ui/utils/mermaid.ts')).not.toMatch(staticImport('mermaid'));
     expect(read('packages/ui/utils/mermaid.ts')).toContain("import('mermaid')");

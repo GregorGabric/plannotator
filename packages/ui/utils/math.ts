@@ -48,6 +48,12 @@ let rendererSource: MathRendererSource | null = null;
  */
 let loader: MathRendererLoader | null = null;
 let pending: Promise<MathRenderer> | null = null;
+/**
+ * Bumped by `resetMathRenderer()`. A load in flight across a reset must not
+ * fill the slot when it lands: the reset promised an empty slot, and the next
+ * `loadMathRenderer()` re-invokes the registered loader instead.
+ */
+let resetEpoch = 0;
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -84,12 +90,20 @@ export function subscribeMathRenderer(listener: () => void): () => void {
  * Swap the loader `loadMathRenderer()` uses. Host seam
  * (`configurePlannotatorUI({ mathRendererLoader })`): a host may return a
  * module that imports katex AND its stylesheet in one chunk. A load already in
- * flight keeps going; the new loader is used from the next `loadMathRenderer()`
- * call that finds the slot empty.
+ * flight keeps going and still fills the slot when it lands (the component
+ * that started it is waiting on that result and would otherwise never
+ * typeset); the new loader is used from the next `loadMathRenderer()` call
+ * that finds the slot empty. Passing `null` unregisters the host loader and
+ * restores the package default.
  */
-export function setMathRendererLoader(next: MathRendererLoader): void {
+export function setMathRendererLoader(next: MathRendererLoader | null): void {
   loader = next;
   pending = null;
+}
+
+/** The registered host loader, or `null` while the package default applies. */
+export function getMathRendererLoader(): MathRendererLoader | null {
+  return loader;
 }
 
 /**
@@ -100,9 +114,12 @@ export function setMathRendererLoader(next: MathRendererLoader): void {
 export function loadMathRenderer(): Promise<MathRenderer> {
   if (renderer) return Promise.resolve(renderer);
   if (!pending) {
+    const epoch = resetEpoch;
     const attempt = (loader ? loader() : loadDefaultMathRenderer()).then(
       (loaded) => {
-        setMathRenderer(loaded, 'loader');
+        // A reset since this load started wants the slot empty: hand the
+        // result to the caller that awaited it, but do not register it.
+        if (epoch === resetEpoch) setMathRenderer(loaded, 'loader');
         return loaded;
       },
       (err: unknown) => {
@@ -115,12 +132,19 @@ export function loadMathRenderer(): Promise<MathRenderer> {
   return pending;
 }
 
-/** Test hook: clear the slot, the loader override and any pending load. */
+/**
+ * Test hook: empty the slot (renderer and source) and forget any load in
+ * flight, so the next `loadMathRenderer()` invokes the loader afresh and a
+ * stale in-flight result cannot fill the slot after the reset. The registered
+ * loader is KEPT: resetting the renderer is not unregistering the host seam
+ * (a host's `configurePlannotatorUI` runs once, before any reset a test issues
+ * later). To drop the loader too, call `setMathRendererLoader(null)`.
+ */
 export function resetMathRenderer(): void {
   renderer = null;
   rendererSource = null;
-  loader = null;
   pending = null;
+  resetEpoch += 1;
   notify();
 }
 

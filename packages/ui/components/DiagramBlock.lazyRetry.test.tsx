@@ -22,6 +22,14 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { Block } from '../types';
 import { MermaidBlock, __setMermaidRuntimeLoaderForTests } from './MermaidBlock';
 import { GraphvizBlock, __setVizLoaderForTests } from './GraphvizBlock';
+import {
+  getMathRenderer,
+  getMathRendererSource,
+  resetMathRenderer,
+  setMathRenderer,
+  setMathRendererLoader,
+  type MathRenderer,
+} from '../utils/math';
 
 const hasDom = typeof document !== 'undefined';
 const RETRY_DELAY_MS = 10;
@@ -149,5 +157,68 @@ describe.each(cases)('$name lazy runtime', ({ install, runtime, element, source,
     expect(el.textContent).toContain('Parse error');
     expect(el.textContent).toContain(source);
     expect(el.querySelector('button[title="Retry loading the diagram renderer"]')).toBeNull();
+  });
+});
+
+/**
+ * A host that redirects Mermaid's `katex` import to `utils/mermaid-math-slot`
+ * gets `$$` labels typeset through the math slot, which is only useful if the
+ * slot is filled by the time Mermaid renders. What regresses: the block stops
+ * awaiting the registered loader before a math diagram (labels throw on an
+ * empty slot), or starts loading KaTeX for diagrams with no math at all.
+ */
+describe('Mermaid math labels warm the math slot', () => {
+  const savedRenderer = getMathRenderer();
+  const savedSource = getMathRendererSource();
+  const hostRenderer: MathRenderer = { renderToString: (tex) => tex };
+
+  afterEach(() => {
+    resetMathRenderer();
+    setMathRendererLoader(null);
+    if (savedRenderer) setMathRenderer(savedRenderer, savedSource ?? 'host');
+  });
+
+  test.skipIf(!hasDom)('a diagram with a $$ label awaits the registered loader before rendering', async () => {
+    resetMathRenderer();
+    let loads = 0;
+    setMathRendererLoader(async () => {
+      loads += 1;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      return hostRenderer;
+    });
+    let slotAtRender: MathRenderer | null | undefined;
+    const runtime = {
+      initialize() {},
+      render: async () => {
+        slotAtRender = getMathRenderer();
+        return { svg: SVG };
+      },
+    } as never;
+    __setMermaidRuntimeLoaderForTests(() => Promise.resolve(runtime), { retryDelayMs: RETRY_DELAY_MS });
+
+    const mathBlock: Block = { ...mermaidBlock, id: 'm-math', content: 'flowchart LR\n  A["$$\\sqrt{2}$$"] --> B' };
+    const el = await mount(<MermaidBlock block={mathBlock} />);
+    await settle(RETRY_DELAY_MS * 5);
+
+    expect(loads).toBe(1);
+    expect(slotAtRender).toBe(hostRenderer);
+    expect(el.innerHTML).toContain('data-sentinel="diagram"');
+  });
+
+  test.skipIf(!hasDom)('a diagram without math never invokes the math loader', async () => {
+    resetMathRenderer();
+    let loads = 0;
+    setMathRendererLoader(async () => {
+      loads += 1;
+      return hostRenderer;
+    });
+    __setMermaidRuntimeLoaderForTests(() => Promise.resolve(fakeMermaid), { retryDelayMs: RETRY_DELAY_MS });
+
+    const el = await mount(<MermaidBlock block={mermaidBlock} />);
+    await settle(RETRY_DELAY_MS * 5);
+
+    expect(loads).toBe(0);
+    expect(getMathRenderer()).toBeNull();
+    expect(el.innerHTML).toContain('data-sentinel="diagram"');
   });
 });

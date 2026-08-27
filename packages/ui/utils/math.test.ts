@@ -19,6 +19,9 @@
  * Bun runs every test file in one process, so the slot is saved on entry and
  * restored after each test: other files (InlineMarkdown.test.ts, the DOM
  * first-paint test) rely on the registration they set up themselves.
+ * `resetMathRenderer()` deliberately keeps a registered loader (0.34.0), so
+ * the loader this file registers is dropped explicitly with
+ * `setMathRendererLoader(null)` around every test.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { createElement } from 'react';
@@ -26,6 +29,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';
 import {
   getMathRenderer,
+  getMathRendererLoader,
   getMathRendererSource,
   loadMathRenderer,
   renderMathToHtml,
@@ -52,10 +56,12 @@ const displayBlock: Block = {
 
 beforeEach(() => {
   resetMathRenderer();
+  setMathRendererLoader(null);
 });
 
 afterEach(() => {
   resetMathRenderer();
+  setMathRendererLoader(null);
   if (savedRenderer) setMathRenderer(savedRenderer, savedSource ?? 'host');
 });
 
@@ -182,6 +188,64 @@ describe('loadMathRenderer', () => {
     expect(getMathRenderer()).toBe(hostRenderer);
     const html = renderToStaticMarkup(createElement(MathBlock, { block: displayBlock }));
     expect(html).toContain('<span class="host-math">E = mc^2</span>');
+  });
+});
+
+describe('resetMathRenderer', () => {
+  // The bug this pins (0.33.0 adoption feedback): reset used to null the
+  // registered loader too, so a host test harness that reset the renderer
+  // between cases silently fell back to the package default `import('katex')`
+  // on the next math render. Reset means the renderer and its source, never
+  // the seam a host configured once at startup.
+  test('keeps the registered loader: the next load uses it, never the default', async () => {
+    const hostRenderer: MathRenderer = {
+      renderToString: (tex) => `<span class="host-math">${tex}</span>`,
+    };
+    let loads = 0;
+    const hostLoader = async () => {
+      loads += 1;
+      return hostRenderer;
+    };
+    setMathRendererLoader(hostLoader);
+    setMathRenderer(katex);
+    resetMathRenderer();
+
+    expect(getMathRenderer()).toBeNull();
+    expect(getMathRendererSource()).toBeNull();
+    expect(getMathRendererLoader()).toBe(hostLoader);
+    expect(await loadMathRenderer()).toBe(hostRenderer);
+    expect(getMathRendererSource()).toBe('loader');
+    expect(loads).toBe(1);
+  });
+
+  test('forgets a load in flight: its late result never fills the slot, and the next load invokes the loader afresh', async () => {
+    let release: (renderer: MathRenderer) => void = () => {};
+    let loads = 0;
+    const hostRenderer: MathRenderer = { renderToString: (tex) => tex };
+    setMathRendererLoader(() => {
+      loads += 1;
+      return new Promise<MathRenderer>((resolve) => {
+        release = resolve;
+      });
+    });
+    const stale = loadMathRenderer();
+    resetMathRenderer();
+    release(hostRenderer);
+    expect(await stale).toBe(hostRenderer); // the caller that awaited it still gets its value
+    expect(getMathRenderer()).toBeNull(); // but the reset slot stays empty
+
+    const fresh = loadMathRenderer();
+    expect(loads).toBe(2);
+    release(hostRenderer);
+    expect(await fresh).toBe(hostRenderer);
+    expect(getMathRenderer()).toBe(hostRenderer);
+  });
+
+  test('setMathRendererLoader(null) is the explicit way back to the package default', async () => {
+    setMathRendererLoader(async () => ({ renderToString: (tex) => tex }));
+    setMathRendererLoader(null);
+    expect(getMathRendererLoader()).toBeNull();
+    expect(await loadMathRenderer()).toBe(katex);
   });
 });
 
