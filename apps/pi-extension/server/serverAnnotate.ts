@@ -442,6 +442,16 @@ export async function startAnnotateServer(options: {
 		return false;
 	}
 
+	// The fallback is silent to the reviewer, so the reason is logged once per
+	// process: a genuine bug in the read must not hide behind the snapshot.
+	let rootHtmlUnreadableWarned = false;
+	const warnRootHtmlUnreadable = (path: string, err: unknown) => {
+		if (rootHtmlUnreadableWarned) return;
+		rootHtmlUnreadableWarned = true;
+		const message = err instanceof Error ? err.message : String(err);
+		console.warn(`[plannotator] could not read the HTML root ${path}; serving the startup snapshot instead: ${message}`);
+	};
+
 	// A local rendered-HTML root is served from its CURRENT bytes, not the
 	// startup snapshot: the reviewer can Refresh in-app or reload the tab after
 	// an agent edits the file, and both /api/plan and /api/share-html must then
@@ -467,7 +477,8 @@ export async function startAnnotateServer(options: {
 				return { kind: "snapshot", reason: "too-large" };
 			}
 			return { kind: "current", html: readFileSync(rootHtmlSourcePath, "utf-8") };
-		} catch {
+		} catch (err) {
+			warnRootHtmlUnreadable(rootHtmlSourcePath, err);
 			return { kind: "snapshot", reason: "unreadable" };
 		}
 	}

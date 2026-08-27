@@ -372,10 +372,12 @@ describe("annotate server: local rendered-HTML root freshness", () => {
     }
   });
 
-  // A root that exists but cannot be read (the path replaced by a directory,
-  // or permissions revoked) used to throw out of the request handler: a tab
-  // reload answered 500. It is the missing-file fallback: the startup
-  // snapshot, with its version diff, and the share endpoint agrees.
+  // A root that exists but cannot be read is the missing-file fallback: the
+  // startup snapshot, with its version diff, and the share endpoint agrees.
+  // On Bun, Bun.file(dir).exists() is false, so a path replaced by a
+  // directory already took the missing path (the case guards the Pi mirror,
+  // where existsSync is true and the read throws); the chmod 000 case below
+  // is the one that made the Bun handler throw and answer 500.
   async function seedTwoVersions(label: string): Promise<{ pagePath: string; project: string }> {
     const pagePath = join(freshDocDir(label), "page.html");
     const project = uniqueProject(label);
@@ -436,6 +438,9 @@ describe("annotate server: local rendered-HTML root freshness", () => {
       renderHtml: true,
       project,
     });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
     try {
       writeFileSync(pagePath, page("V3"), "utf-8");
       chmodSync(pagePath, 0o000);
@@ -446,7 +451,14 @@ describe("annotate server: local rendered-HTML root freshness", () => {
       expect(fallback.rawHtml).not.toContain("V3");
       expect(fallback.previousPlan).toBe(page("V1"));
       expect(fallback.diffHtml).toBeDefined();
+      // The fallback is silent to the reviewer, so the reason is logged once
+      // per process (path and error), not once per read.
+      await fetch(`${server.url}/api/plan`);
+      const rootWarnings = warnings.filter((w) => w.includes("could not read the HTML root"));
+      expect(rootWarnings).toHaveLength(1);
+      expect(rootWarnings[0]).toContain(pagePath);
     } finally {
+      console.warn = originalWarn;
       chmodSync(pagePath, 0o644);
       server.stop();
     }

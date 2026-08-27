@@ -223,6 +223,9 @@ describe("pi annotate server: local rendered-HTML root freshness", () => {
 			renderHtml: true,
 			project,
 		});
+		const warnings: string[] = [];
+		const originalWarn = console.warn;
+		console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
 		try {
 			unlinkSync(pagePath);
 			mkdirSync(pagePath);
@@ -237,7 +240,13 @@ describe("pi annotate server: local rendered-HTML root freshness", () => {
 			const share = await withTimeout(fetch(`${server.url}/api/share-html`));
 			expect(share.status).toBe(200);
 			expect(((await share.json()) as { shareHtml: string }).shareHtml).toContain("V2");
+			// The fallback is silent to the reviewer, so the reason is logged once
+			// per process (path and error), not once per read.
+			const rootWarnings = warnings.filter((w) => w.includes("could not read the HTML root"));
+			expect(rootWarnings).toHaveLength(1);
+			expect(rootWarnings[0]).toContain(pagePath);
 		} finally {
+			console.warn = originalWarn;
 			server.stop();
 		}
 	});
