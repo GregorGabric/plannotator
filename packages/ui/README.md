@@ -50,7 +50,7 @@ The sidebar/panel resize handle exposes seams for hosts that want different edge
 
 Building your own tooltip and removing the built-in double-click reset are host-side concerns (override `onDoubleClick` where you render the handle).
 
-### Lazy renderers and the two eager entries (`utils/math`, `utils/generateIdentity`)
+### Lazy renderers and the eager entries (`utils/math`, `utils/generateIdentity`, `utils/mermaid`)
 
 The Mermaid runtime, the Graphviz engine, KaTeX and the username dictionary are off the static import graph of `Viewer`, so a host that bundles by route does not download them for a plain markdown read. Graphviz needs nothing from you (the block imports the engine inside its render effect and shows the source fence until the SVG lands, as it always did). Mermaid, KaTeX and the dictionary sit behind synchronous slots:
 
