@@ -144,6 +144,21 @@ describe('review entry assets', () => {
     });
   }
 
+  // The HTML viewer bridge stays INLINE in Plannotator's bundles: the
+  // `bridgeScriptUrl` seam is host-only, so the built HTML must carry the
+  // bridge literal exactly once (the srcdoc injection's string constant),
+  // never zero (a `bridge-script.lite` alias leaking into an app build) and
+  // never twice (a second copy riding in through the generated asset). The
+  // marker is the bridge's test-introspection global, which appears once in
+  // the literal and nowhere else in either app.
+  for (const path of ['apps/hook/dist/index.html', 'apps/review/dist/index.html']) {
+    test.skipIf(!existsSync(resolve(root, path)))(`${path} inlines the HTML viewer bridge exactly once`, () => {
+      const html = readFileSync(resolve(root, path), 'utf8');
+      const literalCount = html.split('__plannotatorBridgeInternals').length - 1;
+      expect({ path, literalCount }).toEqual({ path, literalCount: 1 });
+    });
+  }
+
   test('nothing depends on highlight.js any more', () => {
     for (const manifest of ['packages/ui/package.json', 'packages/review-editor/package.json']) {
       expect(read(manifest)).not.toContain('highlight.js');
