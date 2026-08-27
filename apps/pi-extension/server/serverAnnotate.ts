@@ -453,14 +453,23 @@ export async function startAnnotateServer(options: {
 			: null;
 	type RootHtmlRead =
 		| { kind: "current"; html: string }
-		| { kind: "snapshot"; reason: "missing" | "too-large" };
+		| { kind: "snapshot"; reason: "missing" | "too-large" | "unreadable" };
 	function readRootHtml(): RootHtmlRead | null {
 		if (!rootHtmlSourcePath) return null;
-		if (!existsSync(rootHtmlSourcePath)) return { kind: "snapshot", reason: "missing" };
-		if (statSync(rootHtmlSourcePath).size > MAX_ANNOTATABLE_FILE_BYTES) {
-			return { kind: "snapshot", reason: "too-large" };
+		// A present-but-unreadable root (permissions revoked, the path replaced
+		// by a directory) is the same fallback as a missing one: the startup
+		// snapshot, with its version diff. The read must never throw out of the
+		// request handler: an unhandled rejection there leaves /api/plan
+		// unanswered and the tab hangs on reload.
+		try {
+			if (!existsSync(rootHtmlSourcePath)) return { kind: "snapshot", reason: "missing" };
+			if (statSync(rootHtmlSourcePath).size > MAX_ANNOTATABLE_FILE_BYTES) {
+				return { kind: "snapshot", reason: "too-large" };
+			}
+			return { kind: "current", html: readFileSync(rootHtmlSourcePath, "utf-8") };
+		} catch {
+			return { kind: "snapshot", reason: "unreadable" };
 		}
-		return { kind: "current", html: readFileSync(rootHtmlSourcePath, "utf-8") };
 	}
 
 	function handleShareHtml(res: import("node:http").ServerResponse, url: URL): void {

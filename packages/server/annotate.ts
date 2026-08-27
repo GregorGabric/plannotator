@@ -414,13 +414,21 @@ export async function startAnnotateServer(
     renderHtml && rawHtml && !/^https?:\/\//i.test(filePath) ? resolvePath(filePath) : null;
   type RootHtmlRead =
     | { kind: "current"; html: string }
-    | { kind: "snapshot"; reason: "missing" | "too-large" };
+    | { kind: "snapshot"; reason: "missing" | "too-large" | "unreadable" };
   async function readRootHtml(): Promise<RootHtmlRead | null> {
     if (!rootHtmlSourcePath) return null;
-    const file = Bun.file(rootHtmlSourcePath);
-    if (!(await file.exists())) return { kind: "snapshot", reason: "missing" };
-    if (file.size > MAX_ANNOTATABLE_FILE_BYTES) return { kind: "snapshot", reason: "too-large" };
-    return { kind: "current", html: await file.text() };
+    // A present-but-unreadable root (permissions revoked, the path replaced
+    // by a directory) is the same fallback as a missing one: the startup
+    // snapshot, with its version diff. The read must never throw out of a
+    // request handler, which would turn a tab reload into a 500.
+    try {
+      const file = Bun.file(rootHtmlSourcePath);
+      if (!(await file.exists())) return { kind: "snapshot", reason: "missing" };
+      if (file.size > MAX_ANNOTATABLE_FILE_BYTES) return { kind: "snapshot", reason: "too-large" };
+      return { kind: "current", html: await file.text() };
+    } catch {
+      return { kind: "snapshot", reason: "unreadable" };
+    }
   }
 
   async function loadShareHtml(pathParam: string | null): Promise<Response> {

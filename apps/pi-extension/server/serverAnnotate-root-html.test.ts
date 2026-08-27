@@ -12,7 +12,7 @@
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startAnnotateServer } from "./serverAnnotate.ts";
@@ -151,6 +151,93 @@ describe("pi annotate server: local rendered-HTML root freshness", () => {
 			expect(fallback.previousPlan).toBe(page("V1"));
 			expect(fallback.diffHtml).toBeDefined();
 		} finally {
+			server.stop();
+		}
+	});
+
+	// A root that exists but cannot be read (the path replaced by a directory,
+	// or permissions revoked) used to throw out of the request handler as an
+	// unhandled rejection: /api/plan never answered and the tab hung. It is
+	// the missing-file fallback: the startup snapshot, with its version diff.
+	async function seedTwoVersions(label: string): Promise<{ pagePath: string; project: string }> {
+		const pagePath = join(freshDocDir(label), "page.html");
+		const project = uniqueProject(label);
+		writeFileSync(pagePath, page("V1"), "utf-8");
+		const seed = await startAnnotateServer({
+			markdown: "",
+			filePath: pagePath,
+			htmlContent: MINIMAL_HTML,
+			rawHtml: page("V1"),
+			renderHtml: true,
+			project,
+		});
+		seed.stop();
+		writeFileSync(pagePath, page("V2"), "utf-8");
+		return { pagePath, project };
+	}
+
+	type FallbackPayload = { rawHtml?: string; previousPlan?: string | null; versionInfo?: { version: number }; diffHtml?: string };
+
+	// The old behavior hung forever, so the request is raced against a timeout.
+	const withTimeout = <T,>(p: Promise<T>, ms = 5000): Promise<T> =>
+		Promise.race([
+			p,
+			new Promise<T>((_, reject) => setTimeout(() => reject(new Error(`request did not answer within ${ms}ms`)), ms)),
+		]);
+
+	test("/api/plan falls back to the startup snapshot (with its version diff) when the root path becomes a directory", async () => {
+		const { pagePath, project } = await seedTwoVersions("dir");
+		const server = await startAnnotateServer({
+			markdown: "",
+			filePath: pagePath,
+			htmlContent: MINIMAL_HTML,
+			rawHtml: page("V2"),
+			renderHtml: true,
+			project,
+		});
+		try {
+			unlinkSync(pagePath);
+			mkdirSync(pagePath);
+			const res = await withTimeout(fetch(`${server.url}/api/plan`));
+			expect(res.status).toBe(200);
+			const fallback = (await res.json()) as FallbackPayload;
+			expect(fallback.rawHtml).toContain("V2");
+			expect(fallback.previousPlan).toBe(page("V1"));
+			expect(fallback.versionInfo?.version).toBe(2);
+			expect(fallback.diffHtml).toBeDefined();
+
+			const share = await withTimeout(fetch(`${server.url}/api/share-html`));
+			expect(share.status).toBe(200);
+			expect(((await share.json()) as { shareHtml: string }).shareHtml).toContain("V2");
+		} finally {
+			server.stop();
+		}
+	});
+
+	// chmod 000 is not a restriction for root, so the check is skipped there.
+	const canRevokeRead = process.platform !== "win32" && typeof process.getuid === "function" && process.getuid() !== 0;
+	test.skipIf(!canRevokeRead)("/api/plan falls back to the startup snapshot when the root file is unreadable", async () => {
+		const { pagePath, project } = await seedTwoVersions("perm");
+		const server = await startAnnotateServer({
+			markdown: "",
+			filePath: pagePath,
+			htmlContent: MINIMAL_HTML,
+			rawHtml: page("V2"),
+			renderHtml: true,
+			project,
+		});
+		try {
+			writeFileSync(pagePath, page("V3"), "utf-8");
+			chmodSync(pagePath, 0o000);
+			const res = await withTimeout(fetch(`${server.url}/api/plan`));
+			expect(res.status).toBe(200);
+			const fallback = (await res.json()) as FallbackPayload;
+			expect(fallback.rawHtml).toContain("V2");
+			expect(fallback.rawHtml).not.toContain("V3");
+			expect(fallback.previousPlan).toBe(page("V1"));
+			expect(fallback.diffHtml).toBeDefined();
+		} finally {
+			chmodSync(pagePath, 0o644);
 			server.stop();
 		}
 	});
