@@ -152,6 +152,27 @@ describe('loadMathRenderer', () => {
     expect(attempts).toBe(2);
   });
 
+  test('with no loader registered, the default path loads KaTeX', async () => {
+    // Guards the module split: the default lives in ./math-default-loader and
+    // is wired back in only through the null-loader branch.
+    expect(await loadMathRenderer()).toBe(katex);
+    expect(getMathRendererSource()).toBe('loader');
+  });
+
+  test('a registered loader is never backfilled by the default, even after it rejects', async () => {
+    // The observable that would regress if the default `import('katex')`
+    // became reachable while a host loader is registered: a host whose chunk
+    // failed would see KaTeX silently appear in the slot (and, in a chunking
+    // build, an unrequested chunk request). The slot must stay empty.
+    setMathRendererLoader(async () => {
+      throw new Error('host chunk failed');
+    });
+    await expect(loadMathRenderer()).rejects.toThrow('host chunk failed');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(getMathRenderer()).toBeNull();
+    expect(getMathRendererSource()).toBeNull();
+  });
+
   test('honors the host loader seam and registers what it returns', async () => {
     const hostRenderer: MathRenderer = {
       renderToString: (tex) => `<span class="host-math">${tex}</span>`,

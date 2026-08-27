@@ -11,12 +11,16 @@
  * call `loadMathRenderer()`, and re-render typeset once it resolves.
  *
  * This module deliberately has NO runtime import of `katex`: the only place
- * the dependency is named is the default loader's `import('katex')`, which a
- * chunking bundler turns into a lazy chunk and Plannotator's single-file
- * builds inline (the eager entry keeps it in the entry either way).
+ * the dependency is named is `./math-default-loader`'s `import('katex')`,
+ * which a chunking bundler turns into a lazy chunk and Plannotator's
+ * single-file builds inline (the eager entry keeps it in the entry either
+ * way). That default is called only while no host loader is registered, and
+ * it lives in its own module so a host that registers a loader can alias it
+ * away and drop the chunk (see HANDOFF.md "Lazy renderers and eager entries").
  */
 
 import type { KatexOptions } from 'katex';
+import { loadDefaultMathRenderer } from './math-default-loader';
 
 /** The subset of KaTeX's API the renderer needs. `katex` itself satisfies it. */
 export interface MathRenderer {
@@ -24,13 +28,6 @@ export interface MathRenderer {
 }
 
 export type MathRendererLoader = () => Promise<MathRenderer>;
-
-/**
- * Default loader: KaTeX's JS only. The stylesheet is deliberately NOT imported
- * here; CSS loading stays the host's job (see HANDOFF.md "Math rendering"),
- * and a host that already serves `katex.min.css` would otherwise load it twice.
- */
-const defaultMathRendererLoader: MathRendererLoader = () => import('katex').then((m) => m.default);
 
 /**
  * Who filled the slot: the eager entry (`./math-eager`), the lazy loader, or a
@@ -43,7 +40,13 @@ export type MathRendererSource = 'plannotator-math-eager' | 'loader' | 'host';
 
 let renderer: MathRenderer | null = null;
 let rendererSource: MathRendererSource | null = null;
-let loader: MathRendererLoader = defaultMathRendererLoader;
+/**
+ * The host loader, or `null` while none is registered. `null` is the only
+ * state in which `loadMathRenderer()` reaches `loadDefaultMathRenderer` and
+ * its `import('katex')`; a registered loader is never backfilled by the
+ * default, not even after it rejects.
+ */
+let loader: MathRendererLoader | null = null;
 let pending: Promise<MathRenderer> | null = null;
 const listeners = new Set<() => void>();
 
@@ -97,7 +100,7 @@ export function setMathRendererLoader(next: MathRendererLoader): void {
 export function loadMathRenderer(): Promise<MathRenderer> {
   if (renderer) return Promise.resolve(renderer);
   if (!pending) {
-    const attempt = loader().then(
+    const attempt = (loader ? loader() : loadDefaultMathRenderer()).then(
       (loaded) => {
         setMathRenderer(loaded, 'loader');
         return loaded;
@@ -116,7 +119,7 @@ export function loadMathRenderer(): Promise<MathRenderer> {
 export function resetMathRenderer(): void {
   renderer = null;
   rendererSource = null;
-  loader = defaultMathRendererLoader;
+  loader = null;
   pending = null;
   notify();
 }

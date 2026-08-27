@@ -96,7 +96,15 @@ describe('review entry assets', () => {
     expect(read('packages/ui/components/blocks/MathBlock.tsx')).not.toMatch(staticImport('katex'));
     expect(read('packages/ui/components/InlineMarkdown.tsx')).not.toMatch(staticImport('katex'));
     expect(read('packages/ui/utils/math.ts')).not.toMatch(staticImport('katex'));
-    expect(read('packages/ui/utils/math.ts')).toContain("import('katex')");
+    // The default `import('katex')` lives in its own module so a host that
+    // registers a loader can alias it away; math.ts must not grow a second
+    // site, or the alias stops dropping the chunk.
+    // (Comments name the call in prose, so this is matched as code: a call
+    // that starts a line or an expression, never a backtick-quoted mention.)
+    expect(read('packages/ui/utils/math.ts')).not.toMatch(/[^`'"]import\('katex'\)/);
+    expect(read('packages/ui/utils/math.ts')).toContain("from './math-default-loader'");
+    expect(read('packages/ui/utils/math-default-loader.ts')).not.toMatch(staticImport('katex'));
+    expect(read('packages/ui/utils/math-default-loader.ts')).toContain("import('katex')");
     expect(read('packages/ui/components/MermaidBlock.tsx')).not.toMatch(staticImport('mermaid'));
     expect(read('packages/ui/utils/mermaid.ts')).not.toMatch(staticImport('mermaid'));
     expect(read('packages/ui/utils/mermaid.ts')).toContain("import('mermaid')");
@@ -124,7 +132,7 @@ describe('review entry assets', () => {
   // - Presence markers (a KaTeX class name, a Mermaid diagram id, an
   //   Emscripten symbol from Graphviz, the bridge global), which only say the
   //   runtime is still inlined by inlineDynamicImports. KaTeX is inlined
-  //   through utils/math.ts's import('katex') whether or not it is registered,
+  //   through utils/math-default-loader.ts's import('katex') whether or not it is registered,
   //   so `katex-display` cannot prove registration and is not asked to.
   //
   // dist/ is gitignored, so this is skipped on an unbuilt checkout; the CI job
