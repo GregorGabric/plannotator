@@ -11,14 +11,12 @@
  * - an empty slot fails silently instead of naming the cause;
  * - `hasMermaidMath` drifts from Mermaid's own `$$...$$` test, so the block
  *   stops warming the slot for a label Mermaid will render (or warms it for
- *   every diagram);
- * - this module grows a `katex` import, which would re-create the very chunk
- *   the redirect exists to remove (also pinned on source in
- *   tests/entry-assets.test.ts).
+ *   every diagram).
+ *
+ * That this module never names `katex` (which would re-create the chunk the
+ * redirect removes) is pinned on source in tests/entry-assets.test.ts.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import katex from 'katex';
 import mermaidKatex, { MERMAID_MATH_SLOT_EMPTY_MESSAGE, hasMermaidMath } from './mermaid-math-slot';
 import {
@@ -87,12 +85,4 @@ describe('hasMermaidMath', () => {
     expect(hasMermaidMath('flowchart LR\n  A[Cost: $5] --> B[$10]')).toBe(false);
     expect(hasMermaidMath('flowchart LR\n  A --> B')).toBe(false);
   });
-});
-
-test('the module never names katex, so the redirect cannot re-create the chunk', () => {
-  const source = readFileSync(resolve(import.meta.dir, 'mermaid-math-slot.ts'), 'utf8');
-  // Comments name the call in prose; only a code-shaped call (not backtick
-  // or quote wrapped) counts, the same rule tests/entry-assets.test.ts uses.
-  expect(source).not.toMatch(/from\s+['"]katex['"]/);
-  expect(source).not.toMatch(/[^`'"]import\(['"]katex['"]\)/);
 });
