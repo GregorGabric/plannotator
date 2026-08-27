@@ -108,22 +108,76 @@ const PURGE_OWNED_TOP_LEVEL = [
   "guide-schema.json",
 ] as const;
 
-const WINDOWS_PATH_SCRIPT = [
+/**
+ * Best-effort WM_SETTINGCHANGE broadcast that runs AFTER the registry write.
+ *
+ * `[Environment]::SetEnvironmentVariable(..., 'User')` performs this broadcast
+ * itself, synchronously, per top-level window and without SMTO_ABORTIFHUNG, so
+ * one orphaned or hung GUI process can stall it past the uninstaller's 15 s
+ * command timeout and turn a completed PATH edit into a killed PowerShell and
+ * exit 124. Here the broadcast is decoupled from the edit: SMTO_ABORTIFHUNG
+ * (0x2) skips windows Windows already considers hung, the per-window timeout
+ * is short, the whole thing is wrapped in try/catch, and the script exits 0
+ * explicitly so nothing about the broadcast can reach the exit code.
+ *
+ * The DllImport attribute needs double quotes, which the `-Command` one-liners
+ * avoid on purpose (the script travels as a single argv element on Windows),
+ * so they are assembled from `[char]34` at runtime.
+ */
+const WINDOWS_PATH_BROADCAST_STATEMENTS = [
+  "$q=[char]34",
+  "$sig='[DllImport('+$q+'user32.dll'+$q+',CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd,uint msg,UIntPtr wParam,string lParam,uint flags,uint timeout,out UIntPtr result);'",
+  "try{Add-Type -Namespace Plannotator -Name PathBroadcast -MemberDefinition $sig; $r=[UIntPtr]::Zero; [void][Plannotator.PathBroadcast]::SendMessageTimeout([IntPtr]0xffff,0x1A,[UIntPtr]::Zero,'Environment',0x2,1000,[ref]$r)}catch{}",
+  "exit 0",
+] as const;
+
+/**
+ * Removes exactly one entry from the HKCU user PATH through the registry API.
+ *
+ * The value is read unexpanded (`DoNotExpandEnvironmentNames`) and written back
+ * with its original kind (REG_EXPAND_SZ on most systems), so `%VARS%` in other
+ * entries survive byte for byte. Exit 3 means "not present or unchanged"; on
+ * success the ORIGINAL value is echoed as one JSON string on stdout so the
+ * caller can roll back. The echo is written before the broadcast, so stdout
+ * carrying that JSON proves the registry write completed.
+ *
+ * @internal Exported only so the PowerShell syntax can be regression-tested.
+ */
+export const WINDOWS_PATH_SCRIPT = [
   "$ErrorActionPreference='Stop'",
-  "$p=[Environment]::GetEnvironmentVariable('Path','User')",
+  "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
+  "if($null -eq $k){exit 3}",
+  "$p=$k.GetValue('Path',$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
   "if($null -eq $p){exit 3}",
+  "$p=[string]$p",
+  "$kind=$k.GetValueKind('Path')",
   "$t=$env:PLANNOTATOR_UNINSTALL_PATH.Trim().TrimEnd('\\')",
   "$kept=@($p -split ';' | Where-Object { $_.Trim().TrimEnd('\\') -ine $t })",
   "$n=$kept -join ';'",
   "if($n -eq $p){exit 3}",
-  "[Environment]::SetEnvironmentVariable('Path',$n,'User')",
+  "$k.SetValue('Path',$n,$kind)",
+  "$k.Close()",
   "Write-Output (ConvertTo-Json -Compress -InputObject $p)",
+  ...WINDOWS_PATH_BROADCAST_STATEMENTS,
 ].join("; ");
 
-const WINDOWS_PATH_RESTORE_SCRIPT = [
+/**
+ * Writes the echoed original PATH back with the kind the value currently has
+ * (the kind the removal preserved), falling back to REG_EXPAND_SZ when the
+ * value is gone entirely. Same decoupled broadcast as the removal.
+ *
+ * @internal Exported only so the PowerShell syntax can be regression-tested.
+ */
+export const WINDOWS_PATH_RESTORE_SCRIPT = [
   "$ErrorActionPreference='Stop'",
   "$original=$env:PLANNOTATOR_UNINSTALL_ORIGINAL_PATH",
-  "[Environment]::SetEnvironmentVariable('Path',$original,'User')",
+  "$k=[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment',$true)",
+  "if($null -eq $k){$k=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')}",
+  "$kind=[Microsoft.Win32.RegistryValueKind]::ExpandString",
+  "try{$kind=$k.GetValueKind('Path')}catch{}",
+  "$k.SetValue('Path',$original,$kind)",
+  "$k.Close()",
+  ...WINDOWS_PATH_BROADCAST_STATEMENTS,
 ].join("; ");
 
 /** @internal Exported only so the Windows worker syntax can be regression-tested. */
@@ -888,26 +942,39 @@ async function removeWindowsPathEntry(
     ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_PATH_SCRIPT],
     { PLANNOTATOR_UNINSTALL_PATH: paths.windowsInstallDir },
   );
-  if (result.exitCode === 0) {
+  // The script echoes the original PATH only after the registry write
+  // succeeded, so a parseable echo proves the edit happened even when the
+  // process was later killed while broadcasting the change.
+  const echoedOriginalPath = parseEchoedWindowsPath(result.stdout);
+  if (result.exitCode === 0 || (result.timedOut && echoedOriginalPath !== null)) {
     state.removed.push(label);
-    try {
-      const originalPath: unknown = JSON.parse(result.stdout?.trim() ?? "");
-      if (typeof originalPath !== "string") throw new Error("not a string");
-      return originalPath;
-    } catch {
-      state.errors.push(
-        `Removed ${paths.windowsInstallDir} from the Windows user PATH but could not capture the original PATH for safe rollback.`,
-      );
+    if (result.timedOut) {
       state.warnings.push(
-        `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry was removed without a usable backup. Run that full path to retry, then restore PATH manually if needed.`,
+        `Removed ${paths.windowsInstallDir} from the Windows user PATH, but notifying open windows of the change timed out; new terminals pick up the change after you sign in again.`,
       );
     }
+    if (echoedOriginalPath !== null) return echoedOriginalPath;
+    state.errors.push(
+      `Removed ${paths.windowsInstallDir} from the Windows user PATH but could not capture the original PATH for safe rollback.`,
+    );
+    state.warnings.push(
+      `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry was removed without a usable backup. Run that full path to retry, then restore PATH manually if needed.`,
+    );
   } else if (result.exitCode !== 3) {
     state.errors.push(
-      `Could not remove ${paths.windowsInstallDir} from the Windows user PATH.`,
+      `Could not remove ${paths.windowsInstallDir} from the Windows user PATH (${result.timedOut ? "command timed out" : `exit ${result.exitCode}`}).`,
     );
   }
   return null;
+}
+
+function parseEchoedWindowsPath(stdout: string | undefined): string | null {
+  try {
+    const originalPath: unknown = JSON.parse(stdout?.trim() ?? "");
+    return typeof originalPath === "string" ? originalPath : null;
+  } catch {
+    return null;
+  }
 }
 
 async function removeBinaries(
@@ -1000,7 +1067,7 @@ async function restoreWindowsPathEntry(
   );
   if (result.exitCode !== 0) {
     state.errors.push(
-      `Could not restore ${paths.windowsInstallDir} to the Windows user PATH after self-delete scheduling failed.`,
+      `Could not restore ${paths.windowsInstallDir} to the Windows user PATH after self-delete scheduling failed (${result.timedOut ? "command timed out" : `exit ${result.exitCode}`}).`,
     );
     state.warnings.push(
       `The Plannotator CLI remains at ${environment.execPath}, but its Windows PATH entry could not be restored. Run that full path to retry, then restore PATH manually if needed.`,

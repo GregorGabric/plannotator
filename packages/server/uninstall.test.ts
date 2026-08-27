@@ -21,6 +21,8 @@ import {
   formatPurgeWarning,
   runPlannotatorUninstall,
   type UninstallEnvironment,
+  WINDOWS_PATH_RESTORE_SCRIPT,
+  WINDOWS_PATH_SCRIPT,
   WINDOWS_SELF_DELETE_SCRIPT,
 } from "./uninstall";
 
@@ -76,6 +78,85 @@ describe("Windows self-delete worker", () => {
     expect(WINDOWS_SELF_DELETE_SCRIPT).toContain("}\n$parent=");
     expect(WINDOWS_SELF_DELETE_SCRIPT).toContain("if($parent){Remove-Item");
   });
+});
+
+describe("Windows PATH scripts", () => {
+  const scripts = {
+    remove: WINDOWS_PATH_SCRIPT,
+    restore: WINDOWS_PATH_RESTORE_SCRIPT,
+  } as const;
+
+  test("edit the registry directly and never call the blocking .NET setter", () => {
+    // SetEnvironmentVariable('Path', ..., 'User') broadcasts WM_SETTINGCHANGE
+    // synchronously to every window and can stall past the 15 s command
+    // timeout on a machine with a hung GUI process (the CI smoke flake).
+    for (const script of Object.values(scripts)) {
+      expect(script).not.toContain("SetEnvironmentVariable");
+      expect(script).toContain("Microsoft.Win32.Registry");
+      // The broadcast that replaces it must be bounded (SMTO_ABORTIFHUNG) and
+      // must not be able to reach the exit code.
+      expect(script).toContain("SendMessageTimeout");
+      expect(script).toMatch(/'Environment',0x2,\d+,\[ref\]\$r\)\}catch\{\}; exit 0$/);
+    }
+    // The value is read unexpanded and written back with its own kind so
+    // %VARS% in unrelated entries survive.
+    expect(scripts.remove).toContain("DoNotExpandEnvironmentNames");
+    expect(scripts.remove).toContain("$k.SetValue('Path',$n,$kind)");
+    // The rollback echo must come after the write and before the broadcast.
+    const writeIndex = scripts.remove.indexOf("$k.SetValue(");
+    const echoIndex = scripts.remove.indexOf("Write-Output (ConvertTo-Json");
+    const broadcastIndex = scripts.remove.indexOf("SendMessageTimeout(");
+    expect(writeIndex).toBeGreaterThan(-1);
+    expect(echoIndex).toBeGreaterThan(writeIndex);
+    expect(broadcastIndex).toBeGreaterThan(echoIndex);
+  });
+
+  test("stay single-quoted so they survive -Command argv quoting", () => {
+    // Both scripts travel as one argv element to powershell.exe; a literal
+    // double quote would be re-escaped by the spawn layer and break parsing.
+    for (const script of Object.values(scripts)) {
+      expect(script).not.toContain('"');
+    }
+  });
+
+  const powershell =
+    Bun.which("pwsh") ||
+    Bun.which("pwsh.exe") ||
+    Bun.which("powershell.exe") ||
+    process.env.PLANNOTATOR_TEST_POWERSHELL ||
+    null;
+
+  test.skipIf(!powershell)(
+    "parse cleanly in a real PowerShell (no registry access)",
+    async () => {
+      // Parser.ParseInput only parses; nothing is executed, so this touches
+      // neither the registry nor the environment. Runs on Windows CI and on
+      // any dev box with pwsh.
+      for (const [name, script] of Object.entries(scripts)) {
+        const proc = Bun.spawn(
+          [
+            powershell!,
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$errors=$null; [void][System.Management.Automation.Language.Parser]::ParseInput($env:PLANNOTATOR_TEST_SCRIPT,[ref]$null,[ref]$errors); if($errors.Count -gt 0){$errors | ForEach-Object { Write-Output $_.Message }; exit 1}; exit 0",
+          ],
+          {
+            stdin: "ignore",
+            stdout: "pipe",
+            stderr: "pipe",
+            env: { ...process.env, PLANNOTATOR_TEST_SCRIPT: script },
+          },
+        );
+        const [stdout, exitCode] = await Promise.all([
+          new Response(proc.stdout).text(),
+          proc.exited,
+        ]);
+        expect(`${name}: ${stdout.trim()}`).toBe(`${name}: `);
+        expect(exitCode).toBe(0);
+      }
+    },
+  );
 });
 
 function createFixture(
@@ -1541,10 +1622,99 @@ describe("host and platform integrations", () => {
 
     expect(result.ok).toBe(false);
     expect(result.errors).toContain(
-      `Could not remove ${dirname(currentExe)} from the Windows user PATH.`,
+      `Could not remove ${dirname(currentExe)} from the Windows user PATH (exit 1).`,
     );
     expect(existsSync(currentExe)).toBe(true);
     expect(fixture.scheduledDeletes).toEqual([]);
+  });
+
+  test("proceeds without a PATH error when the entry is not present (exit 3)", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        runCommand: async () => ({ exitCode: 3, timedOut: false }),
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.removed).not.toContain(
+      `Windows user PATH entry ${dirname(currentExe)}`,
+    );
+    expect(fixture.scheduledDeletes).toEqual([
+      { target: currentExe, parent: dirname(currentExe) },
+    ]);
+  });
+
+  test("reports a timed-out PATH edit as a timeout and keeps the CLI", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        // Killed before the script echoed anything: the edit is unproven.
+        runCommand: async () => ({ exitCode: 124, timedOut: true, stdout: "" }),
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain(
+      `Could not remove ${dirname(currentExe)} from the Windows user PATH (command timed out).`,
+    );
+    expect(existsSync(currentExe)).toBe(true);
+    expect(fixture.scheduledDeletes).toEqual([]);
+  });
+
+  test("treats a timeout after the rollback echo as a completed PATH edit", async () => {
+    const fixture = createFixture();
+    const localAppData = join(fixture.homeDir, "AppData", "Local");
+    const currentExe = join(localAppData, "plannotator", "plannotator.exe");
+    writeText(currentExe);
+    const originalPath = `C:\\Before;${dirname(currentExe)};C:\\After;;`;
+
+    const result = await runPlannotatorUninstall(
+      { purge: false, dryRun: false },
+      {
+        ...fixture.environment,
+        platform: "win32",
+        execPath: currentExe,
+        env: { LOCALAPPDATA: localAppData },
+        which: () => "C:\\Windows\\powershell.exe",
+        // The script echoes the original PATH only after the registry write,
+        // so an echo followed by a kill means only the broadcast stalled.
+        runCommand: async () => ({
+          exitCode: 124,
+          timedOut: true,
+          stdout: `${JSON.stringify(originalPath)}\n`,
+        }),
+      },
+    );
+
+    const pathLabel = `Windows user PATH entry ${dirname(currentExe)}`;
+    expect(result.ok).toBe(true);
+    expect(result.removed).toContain(pathLabel);
+    expect(result.warnings.some((w) => w.includes("timed out"))).toBe(true);
+    expect(fixture.scheduledDeletes).toEqual([
+      { target: currentExe, parent: dirname(currentExe) },
+    ]);
   });
 
   test("restores Windows PATH when scheduling self-delete fails", async () => {
@@ -1615,7 +1785,7 @@ describe("host and platform integrations", () => {
     expect(existsSync(currentExe)).toBe(true);
     expect(result.removed).toContain(pathLabel);
     expect(result.errors).toContain(
-      `Could not restore ${dirname(currentExe)} to the Windows user PATH after self-delete scheduling failed.`,
+      `Could not restore ${dirname(currentExe)} to the Windows user PATH after self-delete scheduling failed (exit 1).`,
     );
     expect(result.warnings).toContain(
       `The Plannotator CLI remains at ${currentExe}, but its Windows PATH entry could not be restored. Run that full path to retry, then restore PATH manually if needed.`,
