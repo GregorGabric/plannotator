@@ -38,6 +38,7 @@ import {
   type ComposerYieldState,
 } from "./composerYield";
 import { buildSyncNumbering } from "./annotationNumbering";
+import { mergeUnanchoredIds } from "./unanchored";
 import {
   MAX_PAGE_URL_LENGTH,
   rejectsLiveMessage,
@@ -203,7 +204,11 @@ export interface HtmlViewerProps {
   /** Reports the full set of annotation ids with no live representation on
    *  the page (fail-closed anchors hide markers rather than guess). Called
    *  with the complete current set whenever it changes, including back to
-   *  empty on recovery. Fires in readOnly mode too. */
+   *  empty on recovery. Fires in readOnly mode too. Complete over the
+   *  `annotations` prop: page rows with nothing to restore by (no quoted
+   *  text, no element anchor) are reported even though the bridge never
+   *  sees them, and an id this viewer minted for a local comment that the
+   *  host swapped out of `annotations` for its own id is not reported. */
   onUnanchoredChange?: (ids: string[]) => void;
   /** Accessible iframe title. */
   title?: string;
@@ -359,6 +364,38 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       [handleYieldPointer],
     );
 
+    // Unanchored union: the bridge reports ids with no live representation,
+    // completed here with what the bridge cannot see (textless page rows it
+    // was never asked to restore) and minus locally minted ids the host
+    // swapped out of `annotations`. Bridge reports deliver as they arrive
+    // (pass-through timing); a prop-side change delivers only when the union
+    // actually changes, so a viewer with nothing to complete delivers exactly
+    // the bridge list, exactly when the bridge posts it.
+    const onUnanchoredChangeRef = useRef(onUnanchoredChange);
+    onUnanchoredChangeRef.current = onUnanchoredChange;
+    const annotationsRef = useRef(annotations);
+    annotationsRef.current = annotations;
+    const bridgeUnanchoredRef = useRef<readonly string[]>([]);
+    const lastDeliveredUnanchoredRef = useRef("[]");
+    const createdIdsRef = useRef<ReadonlySet<string>>(new Set());
+    const deliverUnanchored = useCallback((ids: string[], onlyIfChanged: boolean) => {
+      const key = JSON.stringify(ids);
+      if (onlyIfChanged && key === lastDeliveredUnanchoredRef.current) return;
+      lastDeliveredUnanchoredRef.current = key;
+      onUnanchoredChangeRef.current?.(ids);
+    }, []);
+    const handleBridgeUnanchored = useCallback((ids: string[]) => {
+      bridgeUnanchoredRef.current = ids;
+      deliverUnanchored(
+        mergeUnanchoredIds({
+          bridgeIds: ids,
+          annotations: annotationsRef.current,
+          createdIds: createdIdsRef.current,
+        }),
+        false,
+      );
+    }, [deliverUnanchored]);
+
     const hook = useHtmlAnnotation({
       iframeRef,
       enabled: !readOnly,
@@ -371,8 +408,20 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       live: liveSession,
       onPageChange,
       onBridgePointer: handleBridgePointer,
-      onUnanchoredChange,
+      onUnanchoredChange: handleBridgeUnanchored,
     });
+    createdIdsRef.current = hook.createdAnnotationIds;
+
+    useEffect(() => {
+      deliverUnanchored(
+        mergeUnanchoredIds({
+          bridgeIds: bridgeUnanchoredRef.current,
+          annotations,
+          createdIds: hook.createdAnnotationIds,
+        }),
+        true,
+      );
+    }, [annotations, hook.createdAnnotationIds, deliverUnanchored]);
 
     const multiSelectActive = !readOnly && !!hook.commentPopover && hook.draftTargets.length > 0;
 

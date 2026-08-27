@@ -18,6 +18,13 @@ function nextHtmlAnnId(): string {
   return `html-ann-${Date.now().toString(36)}-${(htmlAnnSeq++).toString(36)}`;
 }
 
+/** Ids minted by this module for locally created annotations (create-mark).
+ * Module-scoped like the sequence above: a host that swaps a local id for
+ * its own server id keeps the local mark until it removes it, and the
+ * unanchored union needs to recognise such ids whichever viewer instance
+ * minted them. Bounded: only ids from this page load, one entry per create. */
+const mintedHtmlAnnIds = new Set<string>();
+
 function htmlCommentDraftKey(
   text: string,
   anchor?: HtmlElementAnchor | null,
@@ -380,6 +387,10 @@ export function useHtmlAnnotation({
   /** Composer one-click "Looks good": submits the hardcoded positive label
    *  with the same anchor and multi-select targets a typed comment would carry. */
   handleCommentLooksGood: () => void;
+  /** Ids this module minted for locally created annotations (create-mark),
+   *  for the unanchored union: a minted id the host never listed is a
+   *  swapped-out local mark, not a host row. Read-only, stable identity. */
+  createdAnnotationIds: ReadonlySet<string>;
 } {
   const [toolbarState, setToolbarState] = useState<ToolbarState | null>(null);
   const [commentPopover, setCommentPopover] = useState<CommentPopoverState | null>(null);
@@ -731,6 +742,7 @@ export function useHtmlAnnotation({
       if (!text || type !== AnnotationType.DELETION) return;
 
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "deletion" });
       onAddRef.current?.({
         id,
@@ -789,6 +801,7 @@ export function useHtmlAnnotation({
           : undefined;
 
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -834,6 +847,7 @@ export function useHtmlAnnotation({
         : undefined;
 
     const id = nextHtmlAnnId();
+    mintedHtmlAnnIds.add(id);
     post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
     onAddRef.current?.({
       id,
@@ -893,6 +907,7 @@ export function useHtmlAnnotation({
       const text = pendingTextRef.current;
       if (!text) return;
       const id = nextHtmlAnnId();
+      mintedHtmlAnnIds.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -989,5 +1004,6 @@ export function useHtmlAnnotation({
     removeDraftTarget,
     flashDraftTarget,
     composerFocusToken,
+    createdAnnotationIds: mintedHtmlAnnIds,
   };
 }

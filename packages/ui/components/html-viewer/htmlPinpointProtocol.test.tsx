@@ -1120,6 +1120,115 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
     });
     expect(received).toEqual([['lost-1']]);
   });
+
+  function pageRow(id: string, overrides: Partial<Annotation> = {}): Annotation {
+    return {
+      id,
+      blockId: '',
+      startOffset: 0,
+      endOffset: 0,
+      type: AnnotationType.COMMENT,
+      text: 'noted',
+      originalText: 'Page',
+      createdA: 1,
+      ...overrides,
+    };
+  }
+
+  async function mountUnion(initial: Annotation[], received: string[][]) {
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    const added: Annotation[] = [];
+    const render = async (annotations: Annotation[]) => {
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml="<html><body><p>Page</p></body></html>"
+            annotations={annotations}
+            onAddAnnotation={(ann) => added.push(ann)}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="comment"
+            inputMethod="pinpoint"
+            onUnanchoredChange={(ids) => received.push(ids)}
+          />,
+        );
+      });
+    };
+    await render(initial);
+    const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    const post = async (data: Record<string, unknown>) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', { source: iframe.contentWindow, data }));
+      });
+    };
+    return { render, post, added };
+  }
+
+  test('textless page rows are reported without any bridge message; document-level comments are not', async () => {
+    // A page row with no quoted text and no element anchor is never posted
+    // to the bridge (nothing to find it by), so the bridge can never name
+    // it; the viewer completes the report itself. A GLOBAL_COMMENT has no
+    // page location by design and must NOT be flagged.
+    const received: string[][] = [];
+    const { post } = await mountUnion([
+      pageRow('anchored-1'),
+      pageRow('textless-1', { originalText: '' }),
+      pageRow('global-1', { originalText: '', type: AnnotationType.GLOBAL_COMMENT }),
+    ], received);
+    expect(received).toEqual([['textless-1']]);
+
+    // The bridge's own report unions with it, pass-through timing kept.
+    await post({ type: MSG, ids: ['anchored-1'] });
+    expect(received.at(-1)).toEqual(['anchored-1', 'textless-1']);
+    await post({ type: MSG, ids: [] });
+    expect(received.at(-1)).toEqual(['textless-1']);
+  });
+
+  test('a locally minted id the host swapped out of annotations never reaches the report', async () => {
+    // The create swap: the composer mints a local id (create-mark), the host
+    // persists the comment under its own id and lists only that one. If the
+    // kept local mark later dies, the bridge names the local id, which the
+    // host holds no card for. The union drops it; the host id passes.
+    const received: string[][] = [];
+    const { render, post, added } = await mountUnion([], received);
+    await post({
+      type: 'plannotator-bridge-selection',
+      text: 'Page',
+      rect: { top: 10, left: 10, width: 120, height: 24 },
+      pinpoint: true,
+      targetKey: 'ht-1',
+      anchor: { selector: 'p', tagName: 'p', text: 'Page' },
+    });
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-comment-popover] textarea');
+    if (!textarea) throw new Error('composer textarea missing');
+    const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(textarea), 'value')?.set;
+    await act(async () => {
+      if (setter) setter.call(textarea, 'swap me');
+      else textarea.value = 'swap me';
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const save = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'))
+      .find((b) => b.textContent === 'Save');
+    if (!save) throw new Error('Save button missing');
+    await act(async () => { save.click(); });
+    const localId = added[0]?.id;
+    if (!localId) throw new Error('no created annotation');
+
+    // Host swapped: its list carries the server row only.
+    await render([pageRow('srv-1')]);
+    await post({ type: MSG, ids: [localId, 'srv-1'] });
+    expect(received.at(-1)).toEqual(['srv-1']);
+
+    // A minted id the host DOES keep in its list is a real row and passes.
+    await render([pageRow('srv-1'), pageRow(localId)]);
+    expect(received.at(-1)).toEqual([localId, 'srv-1'].sort());
+  });
 });
 
 describe.if(hasDom)('Interact/Annotate mode on static (srcdoc) surfaces', () => {
