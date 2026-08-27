@@ -1199,10 +1199,21 @@ const App: React.FC = () => {
       setVersionInfo(null);
     }
   }, [linkedDocHook.isActive]);
+  // Annotations a Refresh could no longer anchor: the panel shows an
+  // "Unanchored" chip on them. Set from the refresh's restore report only,
+  // so the chip is exactly the toast's list; a document change clears it.
+  const [htmlUnanchoredIds, setHtmlUnanchoredIds] = useState<ReadonlySet<string>>(() => new Set());
+  const handleHtmlRefreshUnanchored = useCallback((ids: string[]) => {
+    setHtmlUnanchoredIds(new Set(ids));
+  }, []);
+  useEffect(() => {
+    setHtmlUnanchoredIds((prev) => (prev.size === 0 ? prev : new Set()));
+  }, [activeHtmlPath]);
   const htmlRefresh = useHtmlRefresh({
     enabled: isApiMode && annotateMode && isHtmlSurface && !liveApp && !documentReadOnly,
     activePath: activeHtmlPath,
     onSnapshot: applyRefreshedHtml,
+    onUnanchored: handleHtmlRefreshUnanchored,
   });
   const htmlShareContext = useMemo(
     () => ({ activePath: activeHtmlPath, reloadGeneration: htmlRefresh.reloadGeneration }),
@@ -5028,6 +5039,7 @@ const App: React.FC = () => {
       width={presentation === 'panel' ? `var(--rpanel-w, ${panelResize.width}px)` : undefined}
       editorAnnotations={editorAnnotations}
       onDeleteEditorAnnotation={deleteEditorAnnotation}
+      unanchoredIds={isHtmlSurface && htmlUnanchoredIds.size > 0 ? htmlUnanchoredIds : undefined}
       onClose={presentation === 'panel' ? () => setIsPanelOpen(false) : closeCompactPlanSurface}
       onQuickCopy={async () => {
         const output = getCurrentFeedbackPayload();
