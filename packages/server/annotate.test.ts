@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:tes
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { liveAppDraftIdentity, runGuardedShutdown, startAnnotateServer } from "./annotate";
 import { getServerConfig, loadConfig } from "./config";
 import { deriveAnnotateHistorySlug } from "@plannotator/shared/annotate-history";
@@ -278,9 +278,12 @@ describe("annotate server: local rendered-HTML root freshness", () => {
   });
 
   // A tab reload after an agent edit must show the edited page (the draft
-  // annotations were placed on it), and must not pair it with a version diff
-  // computed for the startup snapshot.
-  test("/api/plan serves the root document's current bytes and drops the startup version diff once they differ", async () => {
+  // annotations were placed on it) AND keep the version diff: the saved
+  // baseline is still the previous version, so the diff is recomputed
+  // against the served bytes rather than dropped (a reload used to lose the
+  // "Show changes" toggle for the rest of the session). Reads never write
+  // history.
+  test("/api/plan serves the root document's current bytes and recomputes the version diff against them", async () => {
     const pagePath = join(freshDocDir("plan"), "page.html");
     const project = uniqueProject("plan");
     type PlanPayload = {
@@ -325,10 +328,35 @@ describe("annotate server: local rendered-HTML root freshness", () => {
       const reloaded = await plan();
       expect(reloaded.rawHtml).toContain("V3");
       expect(reloaded.rawHtml).not.toContain("V2");
-      expect(reloaded.previousPlan).toBeUndefined();
-      expect(reloaded.versionInfo).toBeUndefined();
-      expect(reloaded.diffCurrent).toBeUndefined();
-      expect(reloaded.diffHtml).toBeUndefined();
+      // The baseline still names the saved previous version...
+      expect(reloaded.previousPlan).toBe(page("V1"));
+      expect(reloaded.versionInfo?.version).toBe(2);
+      // ...and the diff describes V1 -> V3, the page actually on screen.
+      expect(reloaded.diffCurrent).toBe(page("V3"));
+      expect(reloaded.diffHtml).toContain("<ins");
+      expect(reloaded.diffHtml).toContain("V3");
+      expect(reloaded.diffHtml).not.toContain("V2");
+
+      // The in-app Refresh reads the root through /api/doc: the same
+      // recomputed diff rides along for the ROOT document only.
+      const refreshed = (await (await fetch(
+        `${server.url}/api/doc?path=${encodeURIComponent(pagePath)}`,
+      )).json()) as PlanPayload & { renderAs?: string };
+      expect(refreshed.renderAs).toBe("html");
+      expect(refreshed.rawHtml).toContain("V3");
+      expect(refreshed.previousPlan).toBe(page("V1"));
+      expect(refreshed.versionInfo?.version).toBe(2);
+      expect(refreshed.diffHtml).toBe(reloaded.diffHtml);
+
+      // A sibling document served through /api/doc carries no version fields.
+      const siblingPath = join(dirname(pagePath), "sibling.html");
+      writeFileSync(siblingPath, page("SIBLING"), "utf-8");
+      const sibling = (await (await fetch(
+        `${server.url}/api/doc?path=${encodeURIComponent(siblingPath)}`,
+      )).json()) as PlanPayload;
+      expect(sibling.rawHtml).toContain("SIBLING");
+      expect(sibling.previousPlan).toBeUndefined();
+      expect(sibling.diffHtml).toBeUndefined();
 
       // The saved history is untouched by reads: still exactly the two versions.
       const versions = (await (await fetch(`${server.url}/api/plan/versions`)).json()) as { versions: unknown[] };

@@ -114,6 +114,44 @@ const annotateFetch: typeof fetch = async (input) => {
   return Response.json({});
 };
 
+// A session whose file has a saved previous version: /api/plan carries the
+// rendered diff, and the root's /api/doc read (what Refresh performs) carries
+// the diff recomputed against the bytes just read.
+const DIFF_HTML = "<h1>Rendered <ins>page</ins></h1><p>Body copy.</p>";
+const REFRESHED_HTML = "<h1>Rendered page</h1><p>Body copy, edited.</p>";
+const REFRESHED_DIFF_HTML = "<h1>Rendered page</h1><p>Body copy<ins>, edited</ins>.</p>";
+const versionedPlan = {
+  ...htmlAnnotatePlan,
+  diffHtml: DIFF_HTML,
+  previousPlan: "<h1>Rendered</h1><p>Body copy.</p>",
+  versionInfo: { version: 2, totalVersions: 2, project: "test" },
+};
+const versionedFetch: typeof fetch = async (input) => {
+  const rawUrl = input instanceof Request ? input.url : String(input);
+  const url = new URL(rawUrl, "http://localhost");
+  if (url.pathname === "/api/plan") return Response.json(versionedPlan);
+  if (url.pathname === "/api/doc" && url.searchParams.get("path") === htmlAnnotatePlan.filePath) {
+    return Response.json({
+      rawHtml: REFRESHED_HTML,
+      renderAs: "html",
+      filepath: htmlAnnotatePlan.filePath,
+      diffHtml: REFRESHED_DIFF_HTML,
+      previousPlan: versionedPlan.previousPlan,
+      versionInfo: versionedPlan.versionInfo,
+    });
+  }
+  return annotateFetch(input);
+};
+
+function diffToggle(): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll("button"))
+    .find((button) => /changes vs previous version/.test(button.title));
+}
+
+function refreshButton(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-html-refresh]");
+}
+
 function findButtonByText(label: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll("button"))
     .find((button) => button.textContent?.trim() === label);
@@ -142,8 +180,8 @@ async function settle(): Promise<void> {
   });
 }
 
-async function mountHtmlAnnotate(): Promise<void> {
-  globalThis.fetch = annotateFetch;
+async function mountHtmlAnnotate(fetchImpl: typeof fetch = annotateFetch): Promise<void> {
+  globalThis.fetch = fetchImpl;
   // SAFETY: the App only uses EventSource's constructor, handlers, and close;
   // this test double implements those browser-facing members without I/O.
   globalThis.EventSource = SilentEventSource as unknown as typeof EventSource;
@@ -381,6 +419,37 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     // Open sidebar renders the full tab strip (Contents label), and the
     // collapsed flags are gone.
     expect(findButtonByText("Contents")).not.toBeUndefined();
+  });
+
+  test("Refresh keeps the version-diff toggle available (the server recomputes the diff for the root document)", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    await mountHtmlAnnotate(versionedFetch);
+    await settle();
+
+    // The toggle is offered on load, in normal (non-diff) mode.
+    expect(diffToggle()).not.toBeUndefined();
+    expect(diffToggle()!.title).toBe("Show changes vs previous version");
+
+    // Enter the diff view, then refresh: the view returns to normal mode and
+    // the toggle is still there (it used to disappear for the session).
+    await act(async () => diffToggle()!.click());
+    expect(diffToggle()!.title).toBe("Hide changes vs previous version");
+
+    const refresh = refreshButton();
+    if (!refresh) throw new Error("refresh button missing");
+    await act(async () => refresh.click());
+    for (let attempt = 0; attempt < 20 && refreshButton()?.getAttribute("aria-disabled") !== "false"; attempt += 1) {
+      await settle();
+    }
+
+    expect(diffToggle()).not.toBeUndefined();
+    expect(diffToggle()!.title).toBe("Show changes vs previous version");
+    // And the recomputed diff is what a second toggle renders.
+    await act(async () => diffToggle()!.click());
+    await settle();
+    const frame = document.querySelector<HTMLIFrameElement>("iframe[srcdoc]");
+    expect(frame?.getAttribute("srcdoc")).toContain("<ins>, edited</ins>");
   });
 
   test("the pen toggle starts ARMED (aria-pressed) on a static HTML session and click flips it to Interact", async () => {
