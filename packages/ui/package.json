@@ -73,7 +73,7 @@
     "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.3",
     "@pierre/diffs": "1.3.2",
-    "@plannotator/atomic-editor": "^0.8.1",
+    "@plannotator/atomic-editor": "^0.8.0",
     "@plannotator/core": "workspace:*",
     "@plannotator/markdown-editor": "^0.4.0",
     "@plannotator/web-highlighter": "^0.8.1",
