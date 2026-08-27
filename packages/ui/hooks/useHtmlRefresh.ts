@@ -20,7 +20,8 @@ export interface UseHtmlRefreshOptions {
    * has a single document.
    */
   documentKey?: string | null;
-  /** Fetch the current bytes of the document. Called with `documentKey`. */
+  /** Fetch the current bytes of the document. Called with `documentKey`.
+   *  A rejection is treated as `{ status: 'unavailable' }`. */
   fetchSnapshot: (documentKey: string | null) => Promise<HtmlRefreshSnapshot>;
   /** Apply the refreshed bytes (the host owns the viewer's `rawHtml`). */
   onSnapshot: (rawHtml: string) => void;
@@ -94,7 +95,15 @@ export function useHtmlRefresh({
     const requestId = ++requestRef.current;
     setIsRefreshing(true);
     try {
-      const result = await fetchSnapshot(requestKey);
+      // A rejecting fetch is an unavailable snapshot: the host hears it
+      // through onResult like any other outcome, never as an unhandled
+      // rejection out of refresh().
+      let result: HtmlRefreshSnapshot;
+      try {
+        result = await fetchSnapshot(requestKey);
+      } catch {
+        result = { status: 'unavailable' };
+      }
       if (requestId !== requestRef.current || activeKeyRef.current !== requestKey) return;
 
       if (result.status === 'missing' || result.status === 'unavailable') {

@@ -164,6 +164,31 @@ describe.if(hasDom)('useHtmlRefresh (published)', () => {
     expect(h.unanchored).toEqual([['lost-1', 'lost-2'], []]);
   });
 
+  test('a rejecting fetchSnapshot is an unavailable outcome, never an unhandled rejection', async () => {
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    const api: { current: UseHtmlRefreshReturn | null } = { current: null };
+    const results: HtmlRefreshResult[] = [];
+    const snapshots: string[] = [];
+    await act(async () => {
+      root!.render(
+        <Harness
+          documentKey="a.html"
+          fetchSnapshot={() => Promise.reject(new Error('network down'))}
+          onSnapshot={(raw) => snapshots.push(raw)}
+          onUnanchored={() => {}}
+          onResult={(r) => results.push(r)}
+          api={api}
+        />,
+      );
+    });
+    await act(async () => { await api.current!.refresh(); });
+    expect(results).toEqual(['unavailable']);
+    expect(snapshots).toEqual([]);
+    expect(api.current!.isRefreshing).toBe(false);
+  });
+
   test('canRefresh follows enabled and the document key', async () => {
     const h = await mount(null);
     expect(h.api.current!.canRefresh).toBe(false);

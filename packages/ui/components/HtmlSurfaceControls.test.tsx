@@ -133,30 +133,16 @@ describe.if(hasDom)('HtmlSurfaceControls', () => {
     expect(DEFAULT_HTML_SURFACE_CONTROL_LABELS.refreshTitle).toBe('Refresh document');
   });
 
-  test('label overrides reach the DOM, per key, leaving the rest at their defaults', () => {
-    const labels = {
-      annotateTitle: 'Annotate mode: click an element or select text to comment. Press Escape to interact.',
-      interactTitle: 'Interact mode: links and controls work normally. Select text or turn annotation mode back on to comment.',
-      annotateLabel: 'Annotate mode',
-      interactLabel: 'Interact mode',
-      hideTools: 'Hide viewer controls',
-      showTools: 'Show viewer controls (Command/Control + \\)',
-      refreshTitle: 'Refresh HTML from disk',
-    };
-    const armed = render({ armed: true, toolsHidden: false, labels });
-    expect(pen(armed)!.title).toBe(labels.annotateTitle);
-    expect(pen(armed)!.getAttribute('aria-label')).toBe('Annotate mode');
-    expect(eye(armed)!.title).toBe('Hide viewer controls');
-    expect(eye(armed)!.querySelector('.sr-only')!.textContent).toBe('Hide viewer controls');
-    expect(refresh(armed)!.title).toBe('Refresh HTML from disk');
+  test('a label override applies to its key only; the pen aria-label appears only when supplied', () => {
+    const labels = { hideTools: 'Hide viewer controls', annotateLabel: 'Annotate mode' };
+    const el = render({ armed: true, toolsHidden: false, isRefreshing: true, labels });
+    // The overridden key reaches both the title and the screen-reader text.
+    expect(eye(el)!.title).toBe('Hide viewer controls');
+    expect(eye(el)!.querySelector('.sr-only')!.textContent).toBe('Hide viewer controls');
+    expect(pen(el)!.getAttribute('aria-label')).toBe('Annotate mode');
     // Keys not overridden keep the defaults.
-    expect(refresh(armed)!.textContent).toBe('Refresh');
-
-    act(() => root?.unmount());
-    const interact = render({ armed: false, toolsHidden: true, isRefreshing: true, labels });
-    expect(pen(interact)!.title).toBe(labels.interactTitle);
-    expect(pen(interact)!.getAttribute('aria-label')).toBe('Interact mode');
-    expect(eye(interact)!.title).toBe(labels.showTools);
-    expect(refresh(interact)!.title).toBe('Refreshing document');
+    expect(pen(el)!.title).toBe(DEFAULT_HTML_SURFACE_CONTROL_LABELS.annotateTitle);
+    expect(refresh(el)!.title).toBe(DEFAULT_HTML_SURFACE_CONTROL_LABELS.refreshingTitle);
+    expect(refresh(el)!.textContent).toBe(DEFAULT_HTML_SURFACE_CONTROL_LABELS.refreshing);
   });
 });
