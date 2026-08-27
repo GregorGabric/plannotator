@@ -1,3 +1,11 @@
+// Eager renderer registration (side-effect imports, evaluated before every
+// other module below). These keep Plannotator's first paint and identity
+// minting byte-identical now that @plannotator/ui loads KaTeX and the username
+// dictionary lazily for hosts: math is typeset on the first commit and names
+// come from the full dictionary. Guarded by tests/entry-assets.test.ts; do not
+// drop or reorder either line.
+import '@plannotator/ui/utils/math-eager';
+import '@plannotator/ui/utils/identity-tater';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { type Origin, getAgentName } from '@plannotator/shared/agents';
 import { ThemeProvider, useTheme } from '@plannotator/ui/components/ThemeProvider';

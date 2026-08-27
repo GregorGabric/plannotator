@@ -28,6 +28,8 @@ configurePlannotatorUI({
   skillContentTransport,       // human-only skill contents for feedback injection
   serverSync,
   webmcp,                      // browser-agent (WebMCP) provider policy: { enabled, namePrefix }
+  mathRendererLoader,          // how KaTeX loads when no renderer is registered before first math render
+  identityGenerator,           // sync generator behind the default "tater" name (no identityProvider)
 });
 ```
 
@@ -47,6 +49,16 @@ The sidebar/panel resize handle exposes seams for hosts that want different edge
   ```
 
 Building your own tooltip and removing the built-in double-click reset are host-side concerns (override `onDoubleClick` where you render the handle).
+
+### Lazy renderers and the eager entries (`utils/math`, `utils/generateIdentity`, `utils/mermaid`)
+
+The Mermaid runtime, the Graphviz engine, KaTeX and the username dictionary are off the static import graph of `Viewer`, so a host that bundles by route does not download them for a plain markdown read. Graphviz needs nothing from you (the block imports the engine inside its render effect and shows the source fence until the SVG lands, as it always did). Mermaid, KaTeX and the dictionary sit behind synchronous slots:
+
+- **Math.** Without registration, a math node renders its TeX as text in the same wrapper (same `data-math-tex` / `data-math-display` / `aria-label` / class names), loads KaTeX via `import('katex')`, and re-renders typeset. To keep math typeset on the very first commit, as Plannotator does, add one line to your entry: `import "@plannotator/ui/utils/math-eager";`. To put KaTeX and its stylesheet on one lazy chunk instead, pass `mathRendererLoader`. The stylesheet remains your job either way (see "Consuming it", step 3).
+- **Mermaid.** Without registration, the first diagram on a page fetches the runtime through `import('mermaid')`; a failed import is dropped from the memo, re-attempted once after a short delay, and the error panel (with the source) offers Retry, which issues another fresh attempt. Plannotator keeps Mermaid eager by policy so it can never fail separately from the app: `import "@plannotator/ui/utils/mermaid-eager";` in your entry does the same for your bundle. Honest limit of any in-page retry: a browser records a failed module fetch in its module map for the page lifetime, so a fresh `import()` of the same chunk URL rejects without a request; the retry recovers failures after the fetch (engine instantiation, initialize) and hosts that version chunk URLs. A host that needs recovery from a failed first fetch uses versioned chunk URLs or a `vite:preloadError` reload at app level.
+- **Identity.** With an `identityProvider` the generator is never called and the word lists stay out of your bundle. Without one, default names come from a small built-in pool of the same `adjective-noun-tater` shape; `import "@plannotator/ui/utils/identity-tater";` registers the full dictionary, or pass your own `identityGenerator`.
+
+Plannotator's own entries import the eager modules (`math-eager` and `identity-tater` in both `packages/editor/App.tsx` and `packages/review-editor/App.tsx`; `mermaid-eager` in the plan editor only, since the review editor never renders a Mermaid block), which is what keeps its single-file builds byte-identical and its portal entry chunk shaped as before; `tests/entry-assets.test.ts` fails if any of them is dropped. See HANDOFF.md "Lazy renderers and eager entries".
 
 ### Markdown editor extensions + wiki links (`MarkdownEditor` / `InlineMarkdown`)
 
