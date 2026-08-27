@@ -68,6 +68,25 @@ describe('exportAnnotations with inReplyTo', () => {
     expect(out.indexOf('Reply to X')).toBeLessThan(out.indexOf('Y says'));
   });
 
+  // 10,000 replies once produced 100 MiB of markdown on /api/feedback: the
+  // nesting re-filtered the whole list per level and the indent grew without
+  // bound. Size and time must stay linear in the number of replies.
+  test('a 5,000-reply chain exports in linear size and time', () => {
+    const anns: Annotation[] = [comment('0', 'Rotate the key', 'root', { createdA: 0 })];
+    for (let i = 1; i < 5000; i++) {
+      anns.push(comment(String(i), 'Rotate the key', `reply ${i}`, { inReplyTo: String(i - 1), createdA: i }));
+    }
+    const start = performance.now();
+    const out = exportAnnotations(blocks, anns);
+    const elapsed = performance.now() - start;
+    expect(out).toContain('have 5000 pieces of feedback');
+    expect(out).toContain('reply 4999');
+    expect(out).not.toContain('## 2. ');
+    // Every reply line is bounded (capped indent), so the whole export is too.
+    expect(out.length).toBeLessThan(5000 * 80);
+    expect(elapsed).toBeLessThan(500);
+  });
+
   test('without any inReplyTo the export is byte-identical to the plain export', () => {
     const a = comment('a', 'Rotate the key', 'one');
     const b = comment('b', 'Ship behind a flag', 'two', { createdA: 2 });

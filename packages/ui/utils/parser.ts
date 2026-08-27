@@ -1220,28 +1220,51 @@ export const exportAnnotations = (
   const replyParents = resolveReplyParents(sortedAnns as any[]);
   const isReply = (a: any) => replyParents.get(a.id) != null;
   const hasReplies = sortedAnns.some(isReply);
-  const repliesOf = (parent: any): any[] =>
-    hasReplies ? sortedAnns.filter((a: any) => replyParents.get(a.id) === parent.id).sort((a: any, b: any) => a.createdA - b.createdA) : [];
+  // Children are grouped once (creation order within a parent); the old
+  // per-level re-filter and re-sort of the whole list made a long thread
+  // quadratic in both time and output size.
+  const repliesByParent = new Map<string, any[]>();
   if (hasReplies) {
+    for (const a of sortedAnns as any[]) {
+      const parent = replyParents.get(a.id);
+      if (!parent) continue;
+      const list = repliesByParent.get(parent) ?? [];
+      list.push(a);
+      repliesByParent.set(parent, list);
+    }
+    for (const list of repliesByParent.values()) list.sort((a: any, b: any) => a.createdA - b.createdA);
     emitOrder = emitOrder.filter((a) => !isReply(a));
     // Numbers stay consecutive over the entries that are actually emitted.
     annotationNumbers.clear();
     emitOrder.forEach((ann, index) => annotationNumbers.set(ann, index + 1));
   }
-  const replyBlock = (parent: any, depth = 0): string => {
-    let block = '';
-    for (const reply of repliesOf(parent)) {
+  // Nesting indent is capped so the export stays linear in the thread size
+  // (an uncapped indent on a 5,000-deep chain is 25 MB of whitespace) and
+  // the emission is an explicit stack rather than recursion, so a deep chain
+  // costs neither stack frames nor repeated string copies.
+  const MAX_REPLY_INDENT_DEPTH = 8;
+  const replyBlock = (parent: any): string => {
+    const parts: string[] = [];
+    const stack: Array<{ reply: any; depth: number }> = [];
+    const pushReplies = (of: any, depth: number) => {
+      const replies = repliesByParent.get(of.id);
+      if (!replies) return;
+      for (let i = replies.length - 1; i >= 0; i--) stack.push({ reply: replies[i], depth });
+    };
+    pushReplies(parent, 0);
+    while (stack.length > 0) {
+      const { reply, depth } = stack.pop()!;
       const who = reply.author ? `${reply.author}` : 'reply';
-      const indent = '  '.repeat(depth);
-      block += `${indent}- **Reply (${who}):** ${String(reply.text ?? '').replace(/\r?\n/g, `\n${indent}  `)}\n`;
+      const indent = '  '.repeat(Math.min(depth, MAX_REPLY_INDENT_DEPTH));
+      parts.push(`${indent}- **Reply (${who}):** ${String(reply.text ?? '').replace(/\r?\n/g, `\n${indent}  `)}\n`);
       if (reply.images && reply.images.length > 0) {
         reply.images.forEach((img: ImageAttachment) => {
-          block += `${indent}  - [${img.name}] \`${img.path}\`\n`;
+          parts.push(`${indent}  - [${img.name}] \`${img.path}\`\n`);
         });
       }
-      block += replyBlock(reply, depth + 1);
+      pushReplies(reply, depth + 1);
     }
-    return block;
+    return parts.join('');
   };
 
   let lastEmittedPage: string | null = null;
