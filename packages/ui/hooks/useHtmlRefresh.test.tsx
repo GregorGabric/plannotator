@@ -81,9 +81,12 @@ async function mount(initialKey: string | null) {
   };
   await render(initialKey);
   const settle = async (index: number, value: HtmlRefreshSnapshot) => {
+    // The hook's continuation (apply, generation bump, isRefreshing reset)
+    // runs several microtasks after the fetch resolves; a macrotask turn
+    // keeps every resulting state update inside act.
     await act(async () => {
       pending[index]!.resolve(value);
-      await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 0));
     });
   };
   return { api, render, settle, fetched, snapshots, unanchored, results };
