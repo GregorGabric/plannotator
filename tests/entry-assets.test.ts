@@ -65,6 +65,66 @@ describe('review entry assets', () => {
     expect(highlighter).not.toMatch(/https?:\/\//);
   });
 
+  // @plannotator/ui loads KaTeX and the username dictionary through slots
+  // (utils/math.ts, utils/generateIdentity.ts) so hosts that bundle by route
+  // can leave them out of a document read. Plannotator's parity rests on two
+  // side-effect imports per app entry: without them, plans with math would
+  // paint TeX for a frame in every runtime and identities would come from the
+  // 16-word fallback pool, with no error anywhere. Both apps must carry both.
+  test.each(['packages/editor/App.tsx', 'packages/review-editor/App.tsx'])(
+    '%s registers the eager math renderer and identity dictionary',
+    (path) => {
+      const source = read(path);
+      expect(source).toContain("import '@plannotator/ui/utils/math-eager';");
+      expect(source).toContain("import '@plannotator/ui/utils/identity-tater';");
+    },
+  );
+
+  test('the eager entries register synchronously at module evaluation', () => {
+    const math = read('packages/ui/utils/math-eager.ts');
+    expect(math).toContain("import katex from 'katex';");
+    expect(math).toContain('setMathRenderer(katex);');
+    const identity = read('packages/ui/utils/identity-tater.ts');
+    expect(identity).toContain("from 'unique-username-generator';");
+    expect(identity).toContain('setIdentityGenerator(generateTaterIdentity);');
+  });
+
+  // The other half of the optimization: the renderers must stay OFF the
+  // static import graph of the components, otherwise a host's bundler puts
+  // them back into every document read and the slots become decoration.
+  test('renderer runtimes are not statically imported by the components', () => {
+    const staticImport = (spec: string) => new RegExp(`^import\\s+(?!type\\b)[^;]*from\\s+['"]${spec}['"]`, 'm');
+    expect(read('packages/ui/components/blocks/MathBlock.tsx')).not.toMatch(staticImport('katex'));
+    expect(read('packages/ui/components/InlineMarkdown.tsx')).not.toMatch(staticImport('katex'));
+    expect(read('packages/ui/utils/math.ts')).not.toMatch(staticImport('katex'));
+    expect(read('packages/ui/utils/math.ts')).toContain("import('katex')");
+    expect(read('packages/ui/components/MermaidBlock.tsx')).not.toMatch(staticImport('mermaid'));
+    expect(read('packages/ui/components/MermaidBlock.tsx')).toContain("import('mermaid')");
+    expect(read('packages/ui/components/GraphvizBlock.tsx')).not.toMatch(staticImport('@viz-js/viz'));
+    expect(read('packages/ui/components/GraphvizBlock.tsx')).toContain("import('@viz-js/viz')");
+    expect(read('packages/ui/utils/generateIdentity.ts')).not.toMatch(staticImport('unique-username-generator'));
+  });
+
+  // Built-artifact check for the same guarantee: a lost eager import would
+  // still type-check and pass every unit test, but the single-file bundles
+  // would no longer inline the renderer. These markers are string literals
+  // inside the libraries (a KaTeX class name, a Mermaid diagram id, an
+  // Emscripten symbol from Graphviz, the dictionary's exported function) and
+  // survive minification. dist/ is gitignored, so this skips on an unbuilt
+  // checkout; the CI job that builds the bundles runs it right after.
+  const markerExpectations: Array<[bundle: string, markers: string[]]> = [
+    ['apps/hook/dist/index.html', ['katex-display', 'flowchart-v2', 'viz_set_y_invert', 'uniqueUsernameGenerator', '__plannotatorLiveConfig']],
+    ['apps/review/dist/index.html', ['katex-display', 'uniqueUsernameGenerator', '__plannotatorLiveConfig']],
+  ];
+  test.each(markerExpectations)('%s still inlines the eagerly registered renderers (skipped if unbuilt)', (path, markers) => {
+    const full = resolve(root, path);
+    if (!existsSync(full)) return;
+    const html = readFileSync(full, 'utf8');
+    // Asserted per marker on a boolean so a failure never prints the 20MB bundle.
+    const missing = markers.filter((marker) => !html.includes(marker));
+    expect({ path, missing }).toEqual({ path, missing: [] });
+  });
+
   test('nothing depends on highlight.js any more', () => {
     for (const manifest of ['packages/ui/package.json', 'packages/review-editor/package.json']) {
       expect(read(manifest)).not.toContain('highlight.js');
