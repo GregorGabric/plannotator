@@ -92,6 +92,8 @@ Pass any subset of these to `configurePlannotatorUI({ ... })`. Anything omitted 
 | `aiTransport` | `AITransport` | The "Ask AI" chat session/query/abort/permission | `POST /api/ai/{session,query,abort,permission}` |
 | `serverSync` | `ServerSyncFn` | Push a settings change back to the server | No-op-ish (Plannotator's local sync) |
 | `loadSettingsFromBackend` | `boolean` | After install, re-hydrate settings from your `storageBackend` | off |
+| `mathRendererLoader` | `() => Promise<MathRenderer>` | How KaTeX is loaded when no renderer is registered before the first math node renders (see "Lazy renderers and eager entries") | `import('katex')`, JS only; CSS stays yours |
+| `identityGenerator` | `() => string` | The synchronous generator behind the default "tater" display name when no `identityProvider` is installed | A built-in 16 x 16 word pool of the same `adjective-noun-tater` shape; Plannotator registers the full dictionary via `utils/identity-tater` |
 
 ### Interface details worth knowing
 
@@ -206,6 +208,8 @@ We deliberately did **not** restructure the exports map in this PR (move-don't-r
 | `utils/annotationHelpers` | Pure annotation utilities (`getAnnotationCountBySection`, `buildTocHierarchy` + `TocItem`). *(Blessed in 0.24.0.)* |
 | `components/html-viewer` (`HtmlViewer`) | The raw-HTML annotation viewer: overlay-projected placed markers, pinpoint anchors, multi-target comments. Props + validated bridge protocol; no backend of its own. See "Raw-HTML annotation viewer + syntax-highlighting migration (0.29.0)". *(Blessed in 0.29.0.)* |
 | `utils/codeHighlight` / `utils/codeBlockMark` / `utils/syntaxTheme` | The Shiki-based fence highlighter, swap-surviving annotation marks, and palette→Shiki theme mapping. Replaces all `.hljs` styling. *(Blessed in 0.29.0.)* |
+| `utils/math` (`loadMathRenderer`, `getMathRenderer`, `setMathRenderer`) and `utils/math-eager` | The math renderer slot and its eager KaTeX registration. Import `utils/math-eager` for synchronous typesetting on the first commit; call `loadMathRenderer()` to pre-warm the lazy path. See "Lazy renderers and eager entries". |
+| `utils/identity-tater` | Side-effect entry that registers the full username dictionary into the identity generator slot. Import it only if you rely on the default tater names and want the full dictionary; a host with `identityProvider` should not. |
 
 **AI is fully avoidable** — with one precision worth knowing. No AI *UI* is reachable from the supported components: `useAIChat` is imported only by `components/ai/DocumentAIChatPanel` and `useAIProviderConfig`, neither of which any supported component imports, and `CommentPopover`'s Ask-AI affordance exists only behind the optional `onAskAI` prop. `configure.ts` does statically import the `useAIChat` module (it needs `setAITransport`), but if you never use AI the hook is dead code and bundlers eliminate it — verified empirically: a standalone consumer's production bundle importing the full supported surface contains zero `/api/ai` strings. Don't import `components/ai/*` and don't pass `aiTransport`, and you ship no AI code.
 
@@ -237,6 +241,8 @@ The renderer's `MathBlock` (and inline math) uses KaTeX. **KaTeX's stylesheet an
 3. **Bundler import:** `import 'katex/dist/katex.min.css';` next to your `styles.css` import — your bundler ships the fonts as separate lazy-loaded files. With npm/bun this resolves out of the box (`katex` is a dependency of `@plannotator/ui` and gets hoisted); under pnpm's strict `node_modules`, add `katex` to your own dependencies to import it directly.
 
 If you skip all three and render math, equations appear as broken-looking raw HTML — that's the symptom to recognize. If you never render math, do nothing.
+
+The JS side is separate and lazy by default: KaTeX's runtime is no longer on the static import graph of `MathBlock` / `InlineMarkdown`. A host that renders `Viewer` without importing `@plannotator/ui/utils/math-eager` gets the TeX source in the same wrapper for one frame, then the typeset markup once `import('katex')` resolves. See "Lazy renderers and eager entries" for the opt-back and the loader seam.
 
 ---
 
@@ -435,6 +441,30 @@ The package now owns the reusable two-stage `/embed` authoring flow. The host st
 6. **One CodeMirror dependency graph.** The picker imports `@codemirror/autocomplete`, `@codemirror/state`, and `@codemirror/view` from `@plannotator/ui`'s declared dependencies. `@plannotator/atomic-editor` declares these as peers, so a consumer must resolve one shared copy. A second live copy of `@codemirror/state` breaks extensions just as it does for `wikiLinks`.
 
 Behavior is pinned by `components/MarkdownEditor.embedPicker.test.ts`, the supported re-export by `components/MarkdownEditor.embedPicker.reexport.test.ts`, and the pure splice planner by `../core/embed-insert.test.ts`.
+
+---
+
+## Lazy renderers and eager entries (unreleased)
+
+Four modules that used to ride every document read for a host that bundles by route now load on demand: the Mermaid runtime, the Graphviz engine, KaTeX, and the username dictionary. Plannotator's own apps register KaTeX and the dictionary eagerly and render exactly as before; the single-file builds are unchanged in size and first paint (the built-HTML markers and the A/B proof live in `tests/entry-assets.test.ts` and the PR that shipped this).
+
+1. **Mermaid and Graphviz: no seam, nothing to do.** `MermaidBlock` imports `mermaid` inside its render effect (initialized once with the same config; `securityLevel: 'strict'` is pinned by test) and `GraphvizBlock` does the same with `@viz-js/viz`. Both blocks already showed the source fence until the SVG landed, so the only change for a chunking host is that the first diagram on a page fetches its runtime. A failed chunk surfaces as the existing error panel with the source. Hosts that aliased these specifiers to lazy shims can delete the shims.
+
+2. **KaTeX: a renderer slot, filled eagerly by Plannotator.** `utils/math` holds a synchronous slot (`getMathRenderer`, `setMathRenderer`, `subscribeMathRenderer`), an idempotent `loadMathRenderer()` whose default loader is `import('katex')` (JS only; stylesheet policy is unchanged, see "Math rendering"), and `setMathRendererLoader`. `MathBlock` and inline math read the slot during render: filled, they typeset synchronously in the same render exactly as before; empty, they render the same wrapper (`math-block` / `math-inline`, `math-annotatable`, `data-math-tex`, `data-math-display`, `aria-label`, `data-block-id`) with the trimmed TeX as a text child, load the renderer from an effect, and re-render typeset when it lands. Annotation restore and block targeting key on those attributes, so a placeholder is addressable exactly like the typeset node. `throwOnError: false` and `trust: false` are applied to every renderer, including one you register.
+
+   **This is the one place the pass-nothing law bends.** A host that renders `Viewer` and never imports the eager entry now gets lazy math: one frame of TeX text, then typeset. The one-line opt-back for the old behavior:
+
+   ```ts
+   import '@plannotator/ui/utils/math-eager';
+   ```
+
+   The seam for the lazy path: `configurePlannotatorUI({ mathRendererLoader: () => Promise.all([import('katex'), import('katex/dist/katex.min.css')]).then(([m]) => m.default) })` puts KaTeX and its CSS on one chunk; `loadMathRenderer()` can be awaited before mounting a body that carries math if you would rather gate first paint yourself.
+
+3. **Identity: a generator slot, filled eagerly by Plannotator.** `utils/generateIdentity` no longer imports `unique-username-generator`. It holds a synchronous generator slot (`setIdentityGenerator`, `getIdentityGenerator`) with a built-in fallback that produces the same `adjective-noun-tater` shape from a 16 x 16 pool. `utils/identity-tater` registers the full dictionary as a side effect and is what Plannotator's entries import. A host with `identityProvider` never calls the generator and, with the static import gone, no longer ships the word lists; delete any dictionary shim. A host that wants the full dictionary without its own provider imports `@plannotator/ui/utils/identity-tater`, or passes its own `identityGenerator` to `configurePlannotatorUI`. The slot is synchronous on purpose: `configStore` persists the first generated name to the identity cookie during the first render-time settings read, so a name that arrived later would be a visible identity change.
+
+4. **What did not ship (deliberately).** The raw-HTML bridge script as a separately served asset and a lazy table popout are not in this release; both are tracked in the design record for a follow-up.
+
+Pinned by `utils/math.test.ts`, `components/MathBlock.firstPaint.test.tsx`, `utils/generateIdentity.test.ts`, `components/MermaidBlock.test.ts`, and the eager-entry and built-HTML marker guards in `tests/entry-assets.test.ts`.
 
 ---
 
