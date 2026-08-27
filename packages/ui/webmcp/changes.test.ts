@@ -8,7 +8,7 @@
  * per-path set keeps independent watermarks and activity times.
  */
 import { describe, expect, test } from 'bun:test';
-import { AnnotationChangeTracker, BROWSER_AGENT_SOURCE, ChangeTrackerSet, type TrackedAnnotation } from './changes';
+import { AnnotationChangeTracker, BROWSER_AGENT_SOURCE, ChangeTrackerSet, MAX_TOMBSTONES, type TrackedAnnotation } from './changes';
 
 const human = (id: string, text: string): TrackedAnnotation => ({ id, text, originalText: 'q' });
 const agent = (id: string, text: string): TrackedAnnotation => ({ id, text, originalText: 'q', source: BROWSER_AGENT_SOURCE });
@@ -95,6 +95,28 @@ describe('AnnotationChangeTracker', () => {
     tracker.observe([human('a', '1')]);
     expect(tracker.removedSince(0)).toEqual([]);
     expect(tracker.seqOf('a')).toBe(3);
+  });
+
+  // A create/delete loop of 5,000 left tombstones, ownHashes and ownSeqs at
+  // 5,000 each for the life of the tab: nothing was ever evicted.
+  test('tombstones and the ownership records of forgotten ids are evicted oldest first past MAX_TOMBSTONES', () => {
+    const tracker = new AnnotationChangeTracker();
+    const total = MAX_TOMBSTONES + 500;
+    for (let i = 0; i < total; i++) {
+      const id = `a-${i}`;
+      tracker.claimOwn({ id, text: 'x' });
+      tracker.observe([{ id, text: 'x' }]);
+      tracker.observe([]);
+    }
+    const removed = tracker.removedSince(0);
+    expect(removed.length).toBe(MAX_TOMBSTONES);
+    // The oldest 500 are gone, the newest MAX_TOMBSTONES remain, in order.
+    expect(removed[0].id).toBe('a-500');
+    expect(removed[removed.length - 1].id).toBe(`a-${total - 1}`);
+    expect(tracker.knows('a-0')).toBe(false);
+    expect(tracker.isOwn('a-0')).toBe(false);
+    expect(tracker.knows('a-500')).toBe(true);
+    expect(tracker.isOwn(`a-${total - 1}`)).toBe(true);
   });
 });
 
