@@ -1,10 +1,16 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import mermaid from 'mermaid';
+import type { Mermaid, MermaidConfig } from 'mermaid';
 import type { Block } from '../types';
 import { normalizeMermaidSvgMarkup } from './mermaidSvg';
 
-mermaid.initialize({
+/**
+ * Hoisted verbatim from the former module-scope `mermaid.initialize(...)`.
+ * Nothing in it reads a CSS token or the resolved mode, so applying it on
+ * first diagram instead of at bundle load cannot change its inputs.
+ * `securityLevel: 'strict'` is a deliberate security pin (see MermaidBlock.test.ts).
+ */
+export const MERMAID_CONFIG: MermaidConfig = {
   startOnLoad: false,
   securityLevel: 'strict',
   theme: 'dark',
@@ -27,7 +33,24 @@ mermaid.initialize({
     htmlLabels: true,
     curve: 'basis',
   },
-});
+};
+
+/**
+ * The Mermaid runtime is imported inside the render effect, not statically, so
+ * a host that bundles by route only fetches it when a diagram is on the page.
+ * Initialized exactly once. In Plannotator's single-file builds the import is
+ * inlined and resolves in a microtask; the render was already asynchronous
+ * (the source fence shows until the SVG lands), so nothing visible changes.
+ */
+let mermaidRuntime: Promise<Mermaid> | null = null;
+
+function getMermaid(): Promise<Mermaid> {
+  mermaidRuntime ??= import('mermaid').then(({ default: mermaid }) => {
+    mermaid.initialize(MERMAID_CONFIG);
+    return mermaid;
+  });
+  return mermaidRuntime;
+}
 
 interface ViewBox {
   x: number;
@@ -190,6 +213,7 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
     const renderDiagram = async () => {
       try {
         const id = `mermaid-${block.id}`;
+        const mermaid = await getMermaid();
         const { svg: renderedSvg } = await mermaid.render(id, block.content);
         if (!cancelled) {
           const normalizedSvg = normalizeMermaidSvgMarkup(renderedSvg);
