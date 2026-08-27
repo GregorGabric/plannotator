@@ -1,87 +1,24 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import type { Mermaid, MermaidConfig } from 'mermaid';
+import type { Mermaid } from 'mermaid';
 import type { Block } from '../types';
 import { normalizeMermaidSvgMarkup } from './mermaidSvg';
+import {
+  MERMAID_CONFIG,
+  getMermaidRetryDelayMs,
+  loadMermaidRuntime,
+  __setMermaidRuntimeLoaderForTests,
+} from '../utils/mermaid';
+
+// Re-exported: the config pin test and the lazy-retry test import them from here.
+export { MERMAID_CONFIG, __setMermaidRuntimeLoaderForTests };
 
 /**
- * Hoisted verbatim from the former module-scope `mermaid.initialize(...)`.
- * Nothing in it reads a CSS token or the resolved mode, so applying it on
- * first diagram instead of at bundle load cannot change its inputs.
- * `securityLevel: 'strict'` is a deliberate security pin (see MermaidBlock.test.ts).
+ * The runtime comes from the slot in utils/mermaid: filled eagerly by
+ * Plannotator (utils/mermaid-eager, imported by the editor App), loaded
+ * lazily otherwise. See that module for the retry contract.
  */
-export const MERMAID_CONFIG: MermaidConfig = {
-  startOnLoad: false,
-  securityLevel: 'strict',
-  theme: 'dark',
-  themeVariables: {
-    primaryColor: '#3b82f6',
-    primaryTextColor: '#f8fafc',
-    primaryBorderColor: '#475569',
-    lineColor: '#64748b',
-    secondaryColor: '#1e293b',
-    tertiaryColor: '#0f172a',
-    background: '#1e293b',
-    mainBkg: '#1e293b',
-    nodeBorder: '#475569',
-    clusterBkg: '#1e293b',
-    clusterBorder: '#475569',
-    titleColor: '#f8fafc',
-    edgeLabelBackground: '#1e293b',
-  },
-  flowchart: {
-    htmlLabels: true,
-    curve: 'basis',
-  },
-};
-
-/**
- * The Mermaid runtime is imported inside the render effect, not statically, so
- * a host that bundles by route only fetches it when a diagram is on the page.
- * Initialized exactly once. In Plannotator's single-file builds the import is
- * inlined and resolves in a microtask; the render was already asynchronous
- * (the source fence shows until the SVG lands), so nothing visible changes.
- */
-const loadMermaidRuntime = (): Promise<Mermaid> =>
-  import('mermaid').then(({ default: mermaid }) => {
-    mermaid.initialize(MERMAID_CONFIG);
-    return mermaid;
-  });
-
-let mermaidLoader = loadMermaidRuntime;
-let mermaidRuntime: Promise<Mermaid> | null = null;
-
-/**
- * Delay before the one automatic re-attempt after a failed runtime import.
- * Only chunking hosts can fail here (a single-file build never fetches).
- */
-let runtimeRetryDelayMs = 750;
-
-/**
- * Memoized runtime. A rejected load is dropped from the memo so the next call
- * (the automatic re-attempt below, a later mount, or the Retry button) issues
- * a fresh import() instead of replaying the cached rejection.
- */
-function getMermaid(): Promise<Mermaid> {
-  if (!mermaidRuntime) {
-    const attempt = mermaidLoader().catch((err: unknown) => {
-      if (mermaidRuntime === attempt) mermaidRuntime = null;
-      throw err;
-    });
-    mermaidRuntime = attempt;
-  }
-  return mermaidRuntime;
-}
-
-/** Test hook: stand in for the runtime import and shorten the retry delay. */
-export function __setMermaidRuntimeLoaderForTests(
-  loader: (() => Promise<Mermaid>) | undefined,
-  options?: { retryDelayMs?: number },
-): void {
-  mermaidLoader = loader ?? loadMermaidRuntime;
-  mermaidRuntime = null;
-  runtimeRetryDelayMs = options?.retryDelayMs ?? 750;
-}
+const getMermaid = loadMermaidRuntime;
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -258,7 +195,7 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
           // re-attempt with a fresh import() after a short delay. In a
           // single-file build the first await never rejects, so this branch
           // is unreachable there and the success path is unchanged.
-          await wait(runtimeRetryDelayMs);
+          await wait(getMermaidRetryDelayMs());
           if (cancelled) return;
           mermaid = await getMermaid();
         }

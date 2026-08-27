@@ -80,6 +80,14 @@ describe('review entry assets', () => {
     },
   );
 
+  // Mermaid is eager in the plan editor by policy (the portal entry chunk must
+  // keep it, as on main) and deliberately absent from the review editor, which
+  // never renders a Mermaid block: importing it there would grow that bundle.
+  test('only the plan editor registers the eager Mermaid runtime', () => {
+    expect(read('packages/editor/App.tsx')).toContain("import '@plannotator/ui/utils/mermaid-eager';");
+    expect(read('packages/review-editor/App.tsx')).not.toContain('mermaid-eager');
+  });
+
   // The other half of the optimization: the renderers must stay OFF the
   // static import graph of the components, otherwise a host's bundler puts
   // them back into every document read and the slots become decoration.
@@ -90,7 +98,8 @@ describe('review entry assets', () => {
     expect(read('packages/ui/utils/math.ts')).not.toMatch(staticImport('katex'));
     expect(read('packages/ui/utils/math.ts')).toContain("import('katex')");
     expect(read('packages/ui/components/MermaidBlock.tsx')).not.toMatch(staticImport('mermaid'));
-    expect(read('packages/ui/components/MermaidBlock.tsx')).toContain("import('mermaid')");
+    expect(read('packages/ui/utils/mermaid.ts')).not.toMatch(staticImport('mermaid'));
+    expect(read('packages/ui/utils/mermaid.ts')).toContain("import('mermaid')");
     expect(read('packages/ui/components/GraphvizBlock.tsx')).not.toMatch(staticImport('@viz-js/viz'));
     expect(read('packages/ui/components/GraphvizBlock.tsx')).toContain("import('@viz-js/viz')");
     expect(read('packages/ui/utils/generateIdentity.ts')).not.toMatch(staticImport('unique-username-generator'));
@@ -101,14 +110,17 @@ describe('review entry assets', () => {
   // Two different kinds of marker, deliberately:
   //
   // - Registration markers, which only reach a bundle when the eager module is
-  //   evaluated in it: the source tag `math-eager` passes to setMathRenderer,
-  //   and the dictionary's exported function name (the dictionary is imported
-  //   ONLY by identity-tater). These are the guards for a dropped or
-  //   tree-shaken side-effect import (a future `"sideEffects": false` would
-  //   let Vite discard `import '.../math-eager'`, the slot would stay empty and
-  //   every runtime would paint TeX for a frame). Proven by removing the
-  //   import and rebuilding: the math-eager marker count drops to zero while
-  //   every KaTeX class name stays put.
+  //   evaluated in it: the source tags `math-eager` and `mermaid-eager` pass
+  //   to their slots, and the dictionary's exported function name (the
+  //   dictionary is imported ONLY by identity-tater). These are the guards for
+  //   a dropped or tree-shaken side-effect import (a future
+  //   `"sideEffects": false` would let Vite discard `import '.../math-eager'`,
+  //   the slot would stay empty and every runtime would paint TeX for a frame;
+  //   a dropped mermaid-eager would move Mermaid into a lazy portal chunk that
+  //   can fail separately). Proven by removing each import and rebuilding: the
+  //   registration marker count drops to zero while the presence markers stay.
+  //   The review bundle must NOT carry the Mermaid marker: it never renders a
+  //   Mermaid block and main's review bundle has no Mermaid in it.
   // - Presence markers (a KaTeX class name, a Mermaid diagram id, an
   //   Emscripten symbol from Graphviz, the bridge global), which only say the
   //   runtime is still inlined by inlineDynamicImports. KaTeX is inlined
@@ -118,16 +130,17 @@ describe('review entry assets', () => {
   // dist/ is gitignored, so this is skipped on an unbuilt checkout; the CI job
   // that builds the bundles runs it right after.
   const REGISTRATION_MARKERS = ['plannotator-math-eager', 'uniqueUsernameGenerator'];
-  const markerExpectations: Array<[bundle: string, markers: string[]]> = [
-    ['apps/hook/dist/index.html', [...REGISTRATION_MARKERS, 'katex-display', 'flowchart-v2', 'viz_set_y_invert', '__plannotatorLiveConfig']],
-    ['apps/review/dist/index.html', [...REGISTRATION_MARKERS, 'katex-display', '__plannotatorLiveConfig']],
+  const markerExpectations: Array<[bundle: string, present: string[], absent: string[]]> = [
+    ['apps/hook/dist/index.html', [...REGISTRATION_MARKERS, 'plannotator-mermaid-eager', 'katex-display', 'flowchart-v2', 'viz_set_y_invert', '__plannotatorLiveConfig'], []],
+    ['apps/review/dist/index.html', [...REGISTRATION_MARKERS, 'katex-display', '__plannotatorLiveConfig'], ['plannotator-mermaid-eager', 'flowchart-v2']],
   ];
-  for (const [path, markers] of markerExpectations) {
+  for (const [path, present, absent] of markerExpectations) {
     test.skipIf(!existsSync(resolve(root, path)))(`${path} carries the eager registration and renderer markers`, () => {
       const html = readFileSync(resolve(root, path), 'utf8');
       // Asserted per marker on a boolean so a failure never prints the 20MB bundle.
-      const missing = markers.filter((marker) => !html.includes(marker));
-      expect({ path, missing }).toEqual({ path, missing: [] });
+      const missing = present.filter((marker) => !html.includes(marker));
+      const unexpected = absent.filter((marker) => html.includes(marker));
+      expect({ path, missing, unexpected }).toEqual({ path, missing: [], unexpected: [] });
     });
   }
 
