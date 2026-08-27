@@ -1067,18 +1067,21 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
                 role="alert"
                 data-print-hide
                 data-bridge-error={bridgeError.kind}
-                className="absolute inset-x-0 top-0 z-20 flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive backdrop-blur-sm"
+                className="absolute inset-x-0 top-0 z-20 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive backdrop-blur-sm"
+                style={{ display: "flex", alignItems: "flex-start", gap: 8 }}
               >
-                <span className="flex-1">{formatBridgeUnavailableMessage(bridgeError)}</span>
+                <span style={{ flex: 1 }}>{formatBridgeUnavailableMessage(bridgeError)}</span>
                 {/* Only the mismatch state is dismissible: the older bridge
                     still works there. A timeout leaves a dead surface, so
-                    that banner stays. */}
+                    that banner stays. Inline styles on purpose: hosts that
+                    build the guides.show viewer scan this file for utility
+                    classes, and this banner must not grow that stylesheet. */}
                 {bridgeError.kind === "version-mismatch" && (
                   <button
                     type="button"
                     data-bridge-error-dismiss
                     aria-label="Dismiss"
-                    className="shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-destructive/15 cursor-pointer"
+                    style={{ flexShrink: 0, borderRadius: 4, padding: "2px 6px", fontWeight: 500, cursor: "pointer", background: "transparent", border: "1px solid currentColor", color: "inherit" }}
                     onClick={() => setBridgeErrorDismissed(true)}
                   >
                     Dismiss
