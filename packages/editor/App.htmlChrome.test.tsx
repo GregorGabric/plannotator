@@ -474,6 +474,84 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     expect(frame?.getAttribute("srcdoc")).toContain("<ins>, edited</ins>");
   });
 
+  test("an Unanchored chip from one refresh clears when the next refresh's restore report is empty", async () => {
+    // The bridge answers the parent's post-restore report request with the
+    // complete set, empty included (pinned in htmlPinpointProtocol.test);
+    // the App replaces its chip set with each report, so a chip from
+    // refresh 1 must not survive a refresh 2 on which everything anchors.
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    const draftedFetch: typeof fetch = async (input) => {
+      const rawUrl = input instanceof Request ? input.url : String(input);
+      const url = new URL(rawUrl, "http://localhost");
+      if (url.pathname === "/api/draft" && (!(input instanceof Request) || input.method === "GET")) {
+        return Response.json({
+          annotations: [{
+            id: "X",
+            blockId: "",
+            startOffset: 0,
+            endOffset: 0,
+            type: "COMMENT",
+            text: "pinned note",
+            originalText: "Body copy.",
+            createdA: 1,
+            htmlAnchor: { selector: "p", tagName: "p", text: "Body copy." },
+          }],
+          codeAnnotations: [],
+          globalAttachments: [],
+        });
+      }
+      return versionedFetch(input);
+    };
+    await mountHtmlAnnotate(draftedFetch);
+    await settle();
+    // The draft arrives behind the "Draft Recovered" dialog; restore it.
+    for (let attempt = 0; attempt < 20 && !findButtonByText("Restore"); attempt += 1) {
+      await settle();
+    }
+    const restore = findButtonByText("Restore");
+    if (!restore) throw new Error("draft restore dialog missing");
+    await act(async () => restore.click());
+    await settle();
+    // The chip lives on the panel card; the HTML surface opens with the
+    // panel collapsed, so open it.
+    const showPanel = document.querySelector<HTMLButtonElement>('button[title="Show annotations"]');
+    if (showPanel) await act(async () => showPanel.click());
+    await settle();
+    expect(document.querySelector('[data-annotation-id="X"]')).not.toBeNull();
+    const chip = () => document.querySelector('[data-annotation-unanchored]');
+    const frame = () => document.querySelector<HTMLIFrameElement>("iframe[srcdoc]");
+    const report = async (ids: string[]) => {
+      const iframe = frame();
+      if (!iframe?.contentWindow) throw new Error("HTML iframe missing");
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          source: iframe.contentWindow,
+          data: { type: "plannotator-bridge-unanchored", ids },
+        }));
+      });
+    };
+    const refresh = async () => {
+      const button = refreshButton();
+      if (!button) throw new Error("refresh button missing");
+      await act(async () => button.click());
+      for (let attempt = 0; attempt < 20 && refreshButton()?.getAttribute("aria-disabled") !== "false"; attempt += 1) {
+        await settle();
+      }
+    };
+    expect(chip()).toBeNull();
+
+    // Refresh 1: the remounted viewer's bridge reports X unanchored.
+    await refresh();
+    await report(["X"]);
+    expect(chip()).not.toBeNull();
+
+    // Refresh 2: the page anchors everything; the report is the empty set.
+    await refresh();
+    await report([]);
+    expect(chip()).toBeNull();
+  });
+
   test("the pen toggle starts ARMED (aria-pressed) on a static HTML session and click flips it to Interact", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
