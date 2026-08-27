@@ -151,6 +151,8 @@ export interface BuildPersistedHtmlAnchorOptions {
 
 export interface PersistedHtmlAnchorResult {
   anchor: PersistedHtmlAnchor;
+  /** Every target not persisted: `capDroppedTargets + sizeDroppedTargets`. */
+  droppedTargets: number;
   /** Targets dropped by `maxTargets` (reported against the product cap). */
   capDroppedTargets: number;
   /** Targets shed to keep the serialized anchor under `maxBytes` (a different reason, said separately). */
@@ -202,17 +204,18 @@ export function buildPersistedHtmlAnchor(
   // enforced on what is written, not only on what is later read back.
   const htmlAnchor = parseHtmlElementAnchor(source.htmlAnchor) ?? undefined;
   const drafted = source.htmlAdditionalTargets ?? [];
-  // Key order is the viewer's own target order (label, text, anchor), so a
-  // target the composer emitted round-trips byte-identical.
+  // Kept-target key order is text, label, anchor: the order the reference
+  // host implementation persisted, so a stored anchor's serialization (and
+  // any fingerprint over it) does not change when a host adopts this helper.
   let kept = drafted.slice(0, Math.max(0, maxTargets)).map((target) => {
-    const targetAnchor = parseHtmlElementAnchor(target.anchor);
     const entry: HtmlAnnotationTarget = {
-      ...(target.label !== undefined
-        ? { label: truncateSurrogateSafe(target.label, MAX_HTML_TARGET_LABEL_LENGTH) }
-        : {}),
       text: truncateSurrogateSafe(target.text, MAX_HTML_TARGET_TEXT_LENGTH),
-      ...(targetAnchor !== null ? { anchor: targetAnchor } : {}),
     };
+    if (target.label !== undefined) {
+      entry.label = truncateSurrogateSafe(target.label, MAX_HTML_TARGET_LABEL_LENGTH);
+    }
+    const targetAnchor = parseHtmlElementAnchor(target.anchor);
+    if (targetAnchor !== null) entry.anchor = targetAnchor;
     return entry;
   });
   const capDroppedTargets = drafted.length - kept.length;
@@ -253,7 +256,12 @@ export function buildPersistedHtmlAnchor(
   truncateQuoteWhileOver(0);
   const sizeDroppedTargets =
     drafted.length - capDroppedTargets - (anchor.htmlAdditionalTargets?.length ?? 0);
-  return { anchor, capDroppedTargets, sizeDroppedTargets };
+  return {
+    anchor,
+    droppedTargets: capDroppedTargets + sizeDroppedTargets,
+    capDroppedTargets,
+    sizeDroppedTargets,
+  };
 }
 
 /** One stored host row, in the host's own thread order. */
@@ -275,6 +283,23 @@ export interface HostThread {
 export interface ProjectHostThreadsOptions {
   /** Keep only rows whose `state` is `"open"` (or absent). Default false: every row projects. */
   openOnly?: boolean;
+  /**
+   * How a row with nothing restorable (no quoted text, no element anchor)
+   * projects. `'global'` (default, Plannotator's model): a document-level
+   * `GLOBAL_COMMENT`, rendered by the panel's global card grammar and never
+   * reported as unanchored. `'unanchored'`: a page `COMMENT` with an empty
+   * quote and no anchor, which the viewer's unanchored report then names
+   * (the panel renders it with an empty quote line), for hosts that treat
+   * such rows as comments that lost their place.
+   */
+  documentLevel?: 'global' | 'unanchored';
+  /**
+   * Read-side cap on additional targets per row. Default undefined: the
+   * viewer's own 16 applies (rows from arbitrary API clients can carry
+   * more; the viewer slices before the bridge anyway). A host with a
+   * smaller persisted cap passes it so the projection matches its store.
+   */
+  maxTargets?: number;
 }
 
 /**
@@ -307,16 +332,17 @@ export interface ProjectedHostAnnotation {
  * lists them and bubble N is card N.
  *
  * - A row with nothing restorable at all (no quoted text and no element
- *   anchor, e.g. an agent's document-level note) projects as
- *   `GLOBAL_COMMENT`: it IS a document-level comment, the panel's global
- *   card grammar renders it without the empty quote line, and the viewer
- *   skips it when restoring (nothing to find). An element anchor is a page
- *   location even without quoted text (a pinpoint on an image or chart), so
- *   such rows stay `COMMENT`; projecting them global would drop their marker
- *   from the overlay and the numbering.
+ *   anchor, e.g. an agent's document-level note) projects by
+ *   `documentLevel`: `'global'` (default) makes it a `GLOBAL_COMMENT`, a
+ *   document-level comment the panel renders without a quote line and the
+ *   viewer never reports as unanchored; `'unanchored'` keeps it a page
+ *   `COMMENT` with an empty quote, which the viewer's unanchored report
+ *   names. An element anchor is a page location even without quoted text
+ *   (a pinpoint on an image or chart), so such rows stay `COMMENT` in both
+ *   modes; projecting them global would drop their marker and number.
  * - Anchors are validated fail-closed on the way through (a malformed stored
  *   anchor degrades to text-only restore, never a crash); additional targets
- *   validate per entry and cap at the viewer's 16.
+ *   validate per entry and cap at `maxTargets` (default: the viewer's 16).
  * - `openOnly` keeps rows whose `state` is `"open"` or absent, so resolved
  *   rows unpaint and give their number up.
  *
@@ -328,10 +354,12 @@ export function projectHostThreads(
   options: ProjectHostThreadsOptions = {},
 ): ProjectedHostAnnotation[] {
   const out: ProjectedHostAnnotation[] = [];
+  const documentLevel = options.documentLevel ?? "global";
+  const maxTargets = options.maxTargets ?? MAX_HTML_ADDITIONAL_TARGETS;
   for (const thread of threads) {
     if (options.openOnly && thread.state !== undefined && thread.state !== "open") continue;
     const htmlAnchor = parseHtmlElementAnchor(thread.htmlAnchor);
-    const htmlAdditionalTargets = parseHtmlAdditionalTargets(thread.htmlAdditionalTargets);
+    const htmlAdditionalTargets = parseHtmlAdditionalTargets(thread.htmlAdditionalTargets, maxTargets);
     const originalText = typeof thread.originalText === "string" ? thread.originalText : "";
     const anchorless = originalText === "" && htmlAnchor === null;
     out.push({
@@ -339,7 +367,7 @@ export function projectHostThreads(
       blockId: "",
       startOffset: 0,
       endOffset: 0,
-      type: anchorless ? "GLOBAL_COMMENT" : "COMMENT",
+      type: anchorless && documentLevel === "global" ? "GLOBAL_COMMENT" : "COMMENT",
       ...(thread.text !== undefined ? { text: thread.text } : {}),
       originalText,
       createdA: typeof thread.createdA === "number" && Number.isFinite(thread.createdA) ? thread.createdA : 0,

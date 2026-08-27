@@ -24,18 +24,27 @@ const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)
 
 describe("buildPersistedHtmlAnchor", () => {
   test("an anchor already within every bound comes back byte-identical", () => {
+    // Kept-target key order is text, label, anchor (the reference host's
+    // wire order), so a stored anchor's serialization is stable on adoption.
     const input = {
       originalText: "Quoted text with an emoji \u{1F600}",
       htmlAnchor: { selector: "#hero > p:nth-of-type(2)", tagName: "p", text: "Quoted", point: { x: 0.25, y: 0.75 } },
       htmlAdditionalTargets: [
-        { label: "Button", text: "Save", anchor: { selector: "button[data-testid=\"save\"]", tagName: "button", text: "Save" } },
+        { text: "Save", label: "Button", anchor: { selector: "button[data-testid=\"save\"]", tagName: "button", text: "Save" } },
         { text: "[element: img]" },
       ],
     };
     const result = buildPersistedHtmlAnchor(input);
     expect(JSON.stringify(result.anchor)).toBe(JSON.stringify(input));
+    expect(result.droppedTargets).toBe(0);
     expect(result.capDroppedTargets).toBe(0);
     expect(result.sizeDroppedTargets).toBe(0);
+    // A composer-ordered target (label first) is re-keyed to the wire order.
+    const reordered = buildPersistedHtmlAnchor({
+      originalText: "q",
+      htmlAdditionalTargets: [{ label: "Button", text: "Go", anchor: { selector: "#go", tagName: "button" } }],
+    });
+    expect(Object.keys(reordered.anchor.htmlAdditionalTargets![0]!)).toEqual(["text", "label", "anchor"]);
   });
 
   test("a drag capture without an element anchor writes exactly the legacy shape", () => {
@@ -122,6 +131,7 @@ describe("buildPersistedHtmlAnchor", () => {
     expect(result.capDroppedTargets).toBe(5);
     expect(result.sizeDroppedTargets).toBeGreaterThan(0);
     expect((result.anchor.htmlAdditionalTargets?.length ?? 0) + result.sizeDroppedTargets).toBe(7);
+    expect(result.droppedTargets).toBe(result.capDroppedTargets + result.sizeDroppedTargets);
     expect(bytes(result.anchor)).toBeLessThanOrEqual(3000);
   });
 
@@ -153,13 +163,35 @@ describe("projectHostThreads", () => {
     expect(projected.map((a) => a.id)).toEqual(["t1", "t3", "t4", "t5", "t6"]);
   });
 
-  test("an element anchor without quoted text stays a page COMMENT; nothing restorable projects GLOBAL", () => {
+  test("an element anchor without quoted text stays a page COMMENT; nothing restorable projects GLOBAL by default", () => {
     const byId = new Map(projectHostThreads(rows).map((a) => [a.id, a]));
     expect(byId.get("t3")?.type).toBe("COMMENT");
     expect(byId.get("t3")?.htmlAnchor).toEqual({ selector: "img#chart", tagName: "img", text: "" });
     expect(byId.get("t4")?.type).toBe("GLOBAL_COMMENT");
     expect(byId.get("t4")?.htmlAnchor).toBeUndefined();
     expect(byId.get("t1")?.type).toBe("COMMENT");
+  });
+
+  test("documentLevel: 'unanchored' keeps nothing-restorable rows as textless page COMMENTs", () => {
+    // The host that treats a document-level note as a comment that lost its
+    // place opts in; the row then has an empty quote and no anchor, which is
+    // exactly what the viewer's unanchored union reports.
+    const byId = new Map(projectHostThreads(rows, { documentLevel: "unanchored" }).map((a) => [a.id, a]));
+    expect(byId.get("t4")).toMatchObject({ type: "COMMENT", originalText: "" });
+    expect(byId.get("t4")?.htmlAnchor).toBeUndefined();
+    // Anchored and quoted rows are untouched by the mode.
+    expect(byId.get("t3")?.type).toBe("COMMENT");
+    expect(byId.get("t1")?.type).toBe("COMMENT");
+    // The default and the explicit 'global' agree.
+    expect(projectHostThreads(rows, { documentLevel: "global" })).toEqual(projectHostThreads(rows));
+  });
+
+  test("maxTargets caps additional targets on read; absent applies the viewer's 16", () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({ text: `T${i}` }));
+    const row: HostThread = { id: "m", originalText: "q", htmlAdditionalTargets: many };
+    expect(projectHostThreads([row])[0]?.htmlAdditionalTargets?.length).toBe(16);
+    expect(projectHostThreads([row], { maxTargets: 7 })[0]?.htmlAdditionalTargets?.map((t) => t.text))
+      .toEqual(many.slice(0, 7).map((t) => t.text));
   });
 
   test("anchors and targets validate fail-closed; presentational fields ride through", () => {
