@@ -680,6 +680,15 @@ export const BRIDGE_SCRIPT = `(function() {
       focusAnnotationRecord(typeof e.data.id === 'string' ? e.data.id : null, false);
     }
 
+    else if (type === PREFIX + 'report-unanchored') {
+      // The parent posted its restore batch and wants the complete set once
+      // the next complete overlay pass has run, even if the set is unchanged
+      // (empty included). Messages are processed in order, so the pass this
+      // schedules sees every find-and-mark posted before this request.
+      unanchoredReportRequested = true;
+      schedulePinpointReconcile();
+    }
+
     else if (type === PREFIX + 'set-input-method') {
       // Live mode clamps the input method to pinpoint (what a plain click
       // does); text drag-selection commenting stays live regardless.
@@ -1505,6 +1514,10 @@ export const BRIDGE_SCRIPT = `(function() {
   // whose records are removed and therefore invisible to the per-pass scan.
   var lastUnanchoredKey = '[]';
   var restoreFailedIds = new Set();
+  // Set by report-unanchored: the parent asks for the complete set after
+  // its restore batch, so the next COMPLETE pass emits even when the set
+  // did not change (an all-restored document reports its empty set once).
+  var unanchoredReportRequested = false;
   function emitUnanchored(deadRecordIds) {
     var seen = new Set();
     var combined = [];
@@ -1523,7 +1536,8 @@ export const BRIDGE_SCRIPT = `(function() {
     combined.sort();
     if (combined.length > 512) combined = combined.slice(0, 512);
     var key = JSON.stringify(combined);
-    if (key === lastUnanchoredKey) return;
+    if (key === lastUnanchoredKey && !unanchoredReportRequested) return;
+    unanchoredReportRequested = false;
     lastUnanchoredKey = key;
     // postToParent, not a raw '*' post: live sessions stamp the session
     // token and post only to the listed editor origins, and the parent

@@ -389,6 +389,13 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     const bridgeUnanchoredRef = useRef<readonly string[]>([]);
     const lastDeliveredUnanchoredRef = useRef("[]");
     const createdIdsRef = useRef<ReadonlySet<string>>(new Set());
+    // The bridge's first report for the current document is the one that
+    // follows the restore batch (the parent asks for it with
+    // report-unanchored, and the bridge answers after its next complete
+    // pass, empty set included). Nothing is delivered before it: a host
+    // that acknowledges "the first report after a reload" must get the
+    // post-restore set, never a prop-side set computed at mount.
+    const bridgeReportedRef = useRef(false);
     const deliverUnanchored = useCallback((ids: string[], onlyIfChanged: boolean) => {
       const key = JSON.stringify(ids);
       if (onlyIfChanged && key === lastDeliveredUnanchoredRef.current) return;
@@ -397,6 +404,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     }, []);
     const handleBridgeUnanchored = useCallback((ids: string[]) => {
       bridgeUnanchoredRef.current = ids;
+      bridgeReportedRef.current = true;
       deliverUnanchored(
         mergeUnanchoredIds({
           bridgeIds: ids,
@@ -426,6 +434,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     createdIdsRef.current = hook.createdAnnotationIds;
 
     useEffect(() => {
+      if (!bridgeReportedRef.current) return;
       deliverUnanchored(
         mergeUnanchoredIds({
           bridgeIds: bridgeUnanchoredRef.current,
@@ -610,6 +619,12 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       if (restorable.length > 0) {
         hook.applyAnnotations(restorable);
       }
+      // A fresh document: the bridge starts from an empty set and would stay
+      // silent when everything restores. Ask for one complete report after
+      // this restore batch (posted after it, so the answering pass sees it),
+      // which becomes this document's first delivery, empty set included.
+      bridgeReportedRef.current = false;
+      postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Live page navigation with a ready iframe: explicitly clear the previous
@@ -632,6 +647,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         type: `${PREFIX}sync-annotations`,
         annotations: buildSyncNumbering(annotations),
       });
+      // A new page is a new restore batch: report its complete set once.
+      postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [currentPageUrl, iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Placed-marker numbering is parent-authoritative and matches the

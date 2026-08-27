@@ -902,6 +902,19 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     await typeComment('Host capped');
     await save();
     expect(added[0]!.htmlAdditionalTargets!.length).toBe(3);
+
+    // The composer's one-click "Looks good" path submits under the same cap.
+    await post(primarySelection({ targetKey: 'ht-2' }));
+    for (let i = 0; i < 8; i++) {
+      await post(addedTarget(`host-cap-b-${i}`, `Target ${i}`));
+    }
+    const looksGood = Array.from(
+      document.querySelectorAll<HTMLButtonElement>('[data-comment-popover] button'),
+    ).find((b) => b.title.startsWith('Add "Looks good"'));
+    if (!looksGood) throw new Error('Looks good button missing');
+    await act(async () => { looksGood.click(); });
+    expect(added[1]!.isQuickLabel).toBe(true);
+    expect(added[1]!.htmlAdditionalTargets!.length).toBe(3);
   });
 
   test('without maxAdditionalTargets the arm message and the 16 cap are unchanged', async () => {
@@ -1249,32 +1262,92 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
     await render(initial);
     const iframe = host.querySelector<HTMLIFrameElement>('iframe');
     if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+    const postedToIframe: Array<Record<string, unknown>> = [];
+    const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+    (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+      ((data: unknown, ...rest: unknown[]) => {
+        if (data && typeof data === 'object') postedToIframe.push(data as Record<string, unknown>);
+        return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+      }) as typeof iframe.contentWindow.postMessage;
     const post = async (data: Record<string, unknown>) => {
       await act(async () => {
         window.dispatchEvent(new MessageEvent('message', { source: iframe.contentWindow, data }));
       });
     };
-    return { render, post, added };
+    const ready = () => post({ type: 'plannotator-bridge-ready' });
+    return { render, post, ready, added, postedToIframe };
   }
 
-  test('textless page rows are reported without any bridge message; document-level comments are not', async () => {
+  test('on ready the viewer asks the bridge for one complete report AFTER its restore batch', async () => {
+    // The bridge only posts when its set changes from empty, so a fresh
+    // document where everything restores would stay silent. The parent asks
+    // for the post-restore set explicitly, after the find-and-marks, so the
+    // answering pass sees every restore.
+    const received: string[][] = [];
+    const { ready, postedToIframe } = await mountUnion([pageRow('a-1'), pageRow('a-2')], received);
+    await ready();
+    const types = postedToIframe.map((m) => m.type);
+    const restores = types.filter((t) => t === 'plannotator-bridge-find-and-mark');
+    expect(restores.length).toBe(2);
+    expect(types.lastIndexOf('plannotator-bridge-find-and-mark')).toBeLessThan(
+      types.indexOf('plannotator-bridge-report-unanchored'),
+    );
+    // Nothing is delivered until the bridge answers.
+    expect(received).toEqual([]);
+  });
+
+  test('textless page rows join the FIRST bridge report; document-level comments do not; nothing is delivered before it', async () => {
     // A page row with no quoted text and no element anchor is never posted
     // to the bridge (nothing to find it by), so the bridge can never name
-    // it; the viewer completes the report itself. A GLOBAL_COMMENT has no
-    // page location by design and must NOT be flagged.
+    // it; the viewer completes the bridge's report with it. Delivery waits
+    // for the bridge's post-restore answer: a host acknowledging "the first
+    // report after a reload" must get the restore set, not a set computed
+    // at mount. A GLOBAL_COMMENT has no page location and is never flagged.
     const received: string[][] = [];
-    const { post } = await mountUnion([
+    const { post, ready } = await mountUnion([
       pageRow('anchored-1'),
       pageRow('textless-1', { originalText: '' }),
       pageRow('global-1', { originalText: '', type: AnnotationType.GLOBAL_COMMENT }),
     ], received);
+    await ready();
+    expect(received).toEqual([]);
+    await post({ type: MSG, ids: [] });
     expect(received).toEqual([['textless-1']]);
 
-    // The bridge's own report unions with it, pass-through timing kept.
+    // Later bridge reports union with it, pass-through timing kept.
     await post({ type: MSG, ids: ['anchored-1'] });
     expect(received.at(-1)).toEqual(['anchored-1', 'textless-1']);
     await post({ type: MSG, ids: [] });
     expect(received.at(-1)).toEqual(['textless-1']);
+  });
+
+  test('one textless row plus one real orphan: the first delivered report carries the orphan', async () => {
+    // The refresh acknowledgement consumes the first report per reload, so
+    // that report must be the post-restore one, with the orphan in it.
+    const received: string[][] = [];
+    const { post, ready } = await mountUnion([
+      pageRow('textless-1', { originalText: '' }),
+      pageRow('orphan-1'),
+    ], received);
+    await ready();
+    await post({ type: MSG, ids: ['orphan-1'] });
+    expect(received).toEqual([['orphan-1', 'textless-1']]);
+  });
+
+  test('re-anchoring: a document whose restore succeeds reports the empty set once, clearing a prior orphan', async () => {
+    // Delete, refresh: the bridge names the orphan. Restore, refresh: a new
+    // document restores everything; the forced report is the empty set, and
+    // the host clears its chip from it.
+    const received: string[][] = [];
+    const { post, ready } = await mountUnion([pageRow('a-1')], received);
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1']]);
+    // A new document (srcdoc reload): the bridge starts empty and answers
+    // the parent's request with its complete, empty set.
+    await ready();
+    await post({ type: MSG, ids: [] });
+    expect(received).toEqual([['a-1'], []]);
   });
 
   test('a locally minted id the host swapped out of annotations never reaches the report', async () => {
@@ -1309,6 +1382,7 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
 
     // Host swapped: its list carries the server row only.
     await render([pageRow('srv-1')]);
+    await post({ type: 'plannotator-bridge-ready' });
     await post({ type: MSG, ids: [localId, 'srv-1'] });
     expect(received.at(-1)).toEqual(['srv-1']);
 

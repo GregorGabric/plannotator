@@ -1980,6 +1980,56 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.replaceChildren();
   });
 
+  test("report-unanchored answers with the complete set once, empty included, after the restore batch", async () => {
+    // A fresh document whose restores all succeed never changes the set
+    // from its initial empty state, so change-only emission stays silent
+    // and a host could never learn that a previous orphan re-anchored. The
+    // parent's explicit request forces one emission after the next complete
+    // pass; ordinary change-only behavior resumes after it.
+    const reports: string[][] = [];
+    const listener = (e: MessageEvent) => {
+      const d = bridgeMessageData(e);
+      if (d && d.type === "plannotator-bridge-unanchored") reports.push(d.ids as string[]);
+    };
+    window.addEventListener("message", listener);
+    try {
+      document.body.innerHTML = "<p>Report target copy</p>";
+      postBridge({ type: "plannotator-bridge-clear-marks" });
+      await flushOverlay();
+      const baseline = reports.length;
+      // Everything restores: change-only would emit nothing.
+      postBridge({
+        type: "plannotator-bridge-find-and-mark",
+        id: "report-live",
+        originalText: "Report target copy",
+        annotationType: "comment",
+      });
+      postBridge({ type: "plannotator-bridge-report-unanchored" });
+      await flushOverlay();
+      expect(reports.length).toBe(baseline + 1);
+      expect(reports.at(-1)).toEqual([]);
+      // The request is consumed: an idle pass emits nothing more.
+      postBridge({ type: "plannotator-bridge-sync-annotations", annotations: [] });
+      await flushOverlay();
+      expect(reports.length).toBe(baseline + 1);
+      // With a failure in the batch the forced report carries it, once.
+      postBridge({
+        type: "plannotator-bridge-find-and-mark",
+        id: "report-ghost",
+        originalText: "Text this page never had",
+        annotationType: "comment",
+      });
+      postBridge({ type: "plannotator-bridge-report-unanchored" });
+      await flushOverlay();
+      expect(reports.at(-1)).toEqual(["report-ghost"]);
+      expect(reports.length).toBe(baseline + 2);
+    } finally {
+      window.removeEventListener("message", listener);
+      postBridge({ type: "plannotator-bridge-clear-marks" });
+      document.body.replaceChildren();
+    }
+  });
+
   test("scroll-to honors an explicit behavior and stays smooth without one", async () => {
     // Reduced motion is not observable across the iframe boundary, so the
     // parent passes it as behavior: 'auto'. Absent, the scroll must stay
