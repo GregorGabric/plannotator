@@ -1243,11 +1243,11 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
     const root = createRoot(host);
     mountedRoots.push(root);
     const added: Annotation[] = [];
-    const render = async (annotations: Annotation[]) => {
+    const render = async (annotations: Annotation[], rawHtml = '<html><body><p>Page</p></body></html>') => {
       await act(async () => {
         root.render(
           <HtmlViewer
-            rawHtml="<html><body><p>Page</p></body></html>"
+            rawHtml={rawHtml}
             annotations={annotations}
             onAddAnnotation={(ann) => added.push(ann)}
             onSelectAnnotation={() => {}}
@@ -1348,6 +1348,31 @@ describe.if(hasDom)('unanchored report (trust boundary + delivery)', () => {
     await ready();
     await post({ type: MSG, ids: [] });
     expect(received).toEqual([['a-1'], []]);
+  });
+
+  test('an in-place rawHtml swap drops old-document reports until the new ready, then delivers afresh', async () => {
+    // One instance, new srcdoc: the old document can still emit through the
+    // same contentWindow before the new one is ready. Those reports belong
+    // to a document that no longer exists and must not reach the host; the
+    // new document's first answer is delivered even when it equals the last
+    // set the old document delivered.
+    const received: string[][] = [];
+    const { render, post, ready } = await mountUnion([pageRow('a-1')], received);
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1']]);
+
+    await render([pageRow('a-1')], '<html><body><p>Page v2</p></body></html>');
+    // Stale emission from the old document, before the new ready.
+    await post({ type: MSG, ids: [] });
+    expect(received).toEqual([['a-1']]);
+    // A prop-side change before the new ready delivers nothing either.
+    await render([pageRow('a-1'), pageRow('textless-1', { originalText: '' })], '<html><body><p>Page v2</p></body></html>');
+    expect(received).toEqual([['a-1']]);
+
+    await ready();
+    await post({ type: MSG, ids: ['a-1'] });
+    expect(received).toEqual([['a-1'], ['a-1', 'textless-1']]);
   });
 
   test('a locally minted id the host swapped out of annotations never reaches the report', async () => {

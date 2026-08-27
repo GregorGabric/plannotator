@@ -239,6 +239,83 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     ]);
   });
 
+  test('a page change delivers no unanchored set until that page\'s forced answer arrives', async () => {
+    // Between the page change and the bridge's answer to the parent's
+    // report request, a prop-side change must not deliver a union computed
+    // against the previous page's bridge report.
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const row = (id: string, overrides: Partial<Annotation> = {}): Annotation => ({
+      id,
+      blockId: '',
+      startOffset: 0,
+      endOffset: 0,
+      type: 'COMMENT' as Annotation['type'],
+      text: 'c',
+      originalText: 'o',
+      createdA: 1,
+      ...overrides,
+    } as Annotation);
+    const received: string[][] = [];
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    mountedRoots.push(root);
+    const render = async (currentPageUrl: string, annotations: Annotation[]) => {
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml=""
+            src="about:blank"
+            liveSession={{ origin: LIVE_ORIGIN, token: LIVE_TOKEN }}
+            currentPageUrl={currentPageUrl}
+            annotations={annotations}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="selection"
+            inputMethod="pinpoint"
+            onUnanchoredChange={(ids) => received.push(ids)}
+            fullViewport
+          />,
+        );
+      });
+    };
+    await render('/', [row('home-1', { pageUrl: '/' })]);
+    const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+    if (!iframe?.contentWindow) throw new Error('live iframe missing');
+    const posted: Array<Record<string, unknown>> = [];
+    const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+    (iframe.contentWindow as unknown as { postMessage: (data: unknown, origin?: unknown) => void }).postMessage =
+      ((data: unknown, targetOrigin?: unknown, ...rest: unknown[]) => {
+        if (data && typeof data === 'object') posted.push(data as Record<string, unknown>);
+        return (realPost as (...args: unknown[]) => unknown)(data, targetOrigin, ...rest);
+      }) as typeof iframe.contentWindow.postMessage;
+    const post = async (data: Record<string, unknown>) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent('message', {
+          source: iframe.contentWindow,
+          origin: LIVE_ORIGIN,
+          data: { ...data, token: LIVE_TOKEN },
+        }));
+      });
+    };
+    await post({ type: 'plannotator-bridge-ready', pageUrl: '/' });
+    await post({ type: 'plannotator-bridge-unanchored', ids: ['home-1'] });
+    expect(received).toEqual([['home-1']]);
+
+    // Navigate: the parent clears marks, re-applies, and asks for a report.
+    const before = posted.length;
+    await render('/about', [row('home-1', { pageUrl: '/' })]);
+    expect(posted.slice(before).map((m) => m.type)).toContain('plannotator-bridge-report-unanchored');
+    // A prop-side change before the answer delivers nothing.
+    await render('/about', [row('home-1', { pageUrl: '/' }), row('textless-1', { originalText: '', pageUrl: '/about' })]);
+    expect(received).toEqual([['home-1']]);
+    // The page's answer is delivered, completed with the textless row.
+    await post({ type: 'plannotator-bridge-unanchored', ids: [] });
+    expect(received).toEqual([['home-1'], ['textless-1']]);
+  });
+
   test('the Interact/Annotate mode is pushed on EVERY bridge ready, so it survives page-change reloads and bridge re-injection', async () => {
     const { post, postedToIframe } = await mountLiveViewer({ annotateModeActive: false });
     await post({ type: 'plannotator-bridge-ready', pageUrl: '/', token: LIVE_TOKEN });

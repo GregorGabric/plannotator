@@ -396,6 +396,22 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // that acknowledges "the first report after a reload" must get the
     // post-restore set, never a prop-side set computed at mount.
     const bridgeReportedRef = useRef(false);
+    // An in-place document swap (rawHtml or src changes on one instance):
+    // the old document may still emit through the same contentWindow before
+    // the new one is ready. From the swap until the next ready, bridge
+    // reports belong to the old document and are dropped, and the
+    // last-delivered key is reset so the new document's first answer is
+    // delivered even when it equals the old one. First mount is not a swap.
+    const awaitingReadyRef = useRef(false);
+    const documentIdentityRef = useRef<{ rawHtml: string; src: string | undefined } | null>(null);
+    const previousIdentity = documentIdentityRef.current;
+    if (previousIdentity && (previousIdentity.rawHtml !== rawHtml || previousIdentity.src !== src)) {
+      awaitingReadyRef.current = true;
+      bridgeReportedRef.current = false;
+      lastDeliveredUnanchoredRef.current = "[]";
+      bridgeUnanchoredRef.current = [];
+    }
+    documentIdentityRef.current = { rawHtml, src };
     const deliverUnanchored = useCallback((ids: string[], onlyIfChanged: boolean) => {
       const key = JSON.stringify(ids);
       if (onlyIfChanged && key === lastDeliveredUnanchoredRef.current) return;
@@ -403,6 +419,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       onUnanchoredChangeRef.current?.(ids);
     }, []);
     const handleBridgeUnanchored = useCallback((ids: string[]) => {
+      if (awaitingReadyRef.current) return;
       bridgeUnanchoredRef.current = ids;
       bridgeReportedRef.current = true;
       deliverUnanchored(
@@ -623,6 +640,7 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       // silent when everything restores. Ask for one complete report after
       // this restore batch (posted after it, so the answering pass sees it),
       // which becomes this document's first delivery, empty set included.
+      awaitingReadyRef.current = false;
       bridgeReportedRef.current = false;
       postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -647,7 +665,10 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         type: `${PREFIX}sync-annotations`,
         annotations: buildSyncNumbering(annotations),
       });
-      // A new page is a new restore batch: report its complete set once.
+      // A new page is a new restore batch: report its complete set once, and
+      // deliver nothing computed against the previous page's report until
+      // that answer arrives.
+      bridgeReportedRef.current = false;
       postToBridge({ type: `${PREFIX}report-unanchored` });
     }, [currentPageUrl, iframeReadyVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
