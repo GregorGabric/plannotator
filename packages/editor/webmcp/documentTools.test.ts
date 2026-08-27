@@ -29,6 +29,7 @@ import {
   type ToolSpec,
 } from '@plannotator/ui/webmcp';
 import {
+  MAX_REMEMBERED_REQUESTS,
   buildDocumentHooks,
   buildDocumentTools,
   createDocumentToolState,
@@ -433,6 +434,26 @@ describe('ownership', () => {
     const rm = dataOf(await fx.call('remove_comments', { ids: ['ext-1'] }));
     expect(rm.results[0]).toMatchObject({ ok: false, error: { code: 'forbidden' } });
     expect(fx.annotations.some((a) => a.id === 'ext-1')).toBe(true);
+  });
+});
+
+describe('requestId memory is bounded', () => {
+  // The idempotency map only ever grew: every add_comments call with a
+  // requestId added an entry for the life of the tab.
+  test('past MAX_REMEMBERED_REQUESTS the oldest requestId is forgotten and a replay of it creates anew', async () => {
+    const fx = fake();
+    const first = dataOf(await fx.call('add_comments', { comments: [{ text: 'first', requestId: 'r-0' }] }));
+    const firstId = first.results[0].annotation.id;
+    for (let i = 1; i <= MAX_REMEMBERED_REQUESTS; i++) {
+      await fx.call('add_comments', { comments: [{ text: `note ${i}`, requestId: `r-${i}` }] });
+    }
+    // The newest replay is still deduplicated...
+    const recent = dataOf(await fx.call('add_comments', { comments: [{ text: 'again', requestId: `r-${MAX_REMEMBERED_REQUESTS}` }] }));
+    expect(recent.created).toBe(0);
+    // ...while the evicted first one is treated as a new request.
+    const replay = dataOf(await fx.call('add_comments', { comments: [{ text: 'first again', requestId: 'r-0' }] }));
+    expect(replay.created).toBe(1);
+    expect(replay.results[0].annotation.id).not.toBe(firstId);
   });
 });
 
