@@ -375,6 +375,15 @@ export function useDocumentWebMcp(inputs: DocumentWebMcpInputs): { available: bo
   useEffect(() => {
     if (openError) settleWaiter(null, false);
   }, [openError]);
+  // Unmount: no commit can ever settle a waiter again, so fail them now and
+  // clear their timers instead of leaving timeouts firing into a dead hook.
+  useEffect(() => () => {
+    for (const waiter of navigationWaitersRef.current) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(false);
+    }
+    navigationWaitersRef.current = [];
+  }, []);
 
   return result;
 }
