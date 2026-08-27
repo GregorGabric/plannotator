@@ -1,3 +1,8 @@
+// Eager identity registration (side-effect import, evaluated before every
+// other module below). Keeps Plannotator's tater names byte-identical now that
+// @plannotator/ui loads the username dictionary lazily for hosts. Guarded by
+// tests/entry-assets.test.ts; do not drop or reorder this line.
+import '@plannotator/ui/utils/identity-tater';
 import React, { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
 import { toast, Toaster } from 'sonner';
 import { type Origin, getAgentName } from '@plannotator/shared/agents';

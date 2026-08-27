@@ -9,6 +9,7 @@ import { setExternalAnnotationTransport, type ExternalAnnotationTransport } from
 import { setAITransport, type AITransport } from './hooks/useAIChat';
 import { setSkillCatalogTransport, setSkillContentTransport, type SkillCatalogTransport, type SkillContentTransport } from './utils/skillCatalog';
 import { setWebMcpPolicy, type WebMcpPolicy } from './webmcp/policy';
+import { setIdentityGenerator, type IdentityGenerator } from './utils/generateIdentity';
 import { configStore } from './config';
 import type { ServerSyncFn } from './config/configStore';
 import type { ExternalAnnotationEvent, VaultNode } from './types';
@@ -33,6 +34,7 @@ export type {
   SkillContentTransport,
   ServerSyncFn,
   WebMcpPolicy,
+  IdentityGenerator,
 };
 
 type ExternalAnnotationBase = { id: string; source?: string };
@@ -65,6 +67,13 @@ export interface PlannotatorUIConfig {
    * exposes nothing consequential: no tool decides, submits or closes.
    */
   webmcp?: WebMcpPolicy;
+  /**
+   * Synchronous generator for the default "tater" display name, used only when
+   * no `identityProvider` is installed. Default: a small built-in pool of the
+   * same `adjective-noun-tater` shape. Plannotator registers the full
+   * dictionary by importing `@plannotator/ui/utils/identity-tater`.
+   */
+  identityGenerator?: IdentityGenerator;
   /** Re-hydrate settings from the installed (SYNCHRONOUS) storageBackend after install. */
   loadSettingsFromBackend?: boolean;
 }
@@ -83,6 +92,7 @@ export function configurePlannotatorUI(config: PlannotatorUIConfig): void {
   if (config.skillContentTransport) setSkillContentTransport(config.skillContentTransport);
   if (config.serverSync) configStore.setServerSync(config.serverSync);
   if (config.webmcp) setWebMcpPolicy(config.webmcp);
+  if (config.identityGenerator) setIdentityGenerator(config.identityGenerator);
   // Re-hydrate AFTER storageBackend is installed (load-bearing order — gated last).
   if (config.loadSettingsFromBackend) configStore.loadFromBackend();
 }
