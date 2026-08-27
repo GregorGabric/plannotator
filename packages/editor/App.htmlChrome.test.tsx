@@ -203,8 +203,8 @@ function armedRing(): HTMLElement | null {
 
 /** Compact mounts wait on the armed ring: neither the pen nor the eye toggle
  * exists on the compact touch shell (that absence is what these tests guard). */
-async function mountCompactHtmlAnnotate(): Promise<void> {
-  globalThis.fetch = annotateFetch;
+async function mountCompactHtmlAnnotate(fetchImpl: typeof fetch = annotateFetch): Promise<void> {
+  globalThis.fetch = fetchImpl;
   // SAFETY: the App only uses EventSource's constructor, handlers, and close.
   globalThis.EventSource = SilentEventSource as unknown as typeof EventSource;
   host = document.createElement("div");
@@ -349,6 +349,28 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     if (!annotate) throw new Error('compact menu is missing the "Annotate page" action');
     await act(async () => annotate.click());
     expect(armedRing()).not.toBeNull();
+  });
+
+  test("compact touch layout: Refresh from disk is offered through the Options menu (the header refresh is absent)", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    window.matchMedia = coarseMatchMedia as typeof window.matchMedia;
+    await mountCompactHtmlAnnotate(versionedFetch);
+
+    // The desktop-only header refresh is not rendered on compact, so the
+    // menu action is the only way to re-read the file.
+    expect(refreshButton()).toBeNull();
+
+    await openOptionsMenu();
+    const refresh = findMenuItem("Refresh from disk");
+    if (!refresh) throw new Error('compact menu is missing the "Refresh from disk" action');
+    expect(refresh.disabled).toBe(false);
+    await act(async () => refresh.click());
+    for (let attempt = 0; attempt < 20 && !document.querySelector('iframe[srcdoc*="edited"]'); attempt += 1) {
+      await settle();
+    }
+    // The refreshed bytes reached the viewer.
+    expect(document.querySelector<HTMLIFrameElement>("iframe[srcdoc]")?.getAttribute("srcdoc")).toContain("Body copy, edited.");
   });
 
   test("the restore commit never writes stale pre-restore values to the cookie", async () => {

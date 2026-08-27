@@ -4847,6 +4847,19 @@ const App: React.FC = () => {
               onSelect: () => setHtmlToolsHidden((v) => !v),
             }]
           : []),
+        // The desktop header's Refresh is header-only too; local HTML files
+        // (never URL or live-app sessions) get the same action here.
+        ...(isHtmlSurface && htmlRefresh.canRefresh
+          ? [{
+              id: 'refresh' as const,
+              label: 'Refresh from disk',
+              subtitle: htmlRefresh.isRefreshing
+                ? 'Refreshing the HTML file'
+                : 'Reload the HTML file and keep the annotations that still match',
+              onSelect: () => { void htmlRefresh.refresh(); },
+              disabled: htmlRefresh.isRefreshing,
+            }]
+          : []),
       ];
 
   const planMaxWidth = useMemo(() => {
