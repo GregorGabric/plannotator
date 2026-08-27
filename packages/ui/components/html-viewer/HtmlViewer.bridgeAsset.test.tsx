@@ -35,11 +35,16 @@ afterEach(async () => {
 
 const ASSET_URL = 'https://host.example/assets/bridge-script.deadbeef.js';
 
-async function mount(props: {
+type MountProps = {
   bridgeScriptUrl?: string;
   bridgeReadyTimeoutMs?: number;
   onBridgeUnavailable?: (info: BridgeUnavailableInfo) => void;
-}) {
+  rawHtml?: string;
+};
+
+const DEFAULT_HTML = "<html><head><title>t</title></head><body><p>Target</p></body></html>";
+
+async function mount(props: MountProps) {
   if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
   const HtmlViewer = htmlViewerModule.HtmlViewer;
   // happy-dom parses the srcdoc and, with script file loading disabled,
@@ -51,20 +56,26 @@ async function mount(props: {
   document.body.appendChild(host);
   const root = createRoot(host);
   mountedRoots.push(root);
-  await act(async () => {
-    root.render(
-      <HtmlViewer
-        rawHtml="<html><head><title>t</title></head><body><p>Target</p></body></html>"
-        annotations={[]}
-        onAddAnnotation={() => {}}
-        onSelectAnnotation={() => {}}
-        selectedAnnotationId={null}
-        mode="selection"
-        inputMethod="pinpoint"
-        {...props}
-      />,
-    );
-  });
+  const render = async (next: MountProps) => {
+    await act(async () => {
+      root.render(
+        <HtmlViewer
+          rawHtml={next.rawHtml ?? DEFAULT_HTML}
+          annotations={[]}
+          onAddAnnotation={() => {}}
+          onSelectAnnotation={() => {}}
+          selectedAnnotationId={null}
+          mode="selection"
+          inputMethod="pinpoint"
+          bridgeScriptUrl={next.bridgeScriptUrl}
+          bridgeReadyTimeoutMs={next.bridgeReadyTimeoutMs}
+          onBridgeUnavailable={next.onBridgeUnavailable}
+        />,
+      );
+    });
+  };
+  await render(props);
+  const rerender = (patch: Partial<MountProps>) => render({ ...props, ...patch });
   const iframe = host.querySelector<HTMLIFrameElement>('iframe');
   if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
   const postedToIframe: Array<Record<string, unknown>> = [];
@@ -80,7 +91,7 @@ async function mount(props: {
     });
   };
   const banner = () => host.querySelector<HTMLElement>('[data-bridge-error]');
-  return { host, iframe, postReady, postedToIframe, banner };
+  return { host, iframe, postReady, postedToIframe, banner, rerender };
 }
 
 function captureWarnings(): string[] {
@@ -101,6 +112,30 @@ describe.if(hasDom)('HtmlViewer bridgeScriptUrl', () => {
     expect(srcdoc).not.toContain(BRIDGE_SCRIPT);
     // The sandbox is unchanged by the delivery path.
     expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+  });
+
+  test("a relative URL is resolved against the PARENT document, so a page's own <base href> cannot redirect it", async () => {
+    // happy-dom's document lives at about:blank; give the PARENT a real base
+    // the way a host page has one, and remove it afterwards.
+    const parentBase = document.createElement('base');
+    parentBase.setAttribute('href', 'http://host.test:4000/workspace/');
+    document.head.appendChild(parentBase);
+    try {
+      expect(document.baseURI).toBe('http://host.test:4000/workspace/');
+      const { iframe } = await mount({
+        bridgeScriptUrl: '/assets/bridge-script.deadbeef.js',
+        rawHtml: '<html><head><base href="https://attacker.example/"><title>t</title></head><body><p>x</p></body></html>',
+      });
+      const srcdoc = iframe.getAttribute('srcdoc') ?? '';
+      expect(srcdoc).toContain('<script src="http://host.test:4000/assets/bridge-script.deadbeef.js"></script>');
+      // The page's base tag still precedes the injected tag (end of <head>),
+      // which is exactly why the src must already be absolute.
+      expect(srcdoc.indexOf('<base href')).toBeLessThan(srcdoc.indexOf('<script src='));
+      expect(srcdoc).not.toContain('src="/assets/');
+      expect(srcdoc).not.toContain('attacker.example/assets');
+    } finally {
+      parentBase.remove();
+    }
   });
 
   test('without the prop the srcdoc inlines the bridge, as before', async () => {
@@ -168,6 +203,41 @@ describe.if(hasDom)('HtmlViewer bridgeScriptUrl', () => {
 
     await postReady({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
     expect(banner()).toBeNull();
+  });
+
+  test('changing bridgeReadyTimeoutMs after a successful ready never re-arms the timer', async () => {
+    const unavailable: BridgeUnavailableInfo[] = [];
+    const { postReady, banner, rerender } = await mount({
+      bridgeScriptUrl: ASSET_URL,
+      bridgeReadyTimeoutMs: 5000,
+      onBridgeUnavailable: (info) => unavailable.push(info),
+    });
+    await postReady({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION });
+    await rerender({ bridgeReadyTimeoutMs: 20 });
+    await act(async () => { await wait(80); });
+    expect(banner()).toBeNull();
+    expect(unavailable).toEqual([]);
+  });
+
+  test('the version-mismatch banner is dismissible; the timeout banner is not', async () => {
+    captureWarnings();
+    const unavailable: BridgeUnavailableInfo[] = [];
+    const { postReady, banner, host } = await mount({
+      bridgeScriptUrl: ASSET_URL,
+      onBridgeUnavailable: (info) => unavailable.push(info),
+    });
+    await postReady({ type: 'plannotator-bridge-ready' });
+    const dismiss = host.querySelector<HTMLButtonElement>('[data-bridge-error-dismiss]');
+    expect(dismiss).not.toBeNull();
+    await act(async () => { dismiss!.click(); });
+    expect(banner()).toBeNull();
+    // Dismissing hides the strip only: the host was told exactly once.
+    expect(unavailable.length).toBe(1);
+
+    const timedOut = await mount({ bridgeScriptUrl: ASSET_URL, bridgeReadyTimeoutMs: 20 });
+    await act(async () => { await wait(70); });
+    expect(timedOut.banner()?.getAttribute('data-bridge-error')).toBe('timeout');
+    expect(timedOut.host.querySelector('[data-bridge-error-dismiss]')).toBeNull();
   });
 
   test('inline path: no timer, no banner, no callback; a stamp-less ready only warns', async () => {

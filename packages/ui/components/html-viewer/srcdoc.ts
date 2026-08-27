@@ -99,12 +99,34 @@ export interface SrcdocInjectionOptions {
   /**
    * Load the bridge through a classic `<script src>` from this URL instead of
    * inlining `BRIDGE_SCRIPT`. Absent or empty: inline, exactly as before. The
-   * tag takes the inline script's place, so placement and ordering relative
-   * to the page's own scripts are identical on both paths (parser-blocking in
-   * `<head>`, before the body). No `crossorigin` attribute is set: the srcdoc
-   * frame is an opaque origin, and a classic script needs no CORS to execute.
+   * tag takes the inline script's place, so placement is identical on both
+   * paths: at the end of `<head>`, before the body (head scripts of the page
+   * run first, body scripts after the bridge). No `crossorigin` attribute is
+   * set: the srcdoc frame is an opaque origin, and a classic script needs no
+   * CORS to execute. Callers must pass an ABSOLUTE URL (see
+   * {@link resolveBridgeScriptUrl}): the framed page may carry its own
+   * `<base href>`, which precedes the injected tag and would re-anchor a
+   * relative URL onto an attacker-chosen origin.
    */
   bridgeScriptUrl?: string;
+}
+
+/**
+ * Resolve a host-supplied bridge URL against the PARENT document (its
+ * `document.baseURI`), never against the framed page. The injection lands at
+ * the end of the page's `<head>`, after any `<base href>` the page declares,
+ * so a relative URL written into the srcdoc would resolve against that base:
+ * a hostile document could point the viewer at an attacker-served bridge and
+ * defeat the version check. Resolving here pins the URL before it is written.
+ * An unparsable input is returned unchanged (nothing loads, the ready timeout
+ * reports it) rather than throwing during render.
+ */
+export function resolveBridgeScriptUrl(bridgeScriptUrl: string, parentBaseUrl: string): string {
+  try {
+    return new URL(bridgeScriptUrl, parentBaseUrl).href;
+  } catch {
+    return bridgeScriptUrl;
+  }
 }
 
 /** Escape a string for a double-quoted HTML attribute value. */

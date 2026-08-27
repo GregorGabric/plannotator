@@ -29,7 +29,12 @@ import {
   BRIDGE_LITE_FILENAME,
   writeBridgeAssets,
 } from "../../scripts/build-bridge-assets";
-import { buildBridgeScriptTag, buildSrcdocInjection, injectIntoHead } from "./srcdoc";
+import {
+  buildBridgeScriptTag,
+  buildSrcdocInjection,
+  injectIntoHead,
+  resolveBridgeScriptUrl,
+} from "./srcdoc";
 import { checkBridgeProtocolVersion, formatBridgeProtocolWarning } from "./useHtmlAnnotation";
 
 const uiRoot = resolve(import.meta.dir, "../..");
@@ -120,6 +125,25 @@ describe("srcdoc bridge script tag", () => {
   test("the URL is attribute-escaped so it cannot break out of the tag", () => {
     const tag = buildBridgeScriptTag('/b.js" onerror="alert(1)');
     expect(tag).toBe('<script src="/b.js&quot; onerror=&quot;alert(1)"></script>');
+  });
+
+  test("the URL resolves against the parent base, never the framed page's <base href>", () => {
+    const parent = "https://host.example/workspace/doc/42";
+    expect(resolveBridgeScriptUrl("/assets/bridge.abc.js", parent)).toBe("https://host.example/assets/bridge.abc.js");
+    expect(resolveBridgeScriptUrl("./bridge.js", parent)).toBe("https://host.example/workspace/doc/bridge.js");
+    expect(resolveBridgeScriptUrl("https://cdn.example/b.js", parent)).toBe("https://cdn.example/b.js");
+    // Unparsable input is passed through rather than thrown at render.
+    expect(resolveBridgeScriptUrl("http://[bad", "not a url")).toBe("http://[bad");
+
+    // A page carrying its own <base href> still precedes the injected tag
+    // (end of <head>); the resolved src is absolute and unaffected by it.
+    const page = '<html><head><base href="https://attacker.example/"><title>t</title></head><body></body></html>';
+    const doc = injectIntoHead(page, buildSrcdocInjection({
+      ...base,
+      bridgeScriptUrl: resolveBridgeScriptUrl("/assets/bridge.abc.js", parent),
+    }));
+    expect(doc).toContain('<script src="https://host.example/assets/bridge.abc.js"></script>');
+    expect(doc.indexOf("<base href")).toBeLessThan(doc.indexOf("<script src="));
   });
 
   test("the package adds no CSP meta to the srcdoc document on either path", () => {

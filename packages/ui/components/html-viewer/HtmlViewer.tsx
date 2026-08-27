@@ -53,6 +53,7 @@ import {
   buildThemeTokenPayload,
   hasHostThemeOptIn,
   injectIntoHead,
+  resolveBridgeScriptUrl,
 } from "./srcdoc";
 
 const PREFIX = "plannotator-bridge-";
@@ -260,11 +261,16 @@ export interface HtmlViewerProps {
    * classic `<script src>` from this URL (the package's generated
    * `components/html-viewer/bridge-script.asset.js`, served by the host)
    * instead of inlining the 185 KB script into every document. Absent (the
-   * default, and Plannotator's only path): inline, unchanged. The srcdoc
-   * frame is an opaque origin, so the script needs no CORS and no
-   * `crossorigin` attribute is set; a CSP header on the host page is
-   * inherited by the frame and must allow `script-src` for the asset origin.
-   * Ignored in live (`src`) mode, where the proxy injects the bridge.
+   * default, and Plannotator's only path): inline, unchanged. The tag lands
+   * where the inline script does, at the end of `<head>`, before the body.
+   * The URL is resolved against THIS document's base (`document.baseURI`)
+   * before it is written, never against the framed page, so a page's own
+   * `<base href>` cannot redirect it. The srcdoc frame is an opaque origin,
+   * so the script needs no CORS and no `crossorigin` attribute is set; a CSP
+   * header on the host page is inherited by the frame and must allow
+   * `script-src` for the asset origin, and the asset must not be served with
+   * `Cross-Origin-Resource-Policy: same-origin`. Ignored in live (`src`)
+   * mode, where the proxy injects the bridge.
    */
   bridgeScriptUrl?: string;
   /**
@@ -381,7 +387,14 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     const hostTheme = useMemo(() => !liveMode && hasHostThemeOptIn(rawHtml), [liveMode, rawHtml]);
 
     // The URL path is srcdoc-only: live mode has the proxy inject the bridge.
-    const bridgeUrl = !liveMode && bridgeScriptUrl ? bridgeScriptUrl : undefined;
+    // Resolved against THIS document's base before it is written into the
+    // srcdoc, so a framed page's own <base href> can never re-anchor it.
+    const bridgeUrl = useMemo(
+      () => (!liveMode && bridgeScriptUrl
+        ? resolveBridgeScriptUrl(bridgeScriptUrl, document.baseURI)
+        : undefined),
+      [liveMode, bridgeScriptUrl],
+    );
     const bridgeUrlRef = useRef(bridgeUrl);
     bridgeUrlRef.current = bridgeUrl;
 
@@ -401,14 +414,24 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     // sets it (no timer, and a version mismatch there can only be a forged
     // message, which is warned about and otherwise ignored).
     const [bridgeError, setBridgeError] = useState<BridgeUnavailableInfo | null>(null);
+    // A version-mismatch banner is dismissible (the older bridge keeps
+    // working); reset whenever the error itself changes.
+    const [bridgeErrorDismissed, setBridgeErrorDismissed] = useState(false);
     const readyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const onBridgeUnavailableRef = useRef(onBridgeUnavailable);
     onBridgeUnavailableRef.current = onBridgeUnavailable;
+    // The timeout is read through a ref at arming time: the timer is armed
+    // once per document load (URL or srcdoc change), never re-armed by a
+    // later prop change, so a host adjusting bridgeReadyTimeoutMs after the
+    // bridge is ready can never produce a false timeout.
+    const bridgeReadyTimeoutMsRef = useRef(bridgeReadyTimeoutMs);
+    bridgeReadyTimeoutMsRef.current = bridgeReadyTimeoutMs;
     useEffect(() => {
       if (!bridgeUrl || srcdoc === undefined) return;
       setBridgeError(null);
+      setBridgeErrorDismissed(false);
       const url = bridgeUrl;
-      const timeoutMs = bridgeReadyTimeoutMs;
+      const timeoutMs = bridgeReadyTimeoutMsRef.current;
       readyTimerRef.current = setTimeout(() => {
         readyTimerRef.current = null;
         setBridgeError({ kind: "timeout", url, timeoutMs });
@@ -417,8 +440,9 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         if (readyTimerRef.current !== null) clearTimeout(readyTimerRef.current);
         readyTimerRef.current = null;
       };
-    }, [bridgeUrl, srcdoc, bridgeReadyTimeoutMs]);
+    }, [bridgeUrl, srcdoc]);
     useEffect(() => {
+      setBridgeErrorDismissed(false);
       if (bridgeError) onBridgeUnavailableRef.current?.(bridgeError);
     }, [bridgeError]);
 
@@ -1038,14 +1062,28 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
                 ready within the timeout, or a stale asset's version). Floated
                 over the top of the iframe so it never changes the layout the
                 page renders in; the page itself stays visible. */}
-            {bridgeError && (
+            {bridgeError && !bridgeErrorDismissed && (
               <div
                 role="alert"
                 data-print-hide
                 data-bridge-error={bridgeError.kind}
-                className="absolute inset-x-0 top-0 z-20 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive backdrop-blur-sm"
+                className="absolute inset-x-0 top-0 z-20 flex items-start gap-2 border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive backdrop-blur-sm"
               >
-                {formatBridgeUnavailableMessage(bridgeError)}
+                <span className="flex-1">{formatBridgeUnavailableMessage(bridgeError)}</span>
+                {/* Only the mismatch state is dismissible: the older bridge
+                    still works there. A timeout leaves a dead surface, so
+                    that banner stays. */}
+                {bridgeError.kind === "version-mismatch" && (
+                  <button
+                    type="button"
+                    data-bridge-error-dismiss
+                    aria-label="Dismiss"
+                    className="shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-destructive/15 cursor-pointer"
+                    onClick={() => setBridgeErrorDismissed(true)}
+                  >
+                    Dismiss
+                  </button>
+                )}
               </div>
             )}
             {/* Live proxied-app mode navigates a real loopback origin: no
