@@ -3,7 +3,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';
 import { InlineMarkdown, trimUrlTail } from './InlineMarkdown';
-import { getMathRenderer, resetMathRenderer, setMathRenderer } from '../utils/math';
+import { getMathRenderer, getMathRendererSource, resetMathRenderer, setMathRenderer } from '../utils/math';
 
 function renderInline(text: string): string {
   return renderToStaticMarkup(createElement(InlineMarkdown, { text }));
@@ -108,10 +108,11 @@ describe('InlineMarkdown math', () => {
   // here explicitly so these assertions do not depend on which test file ran
   // first in bun's shared process, and restore whatever was there after.
   const saved = getMathRenderer();
+  const savedSource = getMathRendererSource();
   beforeEach(() => setMathRenderer(katex));
   afterEach(() => {
     resetMathRenderer();
-    if (saved) setMathRenderer(saved);
+    if (saved) setMathRenderer(saved, savedSource ?? 'host');
   });
 
   test('renders the TeX as text in the same wrapper while no renderer is registered', () => {

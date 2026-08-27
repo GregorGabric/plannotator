@@ -80,15 +80,6 @@ describe('review entry assets', () => {
     },
   );
 
-  test('the eager entries register synchronously at module evaluation', () => {
-    const math = read('packages/ui/utils/math-eager.ts');
-    expect(math).toContain("import katex from 'katex';");
-    expect(math).toContain('setMathRenderer(katex);');
-    const identity = read('packages/ui/utils/identity-tater.ts');
-    expect(identity).toContain("from 'unique-username-generator';");
-    expect(identity).toContain('setIdentityGenerator(generateTaterIdentity);');
-  });
-
   // The other half of the optimization: the renderers must stay OFF the
   // static import graph of the components, otherwise a host's bundler puts
   // them back into every document read and the slots become decoration.
@@ -105,25 +96,40 @@ describe('review entry assets', () => {
     expect(read('packages/ui/utils/generateIdentity.ts')).not.toMatch(staticImport('unique-username-generator'));
   });
 
-  // Built-artifact check for the same guarantee: a lost eager import would
-  // still type-check and pass every unit test, but the single-file bundles
-  // would no longer inline the renderer. These markers are string literals
-  // inside the libraries (a KaTeX class name, a Mermaid diagram id, an
-  // Emscripten symbol from Graphviz, the dictionary's exported function) and
-  // survive minification. dist/ is gitignored, so this skips on an unbuilt
-  // checkout; the CI job that builds the bundles runs it right after.
+  // Built-artifact check: a lost eager import would still type-check and pass
+  // every unit test, so the built single-file bundles are read directly.
+  // Two different kinds of marker, deliberately:
+  //
+  // - Registration markers, which only reach a bundle when the eager module is
+  //   evaluated in it: the source tag `math-eager` passes to setMathRenderer,
+  //   and the dictionary's exported function name (the dictionary is imported
+  //   ONLY by identity-tater). These are the guards for a dropped or
+  //   tree-shaken side-effect import (a future `"sideEffects": false` would
+  //   let Vite discard `import '.../math-eager'`, the slot would stay empty and
+  //   every runtime would paint TeX for a frame). Proven by removing the
+  //   import and rebuilding: the math-eager marker count drops to zero while
+  //   every KaTeX class name stays put.
+  // - Presence markers (a KaTeX class name, a Mermaid diagram id, an
+  //   Emscripten symbol from Graphviz, the bridge global), which only say the
+  //   runtime is still inlined by inlineDynamicImports. KaTeX is inlined
+  //   through utils/math.ts's import('katex') whether or not it is registered,
+  //   so `katex-display` cannot prove registration and is not asked to.
+  //
+  // dist/ is gitignored, so this is skipped on an unbuilt checkout; the CI job
+  // that builds the bundles runs it right after.
+  const REGISTRATION_MARKERS = ['plannotator-math-eager', 'uniqueUsernameGenerator'];
   const markerExpectations: Array<[bundle: string, markers: string[]]> = [
-    ['apps/hook/dist/index.html', ['katex-display', 'flowchart-v2', 'viz_set_y_invert', 'uniqueUsernameGenerator', '__plannotatorLiveConfig']],
-    ['apps/review/dist/index.html', ['katex-display', 'uniqueUsernameGenerator', '__plannotatorLiveConfig']],
+    ['apps/hook/dist/index.html', [...REGISTRATION_MARKERS, 'katex-display', 'flowchart-v2', 'viz_set_y_invert', '__plannotatorLiveConfig']],
+    ['apps/review/dist/index.html', [...REGISTRATION_MARKERS, 'katex-display', '__plannotatorLiveConfig']],
   ];
-  test.each(markerExpectations)('%s still inlines the eagerly registered renderers (skipped if unbuilt)', (path, markers) => {
-    const full = resolve(root, path);
-    if (!existsSync(full)) return;
-    const html = readFileSync(full, 'utf8');
-    // Asserted per marker on a boolean so a failure never prints the 20MB bundle.
-    const missing = markers.filter((marker) => !html.includes(marker));
-    expect({ path, missing }).toEqual({ path, missing: [] });
-  });
+  for (const [path, markers] of markerExpectations) {
+    test.skipIf(!existsSync(resolve(root, path)))(`${path} carries the eager registration and renderer markers`, () => {
+      const html = readFileSync(resolve(root, path), 'utf8');
+      // Asserted per marker on a boolean so a failure never prints the 20MB bundle.
+      const missing = markers.filter((marker) => !html.includes(marker));
+      expect({ path, missing }).toEqual({ path, missing: [] });
+    });
+  }
 
   test('nothing depends on highlight.js any more', () => {
     for (const manifest of ['packages/ui/package.json', 'packages/review-editor/package.json']) {
@@ -151,14 +157,14 @@ describe('review entry assets', () => {
   // job that builds the bundles runs this file right after the build so the
   // assertion is not silently optional there.
   const bundles = ['apps/review/dist/index.html', 'apps/hook/dist/index.html'];
-  test.each(bundles)('%s ships no inlined WebAssembly (skipped if unbuilt)', (path) => {
-    const full = resolve(root, path);
-    if (!existsSync(full)) return;
-    // Asserted on a boolean, not the string: these bundles are ~20MB and a
-    // `toContain` failure would print all of it.
-    const inlinedWasm = readFileSync(full, 'utf8').includes('AGFzbQ');
-    expect({ path, inlinedWasm }).toEqual({ path, inlinedWasm: false });
-  });
+  for (const path of bundles) {
+    test.skipIf(!existsSync(resolve(root, path)))(`${path} ships no inlined WebAssembly`, () => {
+      // Asserted on a boolean, not the string: these bundles are ~20MB and a
+      // `toContain` failure would print all of it.
+      const inlinedWasm = readFileSync(resolve(root, path), 'utf8').includes('AGFzbQ');
+      expect({ path, inlinedWasm }).toEqual({ path, inlinedWasm: false });
+    });
+  }
 });
 
 describe('marketing embeds', () => {

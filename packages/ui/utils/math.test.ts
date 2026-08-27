@@ -26,6 +26,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import katex from 'katex';
 import {
   getMathRenderer,
+  getMathRendererSource,
   loadMathRenderer,
   renderMathToHtml,
   resetMathRenderer,
@@ -39,6 +40,7 @@ import { InlineMarkdown } from '../components/InlineMarkdown';
 import type { Block } from '../types';
 
 const savedRenderer = getMathRenderer();
+const savedSource = getMathRendererSource();
 
 const displayBlock: Block = {
   id: 'math-1',
@@ -54,7 +56,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetMathRenderer();
-  if (savedRenderer) setMathRenderer(savedRenderer);
+  if (savedRenderer) setMathRenderer(savedRenderer, savedSource ?? 'host');
 });
 
 describe('empty slot', () => {
@@ -132,6 +134,7 @@ describe('loadMathRenderer', () => {
     expect(a).toBe(katex);
     expect(b).toBe(katex);
     expect(getMathRenderer()).toBe(katex);
+    expect(getMathRendererSource()).toBe('loader');
     await loadMathRenderer();
     expect(loads).toBe(1);
   });

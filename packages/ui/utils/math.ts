@@ -32,7 +32,17 @@ export type MathRendererLoader = () => Promise<MathRenderer>;
  */
 const defaultMathRendererLoader: MathRendererLoader = () => import('katex').then((m) => m.default);
 
+/**
+ * Who filled the slot: the eager entry (`./math-eager`), the lazy loader, or a
+ * host calling `setMathRenderer` directly. Diagnostic for a host chasing a TeX
+ * flash, and the eager value is a build marker: it only reaches a bundle when
+ * `./math-eager` is evaluated, which is what `tests/entry-assets.test.ts`
+ * asserts on the built single-file HTML.
+ */
+export type MathRendererSource = 'plannotator-math-eager' | 'loader' | 'host';
+
 let renderer: MathRenderer | null = null;
+let rendererSource: MathRendererSource | null = null;
 let loader: MathRendererLoader = defaultMathRendererLoader;
 let pending: Promise<MathRenderer> | null = null;
 const listeners = new Set<() => void>();
@@ -46,10 +56,16 @@ export function getMathRenderer(): MathRenderer | null {
   return renderer;
 }
 
+/** How the current renderer was registered, or `null` while the slot is empty. */
+export function getMathRendererSource(): MathRendererSource | null {
+  return rendererSource;
+}
+
 /** Register a renderer synchronously (what `./math-eager` does with `katex`). */
-export function setMathRenderer(next: MathRenderer): void {
+export function setMathRenderer(next: MathRenderer, source: MathRendererSource = 'host'): void {
   if (renderer === next) return;
   renderer = next;
+  rendererSource = source;
   notify();
 }
 
@@ -83,7 +99,7 @@ export function loadMathRenderer(): Promise<MathRenderer> {
   if (!pending) {
     const attempt = loader().then(
       (loaded) => {
-        setMathRenderer(loaded);
+        setMathRenderer(loaded, 'loader');
         return loaded;
       },
       (err: unknown) => {
@@ -99,6 +115,7 @@ export function loadMathRenderer(): Promise<MathRenderer> {
 /** Test hook: clear the slot, the loader override and any pending load. */
 export function resetMathRenderer(): void {
   renderer = null;
+  rendererSource = null;
   loader = defaultMathRendererLoader;
   pending = null;
   notify();

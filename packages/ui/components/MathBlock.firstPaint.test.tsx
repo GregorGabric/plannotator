@@ -22,12 +22,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import katex from 'katex';
 
 import '../utils/math-eager';
-import { getMathRenderer, resetMathRenderer, setMathRenderer } from '../utils/math';
+import { getMathRenderer, getMathRendererSource, resetMathRenderer, setMathRenderer } from '../utils/math';
 import { MathBlock } from './blocks/MathBlock';
 import type { Block } from '../types';
 
 const hasDom = typeof document !== 'undefined';
 const savedRenderer = getMathRenderer();
+const savedSource = getMathRendererSource();
 
 const block: Block = { id: 'math-1', type: 'math', content: '\\int_0^1 x^2 dx', order: 0, startLine: 1 };
 
@@ -42,7 +43,7 @@ afterEach(async () => {
   host?.remove();
   host = null;
   resetMathRenderer();
-  if (savedRenderer) setMathRenderer(savedRenderer);
+  if (savedRenderer) setMathRenderer(savedRenderer, savedSource ?? 'host');
 });
 
 function mount(): { html: string; mutations: MutationRecord[] } {
