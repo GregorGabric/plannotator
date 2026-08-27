@@ -55,12 +55,12 @@ function nextHtmlAnnId(): string {
   return `html-ann-${Date.now().toString(36)}-${(htmlAnnSeq++).toString(36)}`;
 }
 
-/** Ids minted by this module for locally created annotations (create-mark).
- * Module-scoped like the sequence above: a host that swaps a local id for
- * its own server id keeps the local mark until it removes it, and the
- * unanchored union needs to recognise such ids whichever viewer instance
- * minted them. Bounded: only ids from this page load, one entry per create. */
-const mintedHtmlAnnIds = new Set<string>();
+// Ids minted for locally created annotations (create-mark) live per hook
+// instance (mintedIdsRef below), not per module: the unanchored union only
+// consults them against the bridge of the instance that minted them (a
+// remounted viewer restores from the host's list and never reports an id it
+// was not asked for), and a module-wide set leaked every id ever minted into
+// unrelated later instances of a long-lived host page.
 
 function htmlCommentDraftKey(
   text: string,
@@ -463,6 +463,15 @@ export function useHtmlAnnotation({
   enabledRef.current = enabled;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  // Ids this instance minted (see the module comment above nextHtmlAnnId);
+  // released on unmount so nothing outlives the viewer that created it.
+  const mintedIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const minted = mintedIdsRef.current;
+    return () => {
+      minted.clear();
+    };
+  }, []);
   // Mirror toolbar visibility into a ref so the (stable) message handler can gate
   // type-to-comment on "the markup toolbar is showing", like AnnotationToolbar does.
   const toolbarStateRef = useRef(toolbarState);
@@ -805,7 +814,7 @@ export function useHtmlAnnotation({
       if (!text || type !== AnnotationType.DELETION) return;
 
       const id = nextHtmlAnnId();
-      mintedHtmlAnnIds.add(id);
+      mintedIdsRef.current.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "deletion" });
       onAddRef.current?.({
         id,
@@ -864,7 +873,7 @@ export function useHtmlAnnotation({
           : undefined;
 
       const id = nextHtmlAnnId();
-      mintedHtmlAnnIds.add(id);
+      mintedIdsRef.current.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -910,7 +919,7 @@ export function useHtmlAnnotation({
         : undefined;
 
     const id = nextHtmlAnnId();
-    mintedHtmlAnnIds.add(id);
+    mintedIdsRef.current.add(id);
     post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
     onAddRef.current?.({
       id,
@@ -970,7 +979,7 @@ export function useHtmlAnnotation({
       const text = pendingTextRef.current;
       if (!text) return;
       const id = nextHtmlAnnId();
-      mintedHtmlAnnIds.add(id);
+      mintedIdsRef.current.add(id);
       post({ type: `${PREFIX}create-mark`, id, annotationType: "comment" });
       onAddRef.current?.({
         id,
@@ -1067,6 +1076,6 @@ export function useHtmlAnnotation({
     removeDraftTarget,
     flashDraftTarget,
     composerFocusToken,
-    createdAnnotationIds: mintedHtmlAnnIds,
+    createdAnnotationIds: mintedIdsRef.current,
   };
 }
