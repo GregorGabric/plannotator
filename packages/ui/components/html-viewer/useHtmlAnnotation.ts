@@ -865,7 +865,7 @@ export function useHtmlAnnotation({
     const targets = draftTargetsRef.current;
     const additionalTargets: HtmlAnnotationTarget[] | undefined =
       targets.length > 1
-        ? targets.slice(1, 1 + MAX_ADDITIONAL_TARGETS).map((t) => ({
+        ? targets.slice(1, 1 + maxTargetsRef.current).map((t) => ({
             label: t.label,
             text: t.text,
             anchor: t.anchor ?? undefined,
