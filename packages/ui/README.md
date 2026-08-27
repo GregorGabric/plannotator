@@ -50,6 +50,15 @@ The sidebar/panel resize handle exposes seams for hosts that want different edge
 
 Building your own tooltip and removing the built-in double-click reset are host-side concerns (override `onDoubleClick` where you render the handle).
 
+### Lazy renderers and the two eager entries (`utils/math`, `utils/generateIdentity`)
+
+The Mermaid runtime, the Graphviz engine, KaTeX and the username dictionary are off the static import graph of `Viewer`, so a host that bundles by route does not download them for a plain markdown read. Mermaid and Graphviz need nothing from you (the blocks import them inside their render effect and show the source fence until the SVG lands, as they always did; a failed chunk fetch is re-attempted once after a short delay and the error panel offers Retry). KaTeX and the dictionary sit behind synchronous slots:
+
+- **Math.** Without registration, a math node renders its TeX as text in the same wrapper (same `data-math-tex` / `data-math-display` / `aria-label` / class names), loads KaTeX via `import('katex')`, and re-renders typeset. To keep math typeset on the very first commit, as Plannotator does, add one line to your entry: `import "@plannotator/ui/utils/math-eager";`. To put KaTeX and its stylesheet on one lazy chunk instead, pass `mathRendererLoader`. The stylesheet remains your job either way (see "Consuming it", step 3).
+- **Identity.** With an `identityProvider` the generator is never called and the word lists stay out of your bundle. Without one, default names come from a small built-in pool of the same `adjective-noun-tater` shape; `import "@plannotator/ui/utils/identity-tater";` registers the full dictionary, or pass your own `identityGenerator`.
+
+Plannotator's own entries import both eager modules (`packages/editor/App.tsx`, `packages/review-editor/App.tsx`), which is what keeps its single-file builds byte-identical; `tests/entry-assets.test.ts` fails if either import is dropped. See HANDOFF.md "Lazy renderers and eager entries".
+
 ### Markdown editor extensions + wiki links (`MarkdownEditor` / `InlineMarkdown`)
 
 - **`MarkdownEditor` takes CM6 extensions.** `extensions?: readonly Extension[]` (from `@codemirror/state`) is forwarded verbatim into the underlying editor — the seam for `wikiLinks(config)`, `y-codemirror.next` collab bindings, custom keymaps.
@@ -87,15 +96,6 @@ Requires `@plannotator/markdown-editor ^0.4.0` and `@plannotator/atomic-editor ^
 ### Raw-HTML annotation viewer (`HtmlViewer`)
 
 `components/html-viewer` is supported host surface as of 0.29.0: the overlay-projection annotation viewer for raw HTML (placed comment markers, pinpoint element anchors, shift-click multi-target comments). Its contract is **props plus the validated iframe message protocol** — not `configurePlannotatorUI()`, which only governs the backend surfaces around it. Drive the `annotations` prop (marker numbering derives from its array order); `readOnly` keeps markers painted and clickable while disabling all authoring. **0.29.0 also carries a breaking migration:** highlight.js is gone and `.hljs` selectors are inert — style code via the exported `pn-code` class (`CODE_BLOCK_CLASS` in `utils/codeHighlight`). See HANDOFF.md § "Raw-HTML annotation viewer + syntax-highlighting migration (0.29.0)" before upgrading from 0.28.0.
-
-### Lazy renderers and the two eager entries (`utils/math`, `utils/generateIdentity`)
-
-The Mermaid runtime, the Graphviz engine, KaTeX and the username dictionary are off the static import graph of `Viewer`, so a host that bundles by route does not download them for a plain markdown read. Mermaid and Graphviz need nothing from you (the blocks import them inside their render effect and show the source fence until the SVG lands, as they always did). KaTeX and the dictionary sit behind synchronous slots:
-
-- **Math.** Without registration, a math node renders its TeX as text in the same wrapper (same `data-math-tex` / `data-math-display` / `aria-label` / class names), loads KaTeX via `import('katex')`, and re-renders typeset. To keep math typeset on the very first commit, as Plannotator does, add one line to your entry: `import "@plannotator/ui/utils/math-eager";`. To put KaTeX and its stylesheet on one lazy chunk instead, pass `mathRendererLoader`. The stylesheet remains your job either way (see "Consuming it", step 3).
-- **Identity.** With an `identityProvider` the generator is never called and the word lists stay out of your bundle. Without one, default names come from a small built-in pool of the same `adjective-noun-tater` shape; `import "@plannotator/ui/utils/identity-tater";` registers the full dictionary, or pass your own `identityGenerator`.
-
-Plannotator's own entries import both eager modules (`packages/editor/App.tsx`, `packages/review-editor/App.tsx`), which is what keeps its single-file builds byte-identical; `tests/entry-assets.test.ts` fails if either import is dropped. See HANDOFF.md "Lazy renderers and eager entries".
 
 ### WebMCP provider (`@plannotator/ui/webmcp`)
 

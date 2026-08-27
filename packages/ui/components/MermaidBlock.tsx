@@ -42,15 +42,48 @@ export const MERMAID_CONFIG: MermaidConfig = {
  * inlined and resolves in a microtask; the render was already asynchronous
  * (the source fence shows until the SVG lands), so nothing visible changes.
  */
-let mermaidRuntime: Promise<Mermaid> | null = null;
-
-function getMermaid(): Promise<Mermaid> {
-  mermaidRuntime ??= import('mermaid').then(({ default: mermaid }) => {
+const loadMermaidRuntime = (): Promise<Mermaid> =>
+  import('mermaid').then(({ default: mermaid }) => {
     mermaid.initialize(MERMAID_CONFIG);
     return mermaid;
   });
+
+let mermaidLoader = loadMermaidRuntime;
+let mermaidRuntime: Promise<Mermaid> | null = null;
+
+/**
+ * Delay before the one automatic re-attempt after a failed runtime import.
+ * Only chunking hosts can fail here (a single-file build never fetches).
+ */
+let runtimeRetryDelayMs = 750;
+
+/**
+ * Memoized runtime. A rejected load is dropped from the memo so the next call
+ * (the automatic re-attempt below, a later mount, or the Retry button) issues
+ * a fresh import() instead of replaying the cached rejection.
+ */
+function getMermaid(): Promise<Mermaid> {
+  if (!mermaidRuntime) {
+    const attempt = mermaidLoader().catch((err: unknown) => {
+      if (mermaidRuntime === attempt) mermaidRuntime = null;
+      throw err;
+    });
+    mermaidRuntime = attempt;
+  }
   return mermaidRuntime;
 }
+
+/** Test hook: stand in for the runtime import and shorten the retry delay. */
+export function __setMermaidRuntimeLoaderForTests(
+  loader: (() => Promise<Mermaid>) | undefined,
+  options?: { retryDelayMs?: number },
+): void {
+  mermaidLoader = loader ?? loadMermaidRuntime;
+  mermaidRuntime = null;
+  runtimeRetryDelayMs = options?.retryDelayMs ?? 750;
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 interface ViewBox {
   x: number;
@@ -156,6 +189,11 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
   const expandedOverlayRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState('');
   const [error, setError] = useState<string | null>(null);
+  // True when the failure was the runtime import itself (a chunking host's
+  // fetch), which is the only failure a Retry can change; a diagram syntax
+  // error keeps the panel exactly as it always was.
+  const [runtimeUnavailable, setRuntimeUnavailable] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
   const [showSource, setShowSource] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -211,19 +249,41 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
 
     // Render mermaid diagram
     const renderDiagram = async () => {
+      let mermaid: Mermaid;
+      try {
+        try {
+          mermaid = await getMermaid();
+        } catch {
+          // Transient chunk failure on a chunking host: one automatic
+          // re-attempt with a fresh import() after a short delay. In a
+          // single-file build the first await never rejects, so this branch
+          // is unreachable there and the success path is unchanged.
+          await wait(runtimeRetryDelayMs);
+          if (cancelled) return;
+          mermaid = await getMermaid();
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'Failed to render diagram');
+          setRuntimeUnavailable(true);
+          setSvg('');
+        }
+        return;
+      }
       try {
         const id = `mermaid-${block.id}`;
-        const mermaid = await getMermaid();
         const { svg: renderedSvg } = await mermaid.render(id, block.content);
         if (!cancelled) {
           const normalizedSvg = normalizeMermaidSvgMarkup(renderedSvg);
           naturalBoundsRef.current = parseViewBoxFromMarkup(normalizedSvg);
           setSvg(normalizedSvg);
           setError(null);
+          setRuntimeUnavailable(false);
         }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to render diagram');
+          setRuntimeUnavailable(false);
           setSvg('');
         }
       }
@@ -234,7 +294,7 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
     return () => {
       cancelled = true;
     };
-  }, [block.content, block.id]);
+  }, [block.content, block.id, retryToken]);
 
   // Reset zoom and pan when content changes
   useEffect(() => {
@@ -443,6 +503,19 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
           </svg>
           <span className="text-xs text-destructive font-medium">Mermaid Error</span>
+          {runtimeUnavailable && (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                setRetryToken((token) => token + 1);
+              }}
+              className="ml-auto rounded-md border border-destructive/30 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10"
+              title="Retry loading the diagram renderer"
+            >
+              Retry
+            </button>
+          )}
         </div>
         <pre className="p-3 text-xs text-destructive/80 overflow-x-auto">{error}</pre>
         <pre className="p-3 text-xs text-muted-foreground bg-muted/30 border-t border-border/30 overflow-x-auto">
