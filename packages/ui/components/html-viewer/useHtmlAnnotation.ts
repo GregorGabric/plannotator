@@ -8,8 +8,45 @@ import type {
   QuickLabelPickerState,
   UseAnnotationHighlighterReturn,
 } from "../../hooks/useAnnotationHighlighter";
+import { BRIDGE_PROTOCOL_VERSION } from "./bridge-script";
 
 const PREFIX = "plannotator-bridge-";
+
+/** Outcome of comparing a bridge `ready` message's stamp with this parent. */
+export interface BridgeProtocolVerdict {
+  ok: boolean;
+  /** The version this parent bundle speaks (`BRIDGE_PROTOCOL_VERSION`). */
+  expected: number;
+  /** The version the bridge reported; `undefined` when the ready carried none
+   *  (a bridge asset built before the stamp existed, or a forged message). */
+  reported: number | undefined;
+}
+
+/**
+ * Compare a `ready` message against the parent's protocol version. A missing
+ * stamp counts as a mismatch: the only way it can be absent is a bridge asset
+ * older than the parent (or a page forging the message), which is exactly
+ * the drift this check exists to name.
+ */
+export function checkBridgeProtocolVersion(data: unknown): BridgeProtocolVerdict {
+  const raw = isRecord(data) ? data.protocolVersion : undefined;
+  const reported = typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+  return {
+    ok: reported === BRIDGE_PROTOCOL_VERSION,
+    expected: BRIDGE_PROTOCOL_VERSION,
+    reported,
+  };
+}
+
+/** The one console warning a mismatch produces; names both versions. */
+export function formatBridgeProtocolWarning(
+  verdict: BridgeProtocolVerdict,
+  bridgeScriptUrl?: string,
+): string {
+  const reported = verdict.reported === undefined ? "none" : String(verdict.reported);
+  const source = bridgeScriptUrl ? `the bridge script at ${bridgeScriptUrl}` : "the bridge script";
+  return `[plannotator] HTML bridge protocol version mismatch: this viewer expects ${verdict.expected}, ${source} reported ${reported}. Serve the bridge-script asset from the same @plannotator/ui version as the viewer.`;
+}
 
 // Collision-proof annotation ids. `Date.now()` alone repeats within a millisecond,
 // so two quick annotations could share a data-bind-id and clobber each other.

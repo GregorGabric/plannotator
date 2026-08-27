@@ -86,6 +86,7 @@ jobs:
           packages/ui/components/html-viewer/htmlPinpointProtocol.test.tsx
           packages/ui/components/html-viewer/htmlLiveProtocol.test.tsx
           packages/ui/components/html-viewer/HtmlViewer.vimHud.test.tsx
+          packages/ui/components/html-viewer/HtmlViewer.bridgeAsset.test.tsx
           packages/ui/components/Viewer.vimMode.integration.test.tsx
           packages/ui/hooks/useVimSelection.test.tsx
           packages/ui/utils/codeHighlight.test.ts

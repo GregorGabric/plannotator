@@ -11,6 +11,8 @@
     "./components/ImageAnnotator": "./components/ImageAnnotator/index.tsx",
     "./components/html-viewer": "./components/html-viewer/index.ts",
     "./components/html-viewer/bridge-script": "./components/html-viewer/bridge-script.ts",
+    "./components/html-viewer/bridge-script.asset.js": "./components/html-viewer/bridge-script.asset.js",
+    "./components/html-viewer/bridge-script.lite": "./components/html-viewer/bridge-script.lite.ts",
     "./components/sidebar/*": "./components/sidebar/*.tsx",
     "./components/plan-diff/*": "./components/plan-diff/*.tsx",
     "./utils/*": "./utils/*.ts",
@@ -109,6 +111,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "build:css": "vite build --config vite.css.config.ts && rm -f styles.js",
-    "prepack": "bun run build:css"
+    "build:bridge-assets": "bun run scripts/build-bridge-assets.ts",
+    "prepack": "bun run build:css && bun run build:bridge-assets"
   }
 }

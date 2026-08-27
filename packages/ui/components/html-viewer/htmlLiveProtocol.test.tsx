@@ -18,6 +18,7 @@ import React from 'react';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Annotation } from '../../types';
+import { BRIDGE_PROTOCOL_VERSION } from './bridge-script';
 
 const hasDom = typeof document !== 'undefined';
 const hookModule = hasDom ? await import('./useHtmlAnnotation') : null;
@@ -176,7 +177,7 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     const { post, postedToIframe } = await mountLiveViewer({
       annotations: [],
     });
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/', token: LIVE_TOKEN });
     expect(postedToIframe.length).toBeGreaterThan(0);
     for (const posted of postedToIframe) {
       expect(posted.data.token).toBe(LIVE_TOKEN);
@@ -190,10 +191,10 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
   test('an unauthenticated ready is ignored; an authenticated one forwards its pageUrl', async () => {
     const pages: string[] = [];
     const { post, postedToIframe } = await mountLiveViewer({ onPageChange: (p) => pages.push(p) });
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/spoofed' }, LIVE_ORIGIN);
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/spoofed' }, LIVE_ORIGIN);
     expect(pages).toEqual([]);
     expect(postedToIframe.length).toBe(0);
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/dashboard?x=1', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/dashboard?x=1', token: LIVE_TOKEN });
     expect(pages).toEqual(['/dashboard?x=1']);
   });
 
@@ -227,7 +228,7 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
       annotations: [pageAnn('on-home', '/'), pageAnn('on-about', '/about')],
       currentPageUrl: '/',
     });
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/', token: LIVE_TOKEN });
     const restores = postedToIframe.filter((p) => p.data.type === 'plannotator-bridge-find-and-mark');
     expect(restores.map((p) => p.data.id)).toEqual(['on-home']);
     // Numbering still ships the FULL list (global numbers across pages).
@@ -300,7 +301,7 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
         }));
       });
     };
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/' });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/' });
     await post({ type: 'plannotator-bridge-unanchored', ids: ['home-1'] });
     expect(received).toEqual([['home-1']]);
 
@@ -318,7 +319,7 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
 
   test('the Interact/Annotate mode is pushed on EVERY bridge ready, so it survives page-change reloads and bridge re-injection', async () => {
     const { post, postedToIframe } = await mountLiveViewer({ annotateModeActive: false });
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/', token: LIVE_TOKEN });
     const modePosts = () =>
       postedToIframe.filter((p) => p.data.type === 'plannotator-bridge-set-annotate-mode');
     expect(modePosts().length).toBe(1);
@@ -327,7 +328,7 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     // again from a FRESH document: the mode must be re-established, not lost
     // to the fresh bridge's default.
     postedToIframe.length = 0;
-    await post({ type: 'plannotator-bridge-ready', pageUrl: '/about', token: LIVE_TOKEN });
+    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/about', token: LIVE_TOKEN });
     expect(modePosts().length).toBe(1);
     expect(modePosts()[0]!.data.active).toBe(false);
   });

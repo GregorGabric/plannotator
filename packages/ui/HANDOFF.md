@@ -471,9 +471,58 @@ Four modules that used to ride every document read for a host that bundles by ro
 
 3. **Identity: a generator slot, filled eagerly by Plannotator.** `utils/generateIdentity` no longer imports `unique-username-generator`. It holds a synchronous generator slot (`setIdentityGenerator`, `getIdentityGenerator`) with a built-in fallback that produces the same `adjective-noun-tater` shape from a 16 x 16 pool. `utils/identity-tater` registers the full dictionary as a side effect and is what Plannotator's entries import. A host with `identityProvider` never calls the generator and, with the static import gone, no longer ships the word lists; delete any dictionary shim. A host that wants the full dictionary without its own provider imports `@plannotator/ui/utils/identity-tater`, or passes its own `identityGenerator` to `configurePlannotatorUI`. The slot is synchronous on purpose: `configStore` persists the first generated name to the identity cookie during the first render-time settings read, so a name that arrived later would be a visible identity change.
 
-4. **What did not ship (deliberately).** The raw-HTML bridge script as a separately served asset and a lazy table popout are not in this release; both are tracked in the design record for a follow-up.
+4. **What did not ship (deliberately).** A lazy table popout is not in this release; it is tracked in the design record for a follow-up. The raw-HTML bridge script as a separately served asset shipped afterwards, see "HTML viewer bridge as an asset" below.
 
 Pinned by `utils/math.test.ts`, `components/MathBlock.firstPaint.test.tsx`, `utils/generateIdentity.test.ts`, `components/MermaidBlock.test.ts`, and the eager-entry and built-HTML marker guards in `tests/entry-assets.test.ts`.
+
+---
+
+## HTML viewer bridge as an asset (0.33.0)
+
+`HtmlViewer` injects a 185 KB bridge script (`BRIDGE_SCRIPT`, `components/html-viewer/bridge-script.ts`) into every srcdoc document it renders. For a host that bundles by route that literal rode in the viewer chunk and was re-parsed by the browser per document. This release adds an opt-in, `bridgeScriptUrl`, and leaves the default untouched: Plannotator passes nothing, every Plannotator surface (the annotate srcdoc path, the version diff, PR HTML artifacts, linked `.html` docs, the share portal) still inlines the string, the live-app proxy still serves the same inline bridge from its own `/__plannotator__/bridge.js` route, the Pi and OpenCode copies are built from the same code, and the single-file bundles carry the literal exactly once as before (`tests/entry-assets.test.ts` counts it; the A/B of a Plannotator HTML annotate session on a main build against this build found identical DOM, requests and console).
+
+**What the package ships.** `prepack` now also runs `scripts/build-bridge-assets.ts`, which derives two gitignored files beside the source module, both deterministic and both verified against the module's exports by `components/html-viewer/bridgeAsset.test.ts`:
+
+- `components/html-viewer/bridge-script.asset.js`: byte-for-byte `BRIDGE_SCRIPT`, the runnable IIFE. Export subpath `@plannotator/ui/components/html-viewer/bridge-script.asset.js`. The `.asset.js` name is deliberate: a plain `bridge-script.js` next to `bridge-script.ts` would be picked first by Vite's extension probe for the package's own `./bridge-script` imports and break every consumer build.
+- `components/html-viewer/bridge-script.lite.ts`: the same `ANNOTATION_HIGHLIGHT_CSS`, `BRIDGE_PROTOCOL_VERSION` and `LIVE_BRIDGE_BOOTSTRAP` with `BRIDGE_SCRIPT = ""`. Export subpath `@plannotator/ui/components/html-viewer/bridge-script.lite`. An alias target only (below).
+
+The TS module stays the source of truth because the Plannotator CLI and the Pi extension import its string exports under Bun.
+
+**Host wiring (Workspaces).** Serve the asset same-origin as a hashed file through a Vite `?url` import and pass the URL to the viewer:
+
+```ts
+import bridgeScriptUrl from "@plannotator/ui/components/html-viewer/bridge-script.asset.js?url";
+
+<HtmlViewer
+  rawHtml={html}
+  bridgeScriptUrl={bridgeScriptUrl}
+  bridgeReadyTimeoutMs={5000}          // default; the wait for `ready` per document load
+  onBridgeUnavailable={(info) => ...}  // { kind: 'timeout' | 'version-mismatch', url, ... }
+  ...
+/>
+```
+
+With the prop set, `buildSrcdocInjection` emits `<script src="…"></script>` in the exact position the inline `<script>` occupied (there is one injection point, `buildBridgeScriptTag` in `srcdoc.ts`, for both paths), so placement is unchanged: at the end of `<head>`, before the body, on both paths (the page's head scripts run before the bridge, its body scripts after). The URL is resolved against the PARENT document (`resolveBridgeScriptUrl(url, document.baseURI)`) before it is written into the srcdoc, never against the framed page: the injection follows any `<base href>` the page declares, so a relative URL left unresolved would let a hostile document point the viewer at an attacker-served bridge and defeat the version check. The srcdoc is rebuilt on `rawHtml`, theme and diff changes and the browser then re-fetches the asset from cache, so serve it with normal immutable-asset cache headers. An empty string counts as absent (inline). The prop is ignored in live (`src`) mode, where the proxy injects the bridge.
+
+**CSP.** Confirmed by grep and pinned by test: the package never writes a CSP `<meta>` into the srcdoc document (the injection is one `<style>` and one `<script>`; an author-written CSP meta is still neutralized as before), and the bridge sets none at runtime. The srcdoc frame is an opaque origin, and a classic `<script src>` executes without CORS; no `crossorigin` attribute is set, so do not expect one. A `Content-Security-Policy` HTTP header on the host page IS inherited by the srcdoc document: a host with its own CSP must allow `script-src` for the origin the asset is served from (same-origin `'self'` in the wiring above). Note the asset form is easier under CSP than the inline form, which would need `'unsafe-inline'` or a nonce. One more header to check: an asset served with `Cross-Origin-Resource-Policy: same-origin` (common with COEP) is blocked for the opaque-origin frame; serve the bridge asset with a CORP that admits cross-origin loads (`cross-origin`) or without CORP.
+
+**Protocol version.** `BRIDGE_PROTOCOL_VERSION` (exported from `components/html-viewer/bridge-script` and re-exported from `components/html-viewer`) is embedded in the bridge text and stamped on its `ready` message as `protocolVersion`. Note for the design record's "current state": `BRIDGE_SCRIPT` now carries its first `${}` interpolation (that constant, evaluated at module load); it remains a plain string export with no per-session values, so the CLI, Pi and the live proxy consume it exactly as before. The parent (`checkBridgeProtocolVersion`, `HtmlViewer`'s ready branch) compares it: on the inline path and in live sessions the two sides come from one bundle and always match; on the URL path a cached asset from a previous package version answers with an older stamp, or none, and the viewer logs one console warning naming both versions, shows a dismissible error banner over the top of the frame (`[data-bridge-error="version-mismatch"]`, `role="alert"`, a `[data-bridge-error-dismiss]` button; the page stays visible) and calls `onBridgeUnavailable` once. The ready is still honored (an older bridge answers every message shape it knows), so this is a loud diagnostic, not a refusal. Bump the constant whenever a bridge message shape changes in a way an older bridge or parent would misread; a bump forces a warning against any not-yet-redeployed asset, which is the point.
+
+**Ready timeout.** On the URL path only, `bridgeReadyTimeoutMs` (default 5000) is armed once per document load (URL or srcdoc change), read through a ref, so changing the prop after the bridge is ready never re-arms it; with no `ready` in time the surface shows `[data-bridge-error="timeout"]` naming the URL and the wait (not dismissible: the surface is dead), and `onBridgeUnavailable({ kind: 'timeout', url, timeoutMs })` fires. A late `ready` clears it. The inline path arms no timer and can never show a banner.
+
+**Dropping the literal from the host chunk (optional).** The URL path alone leaves the inline string in the chunk unused, because `srcdoc.ts` imports it statically (the default must stay synchronous). To remove it, alias the package's `./bridge-script` resolution to the generated lite module in your bundler; with Vite:
+
+```ts
+resolve: {
+  alias: [{ find: /\/bridge-script$/, replacement: "/bridge-script.lite" }],
+}
+```
+
+Under that alias an `HtmlViewer` rendered WITHOUT `bridgeScriptUrl` throws at render (`buildBridgeScriptTag` refuses to emit an empty inline script), so the misconfiguration cannot ship as a silently dead surface. Measured on the proof harness (PR #1398's description): the viewer chunk shrinks by the size of the literal, 557 kB to 371 kB (168 kB to 118 kB gzip).
+
+**Live app annotation is unaffected.** `packages/shared/live-proxy-bridge-inline.test.ts` pins at source level that both proxy transports and both runtimes' composers still ship the inline bridge from the proxy route and never reference `bridgeScriptUrl` or the generated files.
+
+Pinned by `components/html-viewer/bridgeAsset.test.ts` (generator bytes, manifest wiring, the single injection point, no CSP meta, the real bridge's stamped ready), `components/html-viewer/HtmlViewer.bridgeAsset.test.tsx` (URL srcdoc, stale-asset warning and banner, timeout and late ready, inline path unchanged), `packages/shared/live-proxy-bridge-inline.test.ts` and the bridge marker count in `tests/entry-assets.test.ts`.
 
 ---
 

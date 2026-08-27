@@ -112,6 +112,18 @@ Everything a host needs around `HtmlViewer` to match Plannotator's HTML annotati
 
 See HANDOFF.md § "HTML annotation parity seams".
 
+#### The bridge script as an asset (`bridgeScriptUrl`; 0.33.0)
+
+By default `HtmlViewer` inlines its 185 KB in-page bridge script into every srcdoc document. A host that serves the package's generated `components/html-viewer/bridge-script.asset.js` as a static file can pass its URL instead:
+
+```ts
+import bridgeScriptUrl from "@plannotator/ui/components/html-viewer/bridge-script.asset.js?url";
+
+<HtmlViewer rawHtml={html} bridgeScriptUrl={bridgeScriptUrl} … />
+```
+
+The srcdoc then carries one classic `<script src>` in the exact place the inline script sat (at the end of `<head>`, before the body), the browser caches the asset across documents, and the bridge's `ready` message carries `BRIDGE_PROTOCOL_VERSION`, which the viewer checks: a stale cached asset (no stamp, or another version) logs one console warning naming both versions and shows a dismissible error banner in the surface (`onBridgeUnavailable` fires too); no `ready` within `bridgeReadyTimeoutMs` (default 5000) shows a timeout banner. The URL is resolved against your document's base (`document.baseURI`) before it is written into the srcdoc, never against the framed page, so a page's own `<base href>` cannot redirect it. Plannotator passes nothing and stays inline; none of this runs on the inline path. **CSP:** the package sets no CSP `<meta>` in the srcdoc document, and the frame is an opaque origin so the classic script needs no CORS (no `crossorigin` is set), but a CSP delivered as a header on your page is inherited by the frame: allow `script-src` for the asset's origin. Because the frame is an opaque origin, an asset served with `Cross-Origin-Resource-Policy: same-origin` (common alongside COEP) is blocked; serve it with a CORP that admits cross-origin loads, or without CORP. To also drop the inline literal from your viewer chunk, alias the package's `./bridge-script` resolution to the generated `bridge-script.lite` module (see HANDOFF.md § "HTML viewer bridge as an asset").
+
 #### Also blessed in 0.32.0: `shortcuts` and `utils/inputMethod`
 
 - **`@plannotator/ui/shortcuts`**: the declarative keyboard-shortcut engine (`defineShortcutScope`, `useShortcutScope`) and the per-surface scopes, including `useHtmlAnnotateShortcuts` for the Mod+Shift+A Annotate/Interact chord on HTML surfaces. Pure React plus `utils/platform`; no backend.
