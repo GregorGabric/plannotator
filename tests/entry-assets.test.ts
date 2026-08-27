@@ -101,7 +101,7 @@ describe('review entry assets', () => {
     // site, or the alias stops dropping the chunk.
     // (Comments name the call in prose, so this is matched as code: a call
     // that starts a line or an expression, never a backtick-quoted mention.)
-    expect(read('packages/ui/utils/math.ts')).not.toMatch(/[^`'"]import\('katex'\)/);
+    expect(read('packages/ui/utils/math.ts')).not.toMatch(/[^`'"]import\(['"]katex['"]\)/);
     expect(read('packages/ui/utils/math.ts')).toContain("from './math-default-loader'");
     expect(read('packages/ui/utils/math-default-loader.ts')).not.toMatch(staticImport('katex'));
     expect(read('packages/ui/utils/math-default-loader.ts')).toContain("import('katex')");
