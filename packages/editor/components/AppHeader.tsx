@@ -11,7 +11,13 @@ import type { UIPreferences } from '@plannotator/ui/utils/uiPreferences';
 import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
 import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
 import { HtmlSurfaceControls } from '@plannotator/ui/components/HtmlSurfaceControls';
-import { PLANNOTATOR_HTML_REFRESH_LABELS } from './HtmlSurfaceActions';
+
+/** Plannotator's refresh strings for the published control: the document
+ * is a file on disk, so the refresh says so. */
+export const PLANNOTATOR_HTML_REFRESH_LABELS = {
+  refreshTitle: 'Refresh HTML from disk',
+  refreshingTitle: 'Refreshing HTML from disk',
+} as const;
 
 interface AppHeaderProps {
   /** Mobile document-scroll surfaces let Safari own the top edge and scroll
@@ -369,8 +375,9 @@ export const AppHeader = React.memo<AppHeaderProps>(({
         {/* HTML and live-app surfaces only: the eye (show/hide tools, the
             only way back from hidden), the refresh, and the Interact/Annotate
             pen, in that order. The published control carries the markup;
-            the compact touch shell offers the same actions in its Options
-            menu instead. */}
+            the compact touch shell offers the same three actions in its
+            Options menu instead (compactDocumentActions in App: Show/Hide
+            tools, Interact/Annotate, Refresh from disk). */}
         {htmlSurface && (onToggleHtmlTools || onToggleHtmlAnnotate) && (
           <HtmlSurfaceControls
             compact={compactTouchLayout}

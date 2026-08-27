@@ -147,6 +147,10 @@ Markdown conversion uses [Turndown](https://github.com/mixmark-io/turndown) with
 
 HTML files must be within your current working directory. Files outside the project root return a 403 error.
 
+### Refresh from disk
+
+When an agent edits the HTML file while you are reviewing it, click **Refresh** in the header (next to the eye button) to re-read the file without reloading the tab. Annotations whose elements or text still exist on the new page stay where they were; any that no longer match are listed in a notice and marked **Unanchored** in the annotations panel, where their comments remain and still send. The "Show changes" toggle keeps working after a refresh, comparing the file as it is now against its previous saved version. On a phone or tablet the action is in the Options menu as **Refresh from disk**. Refresh is available for local HTML files only, not for URLs or live app sessions.
+
 ### `--markdown`
 
 For local HTML files, `--markdown` switches from raw HTML rendering to markdown conversion. In folder mode, the same setting applies when you open `.html` or `.htm` files from the file browser.

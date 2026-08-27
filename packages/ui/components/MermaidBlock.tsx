@@ -11,6 +11,10 @@ import {
 } from '../utils/mermaid';
 import { loadMathRenderer } from '../utils/math';
 import { hasMermaidMath } from '../utils/mermaid-math-slot';
+import { createRuntimeRetryEpoch } from '../utils/runtimeRetry';
+
+/** One Retry re-attempts every block whose runtime import failed (see utils/runtimeRetry). */
+const mermaidRetryEpoch = createRuntimeRetryEpoch();
 
 // Re-exported: the config pin test and the lazy-retry test import them from here.
 export { MERMAID_CONFIG, __setMermaidRuntimeLoaderForTests };
@@ -135,6 +139,16 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
   const [retryToken, setRetryToken] = useState(0);
   const [showSource, setShowSource] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // A sibling's Retry re-attempts this block too, but only while its own
+  // failure was the shared runtime import; a healthy block or a diagram
+  // syntax error is left alone.
+  const runtimeUnavailableRef = useRef(runtimeUnavailable);
+  runtimeUnavailableRef.current = runtimeUnavailable;
+  useEffect(() => mermaidRetryEpoch.subscribe(() => {
+    if (!runtimeUnavailableRef.current) return;
+    setError(null);
+    setRetryToken((token) => token + 1);
+  }), []);
 
   // All zoom/pan state as refs to avoid re-renders
   const zoomLevelRef = useRef(1);
@@ -459,10 +473,7 @@ const MermaidBlockImpl: React.FC<{ block: Block }> = ({ block }) => {
           {runtimeUnavailable && (
             <button
               type="button"
-              onClick={() => {
-                setError(null);
-                setRetryToken((token) => token + 1);
-              }}
+              onClick={() => mermaidRetryEpoch.bump()}
               className="ml-auto rounded-md border border-destructive/30 px-2 py-0.5 text-xs text-destructive hover:bg-destructive/10"
               title="Retry loading the diagram renderer"
             >

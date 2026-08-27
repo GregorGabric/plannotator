@@ -7,6 +7,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { OverlayScrollArea } from './OverlayScrollArea';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
+import { resolveReplyParents, resolveThreadRootTimestamps } from '@plannotator/core/annotation-threads';
 
 // Card type-word colors. Deletion uses `destructive` (reliably red on every
 // theme, matching the in-document .deletion highlight). Comment uses the
@@ -40,48 +41,45 @@ const TrashCardIcon = () => (
 
 /**
  * Order annotations so every reply follows its parent (replies among
- * themselves stay in creation order). A reply whose parent is absent renders
- * as a top-level card. Without any `inReplyTo` the input order is returned
- * unchanged, so annotations without replies render exactly as before.
+ * themselves stay in creation order). The threading rule is the shared one
+ * (resolveReplyParents, also what the export applies): a reply whose parent
+ * is absent, a self-reference, and every member of an `inReplyTo` cycle
+ * render as top-level cards in input order, so nothing is ever dropped.
+ * Without any `inReplyTo` the input order is returned unchanged, so
+ * annotations without replies render exactly as before.
  */
 export function threadReplies(sorted: Annotation[]): Array<{ annotation: Annotation; isReply: boolean }> {
   if (!sorted.some((a) => a.inReplyTo)) return sorted.map((annotation) => ({ annotation, isReply: false }));
-  const ids = new Set(sorted.map((a) => a.id));
+  const parents = resolveReplyParents(sorted);
   const byParent = new Map<string, Annotation[]>();
   for (const a of sorted) {
-    if (a.inReplyTo && ids.has(a.inReplyTo) && a.inReplyTo !== a.id) {
-      const list = byParent.get(a.inReplyTo) ?? [];
-      list.push(a);
-      byParent.set(a.inReplyTo, list);
-    }
+    const parent = parents.get(a.id);
+    if (!parent) continue;
+    const list = byParent.get(parent) ?? [];
+    list.push(a);
+    byParent.set(parent, list);
   }
+  // Depth-first, iteratively: a 5,000-deep chain must not recurse 5,000
+  // frames deep. The stack holds each node's replies in reverse so they pop
+  // in creation order.
   const out: Array<{ annotation: Annotation; isReply: boolean }> = [];
-  const emitted = new Set<string>();
-  const emit = (a: Annotation, isReply: boolean) => {
-    if (emitted.has(a.id)) return;
-    emitted.add(a.id);
-    out.push({ annotation: a, isReply });
-    for (const reply of byParent.get(a.id) ?? []) emit(reply, true);
+  const stack: Array<{ annotation: Annotation; isReply: boolean }> = [];
+  const pushReplies = (a: Annotation) => {
+    const replies = byParent.get(a.id);
+    if (!replies) return;
+    for (let i = replies.length - 1; i >= 0; i--) stack.push({ annotation: replies[i], isReply: true });
   };
   for (const a of sorted) {
-    if (a.inReplyTo && ids.has(a.inReplyTo) && a.inReplyTo !== a.id) continue;
-    emit(a, false);
+    if (parents.get(a.id)) continue;
+    out.push({ annotation: a, isReply: false });
+    pushReplies(a);
+    while (stack.length > 0) {
+      const next = stack.pop()!;
+      out.push(next);
+      pushReplies(next.annotation);
+    }
   }
-  for (const a of sorted) emit(a, false);
   return out;
-}
-
-/** Timeline position of an annotation: its own time, or its thread root's for replies. */
-function threadTs(annotation: Annotation, all: Annotation[]): number {
-  let current = annotation;
-  const seen = new Set<string>();
-  while (current.inReplyTo && !seen.has(current.id)) {
-    seen.add(current.id);
-    const parent = all.find((a) => a.id === current.inReplyTo);
-    if (!parent) break;
-    current = parent;
-  }
-  return current.createdA;
 }
 
 interface DirectEditsPanelItem {
@@ -178,13 +176,16 @@ export const AnnotationPanel: React.FC<PanelProps> = ({
   // sit right after its parent (and the parent's earlier replies) at the
   // parent's timeline position. With no replies the order is untouched.
   const threadedAnnotations = threadReplies(sortedAnnotations);
+  // Thread timestamps are resolved once per render, linearly (shared helper),
+  // and the comparator only reads the map: resolving each chain inside the
+  // comparator with a linear parent lookup was O(n^2 log n) and froze the
+  // tab on a few thousand threaded comments.
+  const threadRootTs = resolveThreadRootTimestamps(sortedAnnotations);
   const timelineEntries = [
-    ...threadedAnnotations.map(({ annotation, isReply }) => ({ kind: 'plan' as const, ts: annotation.createdA, annotation, isReply })),
-    ...sortedCodeAnnotations.map(annotation => ({ kind: 'code' as const, ts: annotation.createdAt, annotation, isReply: false })),
+    ...threadedAnnotations.map(({ annotation, isReply }) => ({ kind: 'plan' as const, ts: annotation.createdA, threadTs: threadRootTs.get(annotation.id) ?? annotation.createdA, annotation, isReply })),
+    ...sortedCodeAnnotations.map(annotation => ({ kind: 'code' as const, ts: annotation.createdAt, threadTs: annotation.createdAt, annotation, isReply: false })),
   ].sort((a, b) => {
-    const ta = a.kind === 'plan' ? threadTs(a.annotation, sortedAnnotations) : a.ts;
-    const tb = b.kind === 'plan' ? threadTs(b.annotation, sortedAnnotations) : b.ts;
-    if (ta !== tb) return ta - tb;
+    if (a.threadTs !== b.threadTs) return a.threadTs - b.threadTs;
     return a.ts - b.ts;
   });
   const totalCount = annotations.length + codeAnnotations.length + (editorAnnotations?.length ?? 0);

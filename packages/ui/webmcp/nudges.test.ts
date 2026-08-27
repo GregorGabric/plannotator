@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { AnnotationChangeTracker, BROWSER_AGENT_SOURCE } from './changes';
-import { buildNudges, type NudgeSnapshot } from './nudges';
+import { MAX_NUDGE_IDS, buildNudges, type NudgeSnapshot } from './nudges';
 import type { NudgeCode } from './toolset';
 
 const toolName = (bare: string) => `plannotator.${bare}`;
@@ -115,6 +115,33 @@ describe('buildNudges', () => {
   test('truncated carries the continuation call with the original section args', () => {
     const nudges = buildNudges(quiet({ truncated: { nextOffset: 16000, args: { section: 'goal' } } }), new AnnotationChangeTracker(), toolName);
     expect(nudges[0]?.action).toEqual({ tool: 'plannotator.read_document', args: { section: 'goal', offset: 16000 } });
+  });
+
+  // A 10,000-annotation burst produced an 89 KB annotations_new nudge: the
+  // id list had no cap. The first MAX_NUDGE_IDS are listed and the message
+  // says how many more there are.
+  test('a burst of new or removed comments lists at most MAX_NUDGE_IDS ids and says how many more', () => {
+    const tracker = new AnnotationChangeTracker();
+    const burst = Array.from({ length: MAX_NUDGE_IDS + 250 }, (_, i) => ({ id: `x-${i}`, text: 't' }));
+    tracker.observe(burst);
+    const fresh = buildNudges(quiet({ annotations: burst, annotationCount: burst.length }), tracker, toolName)
+      .find((n) => n.code === 'annotations_new');
+    expect(fresh?.ids?.length).toBe(MAX_NUDGE_IDS);
+    expect(fresh?.ids?.[0]).toBe('x-0');
+    expect(fresh?.message).toContain('250 more');
+
+    tracker.observe([]);
+    const removed = buildNudges(quiet(), tracker, toolName).find((n) => n.code === 'annotations_removed');
+    expect(removed?.ids?.length).toBe(MAX_NUDGE_IDS);
+    expect(removed?.message).toContain('250 more');
+
+    // Under the cap nothing changes: every id, no suffix.
+    const small = new AnnotationChangeTracker();
+    small.observe([{ id: 'a', text: 't' }, { id: 'b', text: 't' }]);
+    const few = buildNudges(quiet({ annotations: [{ id: 'a' }, { id: 'b' }], annotationCount: 2 }), small, toolName)
+      .find((n) => n.code === 'annotations_new');
+    expect(few?.ids).toEqual(['a', 'b']);
+    expect(few?.message).not.toContain('more');
   });
 
   test('session_decided replaces pending_unsent once the human has decided', () => {

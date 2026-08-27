@@ -57,6 +57,15 @@ export function hashAnnotation(annotation: TrackedAnnotation): string {
 
 const CURSOR_PREFIX = 'w:';
 
+/**
+ * Tombstones kept per tracker. A removal past this many is forgotten oldest
+ * first (FIFO by seq), together with the agent-ownership records of the
+ * forgotten id, so a create/delete loop cannot grow the tracker for the
+ * life of the tab. A tombstone older than 2,000 later removals is one no
+ * `since` in practice still asks about.
+ */
+export const MAX_TOMBSTONES = 2000;
+
 export class AnnotationChangeTracker {
   private readonly entries = new Map<string, ChangeEntry>();
   private readonly tombstones = new Map<string, Tombstone>();
@@ -151,10 +160,25 @@ export class AnnotationChangeTracker {
       this.tombstones.set(id, tombstone);
       delta.removed.push(tombstone);
     }
+    this.pruneTombstones();
     // A re-added id is a fresh record: forget any agent-removal claim on it.
     for (const id of seen) this.agentRemoved.delete(id);
     if (touched) this.lastActivity = this.now();
     return delta;
+  }
+
+  /** Bounded eviction (MAX_TOMBSTONES): the oldest tombstones go, and with
+   *  them the ownership and agent-removal records that only mattered while
+   *  the id could still be asked about. Live entries keep theirs. */
+  private pruneTombstones(): void {
+    while (this.tombstones.size > MAX_TOMBSTONES) {
+      const oldest = this.tombstones.keys().next().value;
+      if (oldest === undefined) break;
+      this.tombstones.delete(oldest);
+      this.ownHashes.delete(oldest);
+      this.ownSeqs.delete(oldest);
+      this.agentRemoved.delete(oldest);
+    }
   }
 
   seqOf(id: string): number | undefined {

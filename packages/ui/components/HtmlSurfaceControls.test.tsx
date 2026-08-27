@@ -66,11 +66,29 @@ describe.if(hasDom)('HtmlSurfaceControls', () => {
     expect(refresh(readOnly)).toBeNull();
     expect(eye(readOnly)).not.toBeNull();
 
+    // A host without the tools toggle still gets the refresh it asked for:
+    // the documented contract is canRefresh + onRefresh, not the eye.
     act(() => root?.unmount());
     const noTools = render({ onToggleTools: undefined });
     expect(eye(noTools)).toBeNull();
-    expect(refresh(noTools)).toBeNull();
+    expect(refresh(noTools)).not.toBeNull();
     expect(pen(noTools)).not.toBeNull();
+
+    act(() => root?.unmount());
+    const refreshOnly = render({ onToggleTools: undefined, onToggleArmed: undefined });
+    expect(refreshOnly.querySelectorAll('button').length).toBe(1);
+    expect(refresh(refreshOnly)).not.toBeNull();
+
+    act(() => root?.unmount());
+    const nothing = render({ onToggleTools: undefined, onToggleArmed: undefined, canRefresh: false });
+    expect(nothing.childElementCount).toBe(0);
+  });
+
+  test('the refresh fires its handler without the eye present', () => {
+    let refreshes = 0;
+    const el = render({ onToggleTools: undefined, onRefresh: () => { refreshes += 1; } });
+    act(() => refresh(el)!.click());
+    expect(refreshes).toBe(1);
   });
 
   test('compact renders nothing', () => {

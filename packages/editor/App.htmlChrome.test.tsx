@@ -114,6 +114,44 @@ const annotateFetch: typeof fetch = async (input) => {
   return Response.json({});
 };
 
+// A session whose file has a saved previous version: /api/plan carries the
+// rendered diff, and the root's /api/doc read (what Refresh performs) carries
+// the diff recomputed against the bytes just read.
+const DIFF_HTML = "<h1>Rendered <ins>page</ins></h1><p>Body copy.</p>";
+const REFRESHED_HTML = "<h1>Rendered page</h1><p>Body copy, edited.</p>";
+const REFRESHED_DIFF_HTML = "<h1>Rendered page</h1><p>Body copy<ins>, edited</ins>.</p>";
+const versionedPlan = {
+  ...htmlAnnotatePlan,
+  diffHtml: DIFF_HTML,
+  previousPlan: "<h1>Rendered</h1><p>Body copy.</p>",
+  versionInfo: { version: 2, totalVersions: 2, project: "test" },
+};
+const versionedFetch: typeof fetch = async (input) => {
+  const rawUrl = input instanceof Request ? input.url : String(input);
+  const url = new URL(rawUrl, "http://localhost");
+  if (url.pathname === "/api/plan") return Response.json(versionedPlan);
+  if (url.pathname === "/api/doc" && url.searchParams.get("path") === htmlAnnotatePlan.filePath) {
+    return Response.json({
+      rawHtml: REFRESHED_HTML,
+      renderAs: "html",
+      filepath: htmlAnnotatePlan.filePath,
+      diffHtml: REFRESHED_DIFF_HTML,
+      previousPlan: versionedPlan.previousPlan,
+      versionInfo: versionedPlan.versionInfo,
+    });
+  }
+  return annotateFetch(input);
+};
+
+function diffToggle(): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll("button"))
+    .find((button) => /changes vs previous version/.test(button.title));
+}
+
+function refreshButton(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-html-refresh]");
+}
+
 function findButtonByText(label: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll("button"))
     .find((button) => button.textContent?.trim() === label);
@@ -142,8 +180,8 @@ async function settle(): Promise<void> {
   });
 }
 
-async function mountHtmlAnnotate(): Promise<void> {
-  globalThis.fetch = annotateFetch;
+async function mountHtmlAnnotate(fetchImpl: typeof fetch = annotateFetch): Promise<void> {
+  globalThis.fetch = fetchImpl;
   // SAFETY: the App only uses EventSource's constructor, handlers, and close;
   // this test double implements those browser-facing members without I/O.
   globalThis.EventSource = SilentEventSource as unknown as typeof EventSource;
@@ -165,8 +203,8 @@ function armedRing(): HTMLElement | null {
 
 /** Compact mounts wait on the armed ring: neither the pen nor the eye toggle
  * exists on the compact touch shell (that absence is what these tests guard). */
-async function mountCompactHtmlAnnotate(): Promise<void> {
-  globalThis.fetch = annotateFetch;
+async function mountCompactHtmlAnnotate(fetchImpl: typeof fetch = annotateFetch): Promise<void> {
+  globalThis.fetch = fetchImpl;
   // SAFETY: the App only uses EventSource's constructor, handlers, and close.
   globalThis.EventSource = SilentEventSource as unknown as typeof EventSource;
   host = document.createElement("div");
@@ -313,6 +351,28 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     expect(armedRing()).not.toBeNull();
   });
 
+  test("compact touch layout: Refresh from disk is offered through the Options menu (the header refresh is absent)", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    window.matchMedia = coarseMatchMedia as typeof window.matchMedia;
+    await mountCompactHtmlAnnotate(versionedFetch);
+
+    // The desktop-only header refresh is not rendered on compact, so the
+    // menu action is the only way to re-read the file.
+    expect(refreshButton()).toBeNull();
+
+    await openOptionsMenu();
+    const refresh = findMenuItem("Refresh from disk");
+    if (!refresh) throw new Error('compact menu is missing the "Refresh from disk" action');
+    expect(refresh.disabled).toBe(false);
+    await act(async () => refresh.click());
+    for (let attempt = 0; attempt < 20 && !document.querySelector('iframe[srcdoc*="edited"]'); attempt += 1) {
+      await settle();
+    }
+    // The refreshed bytes reached the viewer.
+    expect(document.querySelector<HTMLIFrameElement>("iframe[srcdoc]")?.getAttribute("srcdoc")).toContain("Body copy, edited.");
+  });
+
   test("the restore commit never writes stale pre-restore values to the cookie", async () => {
     // The chrome writer runs in the same commit as the restore effect, before
     // the restored state has landed. If it saved there, a returning user's
@@ -381,6 +441,115 @@ describe.if(hasDom)("HTML annotate chrome (tools toggle + pen toggle)", () => {
     // Open sidebar renders the full tab strip (Contents label), and the
     // collapsed flags are gone.
     expect(findButtonByText("Contents")).not.toBeUndefined();
+  });
+
+  test("Refresh keeps the version-diff toggle available (the server recomputes the diff for the root document)", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    await mountHtmlAnnotate(versionedFetch);
+    await settle();
+
+    // The toggle is offered on load, in normal (non-diff) mode.
+    expect(diffToggle()).not.toBeUndefined();
+    expect(diffToggle()!.title).toBe("Show changes vs previous version");
+
+    // Enter the diff view, then refresh: the view returns to normal mode and
+    // the toggle is still there (it used to disappear for the session).
+    await act(async () => diffToggle()!.click());
+    expect(diffToggle()!.title).toBe("Hide changes vs previous version");
+
+    const refresh = refreshButton();
+    if (!refresh) throw new Error("refresh button missing");
+    await act(async () => refresh.click());
+    for (let attempt = 0; attempt < 20 && refreshButton()?.getAttribute("aria-disabled") !== "false"; attempt += 1) {
+      await settle();
+    }
+
+    expect(diffToggle()).not.toBeUndefined();
+    expect(diffToggle()!.title).toBe("Show changes vs previous version");
+    // And the recomputed diff is what a second toggle renders.
+    await act(async () => diffToggle()!.click());
+    await settle();
+    const frame = document.querySelector<HTMLIFrameElement>("iframe[srcdoc]");
+    expect(frame?.getAttribute("srcdoc")).toContain("<ins>, edited</ins>");
+  });
+
+  test("an Unanchored chip from one refresh clears when the next refresh's restore report is empty", async () => {
+    // The bridge answers the parent's post-restore report request with the
+    // complete set, empty included (pinned in htmlPinpointProtocol.test);
+    // the App replaces its chip set with each report, so a chip from
+    // refresh 1 must not survive a refresh 2 on which everything anchors.
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    const draftedFetch: typeof fetch = async (input) => {
+      const rawUrl = input instanceof Request ? input.url : String(input);
+      const url = new URL(rawUrl, "http://localhost");
+      if (url.pathname === "/api/draft" && (!(input instanceof Request) || input.method === "GET")) {
+        return Response.json({
+          annotations: [{
+            id: "X",
+            blockId: "",
+            startOffset: 0,
+            endOffset: 0,
+            type: "COMMENT",
+            text: "pinned note",
+            originalText: "Body copy.",
+            createdA: 1,
+            htmlAnchor: { selector: "p", tagName: "p", text: "Body copy." },
+          }],
+          codeAnnotations: [],
+          globalAttachments: [],
+        });
+      }
+      return versionedFetch(input);
+    };
+    await mountHtmlAnnotate(draftedFetch);
+    await settle();
+    // The draft arrives behind the "Draft Recovered" dialog; restore it.
+    for (let attempt = 0; attempt < 20 && !findButtonByText("Restore"); attempt += 1) {
+      await settle();
+    }
+    const restore = findButtonByText("Restore");
+    if (!restore) throw new Error("draft restore dialog missing");
+    await act(async () => restore.click());
+    await settle();
+    // The chip lives on the panel card; the HTML surface opens with the
+    // panel collapsed, so open it.
+    const showPanel = document.querySelector<HTMLButtonElement>('button[title="Show annotations"]');
+    if (showPanel) await act(async () => showPanel.click());
+    await settle();
+    expect(document.querySelector('[data-annotation-id="X"]')).not.toBeNull();
+    const chip = () => document.querySelector('[data-annotation-unanchored]');
+    const frame = () => document.querySelector<HTMLIFrameElement>("iframe[srcdoc]");
+    const report = async (ids: string[]) => {
+      const iframe = frame();
+      if (!iframe?.contentWindow) throw new Error("HTML iframe missing");
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          source: iframe.contentWindow,
+          data: { type: "plannotator-bridge-unanchored", ids },
+        }));
+      });
+    };
+    const refresh = async () => {
+      const button = refreshButton();
+      if (!button) throw new Error("refresh button missing");
+      await act(async () => button.click());
+      for (let attempt = 0; attempt < 20 && refreshButton()?.getAttribute("aria-disabled") !== "false"; attempt += 1) {
+        await settle();
+      }
+    };
+    expect(chip()).toBeNull();
+
+    // Refresh 1: the remounted viewer's bridge reports X unanchored.
+    await refresh();
+    await report(["X"]);
+    expect(chip()).not.toBeNull();
+
+    // Refresh 2: the page anchors everything; the report is the empty set.
+    await refresh();
+    await report([]);
+    expect(chip()).toBeNull();
   });
 
   test("the pen toggle starts ARMED (aria-pressed) on a static HTML session and click flips it to Interact", async () => {

@@ -154,6 +154,8 @@ export const NUDGE_USER_MAX_CHARS = 280;
 export const MAX_COMMENTS_PER_CALL = 20;
 export const MAX_REMOVALS_PER_CALL = 50;
 export const MAX_OTHER_DOCUMENTS = 10;
+/** requestIds remembered for add_comments idempotency (oldest evicted first). */
+export const MAX_REMEMBERED_REQUESTS = 500;
 
 // ---------------------------------------------------------------------------
 // Persistent per-session state (survives catalog rebuilds)
@@ -164,8 +166,24 @@ export class DocumentToolState {
   readonly siblings: ChangeTrackerSet;
   /** Per-sibling read watermark. */
   readonly siblingRead = new Map<string, number>();
-  /** requestId -> what it created (idempotency). */
+  /** requestId -> what it created (idempotency). Bounded: see rememberRequest. */
   readonly requests = new Map<string, { id: string; path: string | null; anchoredBy: AnchoredBy }>();
+
+  /**
+   * Record a requestId, forgetting the oldest past MAX_REMEMBERED_REQUESTS
+   * (FIFO). Idempotency only has to hold across a retry of a recent call, so
+   * a bounded window is the whole contract; an unbounded map grew with every
+   * add_comments call for the life of the tab.
+   */
+  rememberRequest(rid: string, created: { id: string; path: string | null; anchoredBy: AnchoredBy }): void {
+    this.requests.delete(rid);
+    this.requests.set(rid, created);
+    while (this.requests.size > MAX_REMEMBERED_REQUESTS) {
+      const oldest = this.requests.keys().next().value;
+      if (oldest === undefined) break;
+      this.requests.delete(oldest);
+    }
+  }
   lastPageUrl: string | null = null;
   lastOpenPath: string | null = null;
   responses = 0;
@@ -636,7 +654,7 @@ export function buildDocumentTools(adapter: DocumentToolAdapter, state: Document
         // list) so the returned view carries the new seq and the response's
         // nudges reflect the mutation.
         syncTrackers(adapter, state);
-        if (rid) state.requests.set(rid, { id: annotation.id, path, anchoredBy });
+        if (rid) state.rememberRequest(rid, { id: annotation.id, path, anchoredBy });
         created += 1;
         const all = [...snapshot.annotations, annotation];
         const result: AddCommentResult = {

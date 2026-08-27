@@ -9,6 +9,7 @@
     "./guide": "./guide.ts",
     "./guide-format": "./guide-format.ts",
     "./annotatable": "./annotatable.ts",
+    "./annotation-threads": "./annotation-threads.ts",
     "./agent-jobs": "./agent-jobs.ts",
     "./agent-terminal": "./agent-terminal.ts",
     "./browser-paths": "./browser-paths.ts",

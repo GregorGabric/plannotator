@@ -15,10 +15,10 @@
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "os";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
 import { liveAppDraftIdentity, runGuardedShutdown, startAnnotateServer } from "./annotate";
 import { getServerConfig, loadConfig } from "./config";
 import { deriveAnnotateHistorySlug } from "@plannotator/shared/annotate-history";
@@ -278,9 +278,12 @@ describe("annotate server: local rendered-HTML root freshness", () => {
   });
 
   // A tab reload after an agent edit must show the edited page (the draft
-  // annotations were placed on it), and must not pair it with a version diff
-  // computed for the startup snapshot.
-  test("/api/plan serves the root document's current bytes and drops the startup version diff once they differ", async () => {
+  // annotations were placed on it) AND keep the version diff: the saved
+  // baseline is still the previous version, so the diff is recomputed
+  // against the served bytes rather than dropped (a reload used to lose the
+  // "Show changes" toggle for the rest of the session). Reads never write
+  // history.
+  test("/api/plan serves the root document's current bytes and recomputes the version diff against them", async () => {
     const pagePath = join(freshDocDir("plan"), "page.html");
     const project = uniqueProject("plan");
     type PlanPayload = {
@@ -325,10 +328,35 @@ describe("annotate server: local rendered-HTML root freshness", () => {
       const reloaded = await plan();
       expect(reloaded.rawHtml).toContain("V3");
       expect(reloaded.rawHtml).not.toContain("V2");
-      expect(reloaded.previousPlan).toBeUndefined();
-      expect(reloaded.versionInfo).toBeUndefined();
-      expect(reloaded.diffCurrent).toBeUndefined();
-      expect(reloaded.diffHtml).toBeUndefined();
+      // The baseline still names the saved previous version...
+      expect(reloaded.previousPlan).toBe(page("V1"));
+      expect(reloaded.versionInfo?.version).toBe(2);
+      // ...and the diff describes V1 -> V3, the page actually on screen.
+      expect(reloaded.diffCurrent).toBe(page("V3"));
+      expect(reloaded.diffHtml).toContain("<ins");
+      expect(reloaded.diffHtml).toContain("V3");
+      expect(reloaded.diffHtml).not.toContain("V2");
+
+      // The in-app Refresh reads the root through /api/doc: the same
+      // recomputed diff rides along for the ROOT document only.
+      const refreshed = (await (await fetch(
+        `${server.url}/api/doc?path=${encodeURIComponent(pagePath)}`,
+      )).json()) as PlanPayload & { renderAs?: string };
+      expect(refreshed.renderAs).toBe("html");
+      expect(refreshed.rawHtml).toContain("V3");
+      expect(refreshed.previousPlan).toBe(page("V1"));
+      expect(refreshed.versionInfo?.version).toBe(2);
+      expect(refreshed.diffHtml).toBe(reloaded.diffHtml);
+
+      // A sibling document served through /api/doc carries no version fields.
+      const siblingPath = join(dirname(pagePath), "sibling.html");
+      writeFileSync(siblingPath, page("SIBLING"), "utf-8");
+      const sibling = (await (await fetch(
+        `${server.url}/api/doc?path=${encodeURIComponent(siblingPath)}`,
+      )).json()) as PlanPayload;
+      expect(sibling.rawHtml).toContain("SIBLING");
+      expect(sibling.previousPlan).toBeUndefined();
+      expect(sibling.diffHtml).toBeUndefined();
 
       // The saved history is untouched by reads: still exactly the two versions.
       const versions = (await (await fetch(`${server.url}/api/plan/versions`)).json()) as { versions: unknown[] };
@@ -340,6 +368,98 @@ describe("annotate server: local rendered-HTML root freshness", () => {
       expect(fallback.previousPlan).toBe(page("V1"));
       expect(fallback.diffHtml).toBeDefined();
     } finally {
+      server.stop();
+    }
+  });
+
+  // A root that exists but cannot be read is the missing-file fallback: the
+  // startup snapshot, with its version diff, and the share endpoint agrees.
+  // On Bun, Bun.file(dir).exists() is false, so a path replaced by a
+  // directory already took the missing path (the case guards the Pi mirror,
+  // where existsSync is true and the read throws); the chmod 000 case below
+  // is the one that made the Bun handler throw and answer 500.
+  async function seedTwoVersions(label: string): Promise<{ pagePath: string; project: string }> {
+    const pagePath = join(freshDocDir(label), "page.html");
+    const project = uniqueProject(label);
+    writeFileSync(pagePath, page("V1"), "utf-8");
+    const seed = await startAnnotateServer({
+      markdown: "",
+      filePath: pagePath,
+      htmlContent: MINIMAL_HTML,
+      rawHtml: page("V1"),
+      renderHtml: true,
+      project,
+    });
+    seed.stop();
+    writeFileSync(pagePath, page("V2"), "utf-8");
+    return { pagePath, project };
+  }
+
+  type FallbackPayload = { rawHtml?: string; previousPlan?: string | null; versionInfo?: { version: number }; diffHtml?: string };
+
+  test("/api/plan falls back to the startup snapshot (with its version diff) when the root path becomes a directory", async () => {
+    const { pagePath, project } = await seedTwoVersions("dir");
+    const server = await startAnnotateServer({
+      markdown: "",
+      filePath: pagePath,
+      htmlContent: MINIMAL_HTML,
+      rawHtml: page("V2"),
+      renderHtml: true,
+      project,
+    });
+    try {
+      unlinkSync(pagePath);
+      mkdirSync(pagePath);
+      const res = await fetch(`${server.url}/api/plan`);
+      expect(res.status).toBe(200);
+      const fallback = (await res.json()) as FallbackPayload;
+      expect(fallback.rawHtml).toContain("V2");
+      expect(fallback.previousPlan).toBe(page("V1"));
+      expect(fallback.versionInfo?.version).toBe(2);
+      expect(fallback.diffHtml).toBeDefined();
+
+      const share = await fetch(`${server.url}/api/share-html`);
+      expect(share.status).toBe(200);
+      expect(((await share.json()) as { shareHtml: string }).shareHtml).toContain("V2");
+    } finally {
+      server.stop();
+    }
+  });
+
+  // chmod 000 is not a restriction for root, so the check is skipped there.
+  const canRevokeRead = process.platform !== "win32" && typeof process.getuid === "function" && process.getuid() !== 0;
+  test.skipIf(!canRevokeRead)("/api/plan falls back to the startup snapshot when the root file is unreadable", async () => {
+    const { pagePath, project } = await seedTwoVersions("perm");
+    const server = await startAnnotateServer({
+      markdown: "",
+      filePath: pagePath,
+      htmlContent: MINIMAL_HTML,
+      rawHtml: page("V2"),
+      renderHtml: true,
+      project,
+    });
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    try {
+      writeFileSync(pagePath, page("V3"), "utf-8");
+      chmodSync(pagePath, 0o000);
+      const res = await fetch(`${server.url}/api/plan`);
+      expect(res.status).toBe(200);
+      const fallback = (await res.json()) as FallbackPayload;
+      expect(fallback.rawHtml).toContain("V2");
+      expect(fallback.rawHtml).not.toContain("V3");
+      expect(fallback.previousPlan).toBe(page("V1"));
+      expect(fallback.diffHtml).toBeDefined();
+      // The fallback is silent to the reviewer, so the reason is logged once
+      // per process (path and error), not once per read.
+      await fetch(`${server.url}/api/plan`);
+      const rootWarnings = warnings.filter((w) => w.includes("could not read the HTML root"));
+      expect(rootWarnings).toHaveLength(1);
+      expect(rootWarnings[0]).toContain(pagePath);
+    } finally {
+      console.warn = originalWarn;
+      chmodSync(pagePath, 0o644);
       server.stop();
     }
   });

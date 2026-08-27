@@ -405,6 +405,16 @@ export async function startAnnotateServer(
     tailnetPublished: options.tailnetPublished === true,
   });
 
+  // The fallback is silent to the reviewer, so the reason is logged once per
+  // process: a genuine bug in the read must not hide behind the snapshot.
+  let rootHtmlUnreadableWarned = false;
+  const warnRootHtmlUnreadable = (path: string, err: unknown) => {
+    if (rootHtmlUnreadableWarned) return;
+    rootHtmlUnreadableWarned = true;
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[plannotator] could not read the HTML root ${path}; serving the startup snapshot instead: ${message}`);
+  };
+
   // A local rendered-HTML root is served from its CURRENT bytes, not the
   // startup snapshot: the reviewer can Refresh in-app or reload the tab after
   // an agent edits the file, and both /api/plan and /api/share-html must then
@@ -414,14 +424,42 @@ export async function startAnnotateServer(
     renderHtml && rawHtml && !/^https?:\/\//i.test(filePath) ? resolvePath(filePath) : null;
   type RootHtmlRead =
     | { kind: "current"; html: string }
-    | { kind: "snapshot"; reason: "missing" | "too-large" };
+    | { kind: "snapshot"; reason: "missing" | "too-large" | "unreadable" };
   async function readRootHtml(): Promise<RootHtmlRead | null> {
     if (!rootHtmlSourcePath) return null;
-    const file = Bun.file(rootHtmlSourcePath);
-    if (!(await file.exists())) return { kind: "snapshot", reason: "missing" };
-    if (file.size > MAX_ANNOTATABLE_FILE_BYTES) return { kind: "snapshot", reason: "too-large" };
-    return { kind: "current", html: await file.text() };
+    // A present-but-unreadable root (permissions revoked, the path replaced
+    // by a directory) is the same fallback as a missing one: the startup
+    // snapshot, with its version diff. The read must never throw out of a
+    // request handler, which would turn a tab reload into a 500.
+    try {
+      const file = Bun.file(rootHtmlSourcePath);
+      if (!(await file.exists())) return { kind: "snapshot", reason: "missing" };
+      if (file.size > MAX_ANNOTATABLE_FILE_BYTES) return { kind: "snapshot", reason: "too-large" };
+      return { kind: "current", html: await file.text() };
+    } catch (err) {
+      warnRootHtmlUnreadable(rootHtmlSourcePath, err);
+      return { kind: "snapshot", reason: "unreadable" };
+    }
   }
+
+  // The in-app Refresh re-reads the root through /api/doc. For the ROOT
+  // document only (linked docs are unchanged), the response also carries the
+  // version-diff fields /api/plan serves, recomputed against the bytes just
+  // read, so a refresh keeps the "Show changes" toggle exactly like a reload.
+  const rootHistory = annotateHistory;
+  const rootHtmlVersionDiff =
+    rootHtmlSourcePath && rootHistory
+      ? {
+          path: rootHtmlSourcePath,
+          compute: (currentHtml: string) => ({
+            previousPlan: rootHistory.previousPlan,
+            versionInfo: rootHistory.versionInfo,
+            ...(rootHistory.previousPlan
+              ? { diffHtml: htmlAssets.rewriteHtml(htmlDiff(rootHistory.previousPlan, currentHtml), filePath) }
+              : {}),
+          }),
+        }
+      : undefined;
 
   async function loadShareHtml(pathParam: string | null): Promise<Response> {
     if (/^https?:\/\//i.test(filePath)) {
@@ -638,21 +676,23 @@ export async function startAnnotateServer(
             // readRootHtml); every other session serves what it started with.
             const rootRead = await readRootHtml();
             const servedHtml = rootRead?.kind === "current" ? rootRead.html : rawHtml;
-            // The version-diff fields (previousPlan/versionInfo/diffCurrent and
-            // the rendered diffHtml) describe the STARTUP snapshot, which is
-            // the version history saved. Once the served bytes differ from it
-            // they are omitted rather than recomputed: the current bytes are
-            // not a saved version, so version metadata for them would be
-            // wrong, and re-snapshotting would turn a read into a history
-            // write. This mirrors what the client does after an in-app
-            // Refresh, so refresh and reload converge on the same state.
+            // The version-diff fields describe the SAVED baseline: previousPlan
+            // and versionInfo name the version history saved at startup, which
+            // stays the correct "previous version" however often the file is
+            // edited afterwards. When the served bytes differ from the startup
+            // snapshot the diff is RECOMPUTED against them (htmlDiff is pure,
+            // and a GET never writes history), so a tab reload after an agent
+            // edit keeps the "Show changes" toggle instead of losing it for
+            // the rest of the session. The in-app Refresh reads the same
+            // fields off /api/doc (rootHtmlVersionDiff), so refresh and
+            // reload converge on the same state.
             const servedIsSnapshot = servedHtml === rawHtml;
             const displayRawHtml = renderHtml && servedHtml ? htmlAssets.rewriteHtml(servedHtml, filePath) : undefined;
             // For HTML, render the version diff as the real page with inline
             // <ins>/<del> highlights (tag-aware htmlDiff), asset-rewritten the
             // same way as the live page so it renders identically.
             const diffHtml =
-              renderHtml && servedHtml && servedIsSnapshot && annotateHistory?.previousPlan
+              renderHtml && servedHtml && annotateHistory?.previousPlan
                 ? htmlAssets.rewriteHtml(htmlDiff(annotateHistory.previousPlan, servedHtml), filePath)
                 : undefined;
             const primarySource = getPrimarySource();
@@ -673,11 +713,11 @@ export async function startAnnotateServer(
               ...(displayRawHtml ? { rawHtml: displayRawHtml } : {}),
               ...(diffHtml ? { diffHtml } : {}),
               convertHtml,
-              ...(annotateHistory && servedIsSnapshot
+              ...(annotateHistory
                 ? {
                     previousPlan: annotateHistory.previousPlan,
                     versionInfo: annotateHistory.versionInfo,
-                    diffCurrent: annotateHistory.diffCurrent,
+                    diffCurrent: servedIsSnapshot || !servedHtml ? annotateHistory.diffCurrent : servedHtml,
                   }
                 : {}),
               sharingEnabled,
@@ -858,6 +898,7 @@ export async function startAnnotateServer(
                 mode === "annotate-folder" && annotateHistoryEnabled
                   ? { compute: computeFolderAnnotateHistory }
                   : undefined,
+              rootHtmlVersionDiff,
             });
           }
 

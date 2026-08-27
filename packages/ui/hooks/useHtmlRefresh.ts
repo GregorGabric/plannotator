@@ -1,15 +1,22 @@
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
+/**
+ * A successful snapshot. `Extra` lets a host carry document metadata read
+ * alongside the bytes (Plannotator: the root document's version diff) through
+ * to `onSnapshot`; the hook never reads anything but `rawHtml`.
+ */
+export type HtmlRefreshOkSnapshot<Extra extends object = object> = { status: 'ok'; rawHtml: string } & Extra;
+
 /** What a host's `fetchSnapshot` resolves to. */
-export type HtmlRefreshSnapshot =
-  | { status: 'ok'; rawHtml: string }
+export type HtmlRefreshSnapshot<Extra extends object = object> =
+  | HtmlRefreshOkSnapshot<Extra>
   | { status: 'missing' }
   | { status: 'unavailable' };
 
 /** The outcome of one `refresh()` call, for host notifications (toasts). */
 export type HtmlRefreshResult = 'refreshed' | 'missing' | 'unavailable';
 
-export interface UseHtmlRefreshOptions {
+export interface UseHtmlRefreshOptions<Extra extends object = object> {
   /** Whether refresh is offered at all. Default true. */
   enabled?: boolean;
   /**
@@ -22,9 +29,11 @@ export interface UseHtmlRefreshOptions {
   documentKey?: string | null;
   /** Fetch the current bytes of the document. Called with `documentKey`.
    *  A rejection is treated as `{ status: 'unavailable' }`. */
-  fetchSnapshot: (documentKey: string | null) => Promise<HtmlRefreshSnapshot>;
-  /** Apply the refreshed bytes (the host owns the viewer's `rawHtml`). */
-  onSnapshot: (rawHtml: string) => void;
+  fetchSnapshot: (documentKey: string | null) => Promise<HtmlRefreshSnapshot<Extra>>;
+  /** Apply the refreshed bytes (the host owns the viewer's `rawHtml`). The
+   *  whole successful snapshot is the second argument, for hosts whose
+   *  `fetchSnapshot` reads metadata alongside the bytes. */
+  onSnapshot: (rawHtml: string, snapshot: HtmlRefreshOkSnapshot<Extra>) => void;
   /**
    * Once per refresh: the ids the remounted viewer could not re-anchor,
    * possibly empty. Wire the viewer's `onUnanchoredChange` to the returned
@@ -57,14 +66,14 @@ export interface UseHtmlRefreshReturn {
  * restore acknowledgement is armed per reload generation and consumed by
  * the first viewer report for that generation.
  */
-export function useHtmlRefresh({
+export function useHtmlRefresh<Extra extends object = object>({
   enabled = true,
   documentKey,
   fetchSnapshot,
   onSnapshot,
   onUnanchored,
   onResult,
-}: UseHtmlRefreshOptions): UseHtmlRefreshReturn {
+}: UseHtmlRefreshOptions<Extra>): UseHtmlRefreshReturn {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const keyed = documentKey !== undefined;
@@ -98,7 +107,7 @@ export function useHtmlRefresh({
       // A rejecting fetch is an unavailable snapshot: the host hears it
       // through onResult like any other outcome, never as an unhandled
       // rejection out of refresh().
-      let result: HtmlRefreshSnapshot;
+      let result: HtmlRefreshSnapshot<Extra>;
       try {
         result = await fetchSnapshot(requestKey);
       } catch {
@@ -111,7 +120,7 @@ export function useHtmlRefresh({
         return;
       }
 
-      onSnapshot(result.rawHtml);
+      onSnapshot(result.rawHtml, result);
       const nextGeneration = reloadGenerationRef.current + 1;
       reloadGenerationRef.current = nextGeneration;
       // Armed until the remounted viewer's bridge reports its restore. The

@@ -145,7 +145,7 @@ import {
   usePlanDiffViewAutoExit,
 } from './hooks/usePlanDiffViewAutoExit';
 import { AppHeader } from './components/AppHeader';
-import { useHtmlRefresh } from './hooks/useHtmlRefresh';
+import { useHtmlRefresh, type HtmlRefreshedDocument } from './hooks/useHtmlRefresh';
 import { AgentNudgeBanner } from './components/AgentNudgeBanner';
 import { useDocumentWebMcp } from './webmcp/useDocumentWebMcp';
 import { useWebMcpActivity } from '@plannotator/ui/webmcp';
@@ -1200,15 +1200,22 @@ const App: React.FC = () => {
     setMarkdown, setAnnotations, setSelectedAnnotationId, setSubmitted,
   });
   const documentReadOnly = archive.archiveMode;
-  const applyRefreshedHtml = useCallback((nextRawHtml: string) => {
-    setRawHtml(nextRawHtml);
+  // A Refresh lands the bytes and, for the root document, the version diff
+  // the server recomputed against them (previousPlan/versionInfo still name
+  // the saved baseline). The view returns to normal mode with the "Show
+  // changes" toggle available whenever a diff came back; a refresh of a
+  // linked doc keeps the root's version fields untouched, as before.
+  const applyRefreshedHtml = useCallback((refreshed: HtmlRefreshedDocument) => {
+    setRawHtml(refreshed.rawHtml);
     setShareHtml('');
-    setHtmlDiffHtml(null);
     setIsPlanDiffActive(false);
-    if (!linkedDocHook.isActive) {
-      setPreviousPlan(null);
-      setVersionInfo(null);
+    if (linkedDocHook.isActive) {
+      setHtmlDiffHtml(null);
+      return;
     }
+    setHtmlDiffHtml(refreshed.diffHtml ?? null);
+    setPreviousPlan(refreshed.previousPlan ?? null);
+    setVersionInfo(refreshed.versionInfo ?? null);
   }, [linkedDocHook.isActive]);
   // Annotations a Refresh could no longer anchor: the panel shows an
   // "Unanchored" chip on them. Set from the refresh's restore report only,
@@ -4838,6 +4845,19 @@ const App: React.FC = () => {
                 ? 'Bring the annotation chrome back over the page'
                 : 'Remove all floating chrome from over the page',
               onSelect: () => setHtmlToolsHidden((v) => !v),
+            }]
+          : []),
+        // The desktop header's Refresh is header-only too; local HTML files
+        // (never URL or live-app sessions) get the same action here.
+        ...(isHtmlSurface && htmlRefresh.canRefresh
+          ? [{
+              id: 'refresh' as const,
+              label: 'Refresh from disk',
+              subtitle: htmlRefresh.isRefreshing
+                ? 'Refreshing the HTML file'
+                : 'Reload the HTML file and keep the annotations that still match',
+              onSelect: () => { void htmlRefresh.refresh(); },
+              disabled: htmlRefresh.isRefreshing,
             }]
           : []),
       ];
