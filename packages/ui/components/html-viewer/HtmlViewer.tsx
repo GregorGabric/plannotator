@@ -210,6 +210,15 @@ export interface HtmlViewerProps {
    *  sees them, and an id this viewer minted for a local comment that the
    *  host swapped out of `annotations` for its own id is not reported. */
   onUnanchoredChange?: (ids: string[]) => void;
+  /** Product cap on additional (shift-click) targets per comment, 0..16.
+   *  Enforced at the trust boundary, on submit and on restore, and carried
+   *  to the bridge so the in-page toggle stops at the same number. Default
+   *  16 (the package cap); absent leaves every message unchanged. */
+  maxAdditionalTargets?: number;
+  /** scrollIntoView behavior when a selected annotation is scrolled into
+   *  view inside the page. Default 'smooth'; pass 'auto' to carry the
+   *  parent's reduced-motion preference across the iframe boundary. */
+  scrollBehavior?: 'smooth' | 'auto';
   /** Accessible iframe title. */
   title?: string;
 }
@@ -251,6 +260,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       onAskAI,
       readOnly = false,
       onUnanchoredChange,
+      maxAdditionalTargets,
+      scrollBehavior,
       title = "HTML Plan Viewer",
     },
     ref,
@@ -409,6 +420,8 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       onPageChange,
       onBridgePointer: handleBridgePointer,
       onUnanchoredChange: handleBridgeUnanchored,
+      maxAdditionalTargets,
+      scrollBehavior,
     });
     createdIdsRef.current = hook.createdAnnotationIds;
 

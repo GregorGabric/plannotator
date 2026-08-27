@@ -673,6 +673,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
   async function mountViewer(
     onAdd: (ann: Annotation) => void,
     mode: 'selection' | 'quickLabel' = 'selection',
+    extraProps: { maxAdditionalTargets?: number } = {},
   ) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
     const HtmlViewer = htmlViewerModule.HtmlViewer;
@@ -683,6 +684,7 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     await act(async () => {
       root.render(
         <HtmlViewer
+          {...extraProps}
           rawHtml="<html><body><p>Pinpoint target</p></body></html>"
           annotations={[]}
           onAddAnnotation={onAdd}
@@ -880,6 +882,37 @@ describe.if(hasDom)('multi-target composer flow (chips, promotion, submit)', () 
     expect(added[0]!.htmlAdditionalTargets!.length).toBe(16);
   });
 
+  test('maxAdditionalTargets lowers the cap end to end: chips, the saved array, and the bridge arm', async () => {
+    // A host with a product cap of 3 must see the cap in the draft (chips
+    // stop growing), in the saved annotation, and in what the bridge is
+    // armed with, so the in-page toggle stops at the same number.
+    const added: Annotation[] = [];
+    const { post, postedToIframe } = await mountViewer((ann) => added.push(ann), 'selection', { maxAdditionalTargets: 3 });
+    await post(primarySelection());
+    expect(postedToIframe).toContainEqual({
+      type: 'plannotator-bridge-arm-multi-select',
+      key: 'ht-1',
+      max: 3,
+    });
+    for (let i = 0; i < 8; i++) {
+      await post(addedTarget(`host-cap-${i}`, `Target ${i}`));
+    }
+    expect(chips().length).toBe(4); // primary + 3
+
+    await typeComment('Host capped');
+    await save();
+    expect(added[0]!.htmlAdditionalTargets!.length).toBe(3);
+  });
+
+  test('without maxAdditionalTargets the arm message and the 16 cap are unchanged', async () => {
+    const added: Annotation[] = [];
+    const { post, postedToIframe } = await mountViewer((ann) => added.push(ann));
+    await post(primarySelection());
+    const arm = postedToIframe.find((m) => m.type === 'plannotator-bridge-arm-multi-select');
+    expect(arm).toEqual({ type: 'plannotator-bridge-arm-multi-select', key: 'ht-1' });
+    expect('max' in arm!).toBe(false);
+  });
+
   test('adds are ignored when no pinpoint draft is open (drag selections stay single-target)', async () => {
     const { post, postedToIframe } = await mountViewer(() => {});
     // Drag selection (no pinpoint flag): opens the toolbar, arms nothing.
@@ -1020,6 +1053,60 @@ describe.if(hasDom)('readOnly view-only contract', () => {
       htmlAnchor: { selector: 'p', tagName: 'p', text: 'Read-only target' },
     } as Annotation;
   }
+
+  test('scroll-to carries the host scrollBehavior only when one is passed', async () => {
+    // Reduced motion cannot be observed inside the sandbox, so the host
+    // passes it. Absent, the message must be exactly today's shape so the
+    // bridge keeps scrolling smoothly for hosts that never set it.
+    if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
+    const HtmlViewer = htmlViewerModule.HtmlViewer;
+    const mountWith = async (scrollBehavior?: 'smooth' | 'auto') => {
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = createRoot(host);
+      mountedRoots.push(root);
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml="<html><body><p>Read-only target</p></body></html>"
+            annotations={[committed('sel-1')]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId={null}
+            mode="selection"
+            inputMethod="pinpoint"
+            scrollBehavior={scrollBehavior}
+          />,
+        );
+      });
+      const iframe = host.querySelector<HTMLIFrameElement>('iframe');
+      if (!iframe?.contentWindow) throw new Error('HTML iframe missing');
+      const posted: Array<Record<string, unknown>> = [];
+      const realPost = iframe.contentWindow.postMessage.bind(iframe.contentWindow);
+      (iframe.contentWindow as unknown as { postMessage: (data: unknown) => void }).postMessage =
+        ((data: unknown, ...rest: unknown[]) => {
+          if (data && typeof data === 'object') posted.push(data as Record<string, unknown>);
+          return (realPost as (...args: unknown[]) => unknown)(data, ...rest);
+        }) as typeof iframe.contentWindow.postMessage;
+      await act(async () => {
+        root.render(
+          <HtmlViewer
+            rawHtml="<html><body><p>Read-only target</p></body></html>"
+            annotations={[committed('sel-1')]}
+            onAddAnnotation={() => {}}
+            onSelectAnnotation={() => {}}
+            selectedAnnotationId="sel-1"
+            mode="selection"
+            inputMethod="pinpoint"
+            scrollBehavior={scrollBehavior}
+          />,
+        );
+      });
+      return posted.filter((m) => m.type === 'plannotator-bridge-scroll-to');
+    };
+    expect(await mountWith(undefined)).toEqual([{ type: 'plannotator-bridge-scroll-to', id: 'sel-1' }]);
+    expect(await mountWith('auto')).toEqual([{ type: 'plannotator-bridge-scroll-to', id: 'sel-1', behavior: 'auto' }]);
+  });
 
   test('readOnly still restores markers and syncs export-matching numbers on ready', async () => {
     const { post, postedToIframe } = await mountReadOnly([committed('ro-1'), committed('ro-2')]);

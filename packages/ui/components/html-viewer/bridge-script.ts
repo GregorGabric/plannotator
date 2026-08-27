@@ -339,6 +339,17 @@ export const BRIDGE_SCRIPT = `(function() {
   var pendingMultiTargets = []; // { key, el, anchor, label, text, box }
   var multiTargetSeq = 0;
   var MAX_MULTI_TARGETS = 16;
+  // Per-draft cap on additional targets: the parent may lower it on
+  // arm-multi-select ({ max }) to its product cap so the toggle stops where
+  // the saved annotation would. Never above MAX_MULTI_TARGETS; reset with
+  // the arm on every draft.
+  var multiSelectMax = MAX_MULTI_TARGETS;
+  function clampMultiSelectMax(value) {
+    if (typeof value !== 'number' || !isFinite(value)) return MAX_MULTI_TARGETS;
+    var whole = Math.floor(value);
+    if (whole < 0) return 0;
+    return whole > MAX_MULTI_TARGETS ? MAX_MULTI_TARGETS : whole;
+  }
   // Live mode clamps the INPUT METHOD to pinpoint (click = element). Text
   // drag-selection is a separate, always-on channel — see the mouseup handler
   // — so the clamp only decides what a plain click does, never whether text
@@ -637,6 +648,10 @@ export const BRIDGE_SCRIPT = `(function() {
         && e.data.key === pendingPinKey
       ) {
         multiSelectArmed = true;
+        // Optional product cap for THIS draft; absent keeps the bridge's own.
+        multiSelectMax = e.data.max === undefined
+          ? MAX_MULTI_TARGETS
+          : clampMultiSelectMax(e.data.max);
       }
     }
 
@@ -655,8 +670,10 @@ export const BRIDGE_SCRIPT = `(function() {
       // Selecting an annotation scrolls its first resolved target into view
       // and flashes the overlay focus highlight over EVERY rect of EVERY
       // target — never a class write on page elements, and never only the
-      // first fragment of a multi-paragraph selection.
-      scrollToAnnotation(e.data.id);
+      // first fragment of a multi-paragraph selection. The optional
+      // behavior lets the parent pass its reduced-motion preference across
+      // the boundary; absent means smooth, as before.
+      scrollToAnnotation(e.data.id, e.data.behavior === 'auto' ? 'auto' : 'smooth');
     }
 
     else if (type === PREFIX + 'focus-mark') {
@@ -2495,7 +2512,7 @@ export const BRIDGE_SCRIPT = `(function() {
     }
   }
 
-  function scrollToAnnotation(id) {
+  function scrollToAnnotation(id, behavior) {
     var record = findAnnRecord(id);
     if (!record) return;
     beginDeadSearchPass(Infinity); // user-initiated one-shot: never budget-starved
@@ -2511,7 +2528,7 @@ export const BRIDGE_SCRIPT = `(function() {
       }
     }
     if (scrollEl) {
-      try { scrollEl.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (ex) {}
+      try { scrollEl.scrollIntoView({ behavior: behavior || 'smooth', block: 'center' }); } catch (ex) {}
     }
     focusAnnotationRecord(id, true);
   }
@@ -2693,6 +2710,7 @@ export const BRIDGE_SCRIPT = `(function() {
     pendingPinPoint = null;
     pendingPinViaPinpoint = false;
     multiSelectArmed = false;
+    multiSelectMax = MAX_MULTI_TARGETS;
     hidePinpointBox();
   }
 
@@ -2857,8 +2875,9 @@ export const BRIDGE_SCRIPT = `(function() {
         }
       }
     }
-    // Cap at the source: never grow the draft past the parent-side DTO cap.
-    if (pendingMultiTargets.length >= MAX_MULTI_TARGETS) return;
+    // Cap at the source: never grow the draft past the parent-side DTO cap
+    // (or the lower product cap the parent armed this draft with).
+    if (pendingMultiTargets.length >= multiSelectMax) return;
     var point = normalizePointInElement(el, clickPoint);
     if (anchor && point) anchor.point = point;
     var label = pinpointHoverLabel(el);
@@ -2961,6 +2980,7 @@ export const BRIDGE_SCRIPT = `(function() {
     // drafts (comment -> quick label) leaves a stale arm and the bridge
     // accumulates pins the saved annotation will not carry.
     multiSelectArmed = false;
+    multiSelectMax = MAX_MULTI_TARGETS;
     pendingPinEl = el;
     pendingPinAnchor = buildElementAnchor(el);
     pendingPinKey = makeTargetKey();

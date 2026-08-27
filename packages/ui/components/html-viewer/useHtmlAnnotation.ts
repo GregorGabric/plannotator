@@ -136,6 +136,20 @@ export interface UseHtmlAnnotationOptions {
    *  empty on recovery. Delivered in readOnly mode too: view-only surfaces
    *  are exactly where silently missing markers would go unnoticed. */
   onUnanchoredChange?: (ids: string[]) => void;
+  /** Product cap on additional (shift-click) targets per comment, 0..16.
+   *  Applied at the trust boundary, on submit, on restore, and carried to
+   *  the bridge on arm-multi-select so the in-page toggle stops at the
+   *  same number. Absent: the package's 16, and the arm message is unchanged. */
+  maxAdditionalTargets?: number;
+  /** scrollIntoView behavior for scroll-to (selecting an annotation).
+   *  Absent: smooth, as before; pass 'auto' to honor reduced motion. */
+  scrollBehavior?: 'smooth' | 'auto';
+}
+
+/** Clamp a host cap into the package's bound; anything unusable is the default. */
+export function resolveMaxAdditionalTargets(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return MAX_ADDITIONAL_TARGETS;
+  return Math.max(0, Math.min(MAX_ADDITIONAL_TARGETS, Math.floor(value)));
 }
 
 function postToIframe(
@@ -372,6 +386,8 @@ export function useHtmlAnnotation({
   onPageChange,
   onBridgePointer,
   onUnanchoredChange,
+  maxAdditionalTargets,
+  scrollBehavior,
 }: UseHtmlAnnotationOptions): Omit<
   UseAnnotationHighlighterReturn,
   "highlighterRef" | "highlightRange" | "highlightMathElement"
@@ -431,6 +447,12 @@ export function useHtmlAnnotation({
   liveRef.current = live ?? null;
   const onPageChangeRef = useRef(onPageChange);
   onPageChangeRef.current = onPageChange;
+  // The effective cap and whether the host set one: only an explicit cap
+  // rides on arm-multi-select, so an unconfigured viewer posts today's message.
+  const maxTargetsRef = useRef(resolveMaxAdditionalTargets(maxAdditionalTargets));
+  maxTargetsRef.current = resolveMaxAdditionalTargets(maxAdditionalTargets);
+  const hostCapRef = useRef(maxAdditionalTargets !== undefined);
+  hostCapRef.current = maxAdditionalTargets !== undefined;
 
   const anchorRef = useRef<HTMLDivElement | null>(null);
 
@@ -591,6 +613,7 @@ export function useHtmlAnnotation({
             post({
               type: `${PREFIX}arm-multi-select`,
               key: message.targetKey,
+              ...(hostCapRef.current ? { max: maxTargetsRef.current } : {}),
             });
           }
         } else {
@@ -610,7 +633,7 @@ export function useHtmlAnnotation({
         if (
           commentPopoverRef.current
           && targets.length > 0
-          && targets.length < 1 + MAX_ADDITIONAL_TARGETS
+          && targets.length < 1 + maxTargetsRef.current
           && !targets.some((t) => t.key === message.key)
         ) {
           setDraftTargets([
@@ -726,6 +749,9 @@ export function useHtmlAnnotation({
       post({
         type: `${PREFIX}scroll-to`,
         id: selectedAnnotationId,
+        // Only an explicit host preference rides along; the default message
+        // is unchanged and the bridge scrolls smoothly as before.
+        ...(scrollBehavior ? { behavior: scrollBehavior } : {}),
       });
     } else {
       post({
@@ -733,7 +759,7 @@ export function useHtmlAnnotation({
         id: null,
       });
     }
-  }, [selectedAnnotationId, post]);
+  }, [selectedAnnotationId, post, scrollBehavior]);
 
   const handleAnnotate = useCallback(
     (type: AnnotationType) => {
@@ -793,7 +819,7 @@ export function useHtmlAnnotation({
       const targets = draftTargetsRef.current;
       const additionalTargets: HtmlAnnotationTarget[] | undefined =
         targets.length > 1
-          ? targets.slice(1, 1 + MAX_ADDITIONAL_TARGETS).map((t) => ({
+          ? targets.slice(1, 1 + maxTargetsRef.current).map((t) => ({
               label: t.label,
               text: t.text,
               anchor: t.anchor ?? undefined,
@@ -968,7 +994,7 @@ export function useHtmlAnnotation({
         const additionalAnchors = (ann.htmlAdditionalTargets ?? [])
           .map((t) => t.anchor)
           .filter((a): a is HtmlElementAnchor => !!a)
-          .slice(0, MAX_ADDITIONAL_TARGETS);
+          .slice(0, maxTargetsRef.current);
         post({
           type: `${PREFIX}find-and-mark`,
           id: ann.id,

@@ -1911,6 +1911,105 @@ describe.if(hasDom)("bridge theme handler (DOM)", () => {
     document.body.replaceChildren();
   });
 
+  test("arm-multi-select { max } lowers the draft cap for THAT draft only; absent max keeps 16", async () => {
+    // A host with a smaller product cap arms the draft with it so the in-page
+    // shift-toggle stops where the saved annotation would, instead of letting
+    // pins accumulate that the host will later trim. The cap is per draft:
+    // the next draft armed without one is back at the package's 16.
+    const paragraphs: string[] = [];
+    for (let i = 0; i < 20; i++) paragraphs.push(`<p class="hcap-${i}">Host cap target ${i}</p>`);
+    document.body.innerHTML = `<div id="hcap-stage">${paragraphs.join("")}</div>`;
+    postBridge({ type: "plannotator-bridge-set-vim-mode", enabled: false });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "pinpoint" });
+    const first = await collectMessages(
+      ["plannotator-bridge-selection"],
+      () => clickAt(document.querySelector("p.hcap-0")!, 10, 10, false),
+    );
+    postBridge({
+      type: "plannotator-bridge-arm-multi-select",
+      key: String(first[0]!.targetKey),
+      max: 2,
+    });
+    const capped = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => {
+        for (let i = 1; i < 10; i++) clickAt(document.querySelector(`p.hcap-${i}`)!, 10 + i, 10, true);
+      },
+    );
+    expect(capped.length).toBe(2);
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+
+    // Next draft, armed without a max: the package cap applies again.
+    const second = await collectMessages(
+      ["plannotator-bridge-selection"],
+      () => clickAt(document.querySelector("p.hcap-0")!, 10, 10, false),
+    );
+    postBridge({
+      type: "plannotator-bridge-arm-multi-select",
+      key: String(second[0]!.targetKey),
+    });
+    const uncapped = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => {
+        for (let i = 1; i < 20; i++) clickAt(document.querySelector(`p.hcap-${i}`)!, 10 + i, 10, true);
+      },
+    );
+    expect(uncapped.length).toBe(16);
+
+    // A max above the package cap, or garbage, never raises it.
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+    const third = await collectMessages(
+      ["plannotator-bridge-selection"],
+      () => clickAt(document.querySelector("p.hcap-0")!, 10, 10, false),
+    );
+    postBridge({
+      type: "plannotator-bridge-arm-multi-select",
+      key: String(third[0]!.targetKey),
+      max: 999,
+    });
+    const clamped = await collectMessages(
+      ["plannotator-bridge-multi-target-added"],
+      () => {
+        for (let i = 1; i < 20; i++) clickAt(document.querySelector(`p.hcap-${i}`)!, 10 + i, 10, true);
+      },
+    );
+    expect(clamped.length).toBe(16);
+
+    postBridge({ type: "plannotator-bridge-cancel-selection" });
+    postBridge({ type: "plannotator-bridge-set-input-method", method: "drag" });
+    document.body.replaceChildren();
+  });
+
+  test("scroll-to honors an explicit behavior and stays smooth without one", async () => {
+    // Reduced motion is not observable across the iframe boundary, so the
+    // parent passes it as behavior: 'auto'. Absent, the scroll must stay
+    // smooth: hosts that never pass it see no change.
+    document.body.innerHTML = "<p class=\"scroll-target\">Scroll behavior target</p>";
+    postBridge({
+      type: "plannotator-bridge-find-and-mark",
+      id: "scroll-behavior",
+      originalText: "Scroll behavior target",
+      annotationType: "comment",
+    });
+    await flushOverlay();
+    const behaviors: Array<ScrollBehavior | undefined> = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element, arg?: boolean | ScrollIntoViewOptions) {
+      behaviors.push(typeof arg === "object" && arg ? arg.behavior : undefined);
+    };
+    try {
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "scroll-behavior" });
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "scroll-behavior", behavior: "auto" });
+      postBridge({ type: "plannotator-bridge-scroll-to", id: "scroll-behavior", behavior: "instant" });
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+    // Absent: smooth. 'auto': honored. Anything else: smooth (fail closed).
+    expect(behaviors).toEqual(["smooth", "auto", "smooth"]);
+    postBridge({ type: "plannotator-bridge-remove-mark", id: "scroll-behavior" });
+    document.body.replaceChildren();
+  });
+
   test("find-and-mark restores additional anchors as same-numbered pins, fail-closed", async () => {
     document.body.innerHTML = MULTI_MARKUP;
     postBridge({
