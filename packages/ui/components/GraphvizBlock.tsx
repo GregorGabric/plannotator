@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { instance } from '@viz-js/viz';
+import type { Viz } from '@viz-js/viz';
 import type { Block } from '../types';
 
 interface ViewBox {
@@ -14,10 +14,17 @@ const ZOOM_STEP = 0.25;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 8;
 
-let vizInstancePromise: ReturnType<typeof instance> | null = null;
+/**
+ * The Graphviz engine (about 1.2 MB of Emscripten JS) is imported inside the
+ * render effect, not statically, so a host that bundles by route only fetches
+ * it when a dot fence is on the page. WASM instantiation was already deferred
+ * to first render; in Plannotator's single-file builds the import is inlined
+ * and resolves in a microtask ahead of a render that was already asynchronous.
+ */
+let vizInstancePromise: Promise<Viz> | null = null;
 
-function getVizInstance() {
-  vizInstancePromise ??= instance();
+function getVizInstance(): Promise<Viz> {
+  vizInstancePromise ??= import('@viz-js/viz').then((m) => m.instance());
   return vizInstancePromise;
 }
 
