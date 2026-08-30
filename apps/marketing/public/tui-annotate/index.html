@@ -15,7 +15,8 @@
 <meta name="description" content="Annotate anything in your terminal and send it straight back to the agent. A Herdr plugin built on Plannotator TUI.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,500;0,600;0,700;1,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@1,700&display=swap">
 <style>
   :root {
     --bg: #111322;
@@ -629,13 +630,14 @@ description = "manage annotations"</pre>
   // State-based, because a fast DNS failure can happen before any listener is attached.
   const sourceEl = video.querySelector('source');
   function checkUnavailable() {
-    const failed = video.error || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
+    const failed = Boolean(video.error) || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
     unavailable.hidden = !failed;
+    video.controls = !failed;
   }
   sourceEl.addEventListener('error', checkUnavailable);
   video.addEventListener('error', checkUnavailable);
-  video.addEventListener('loadedmetadata', () => { unavailable.hidden = true; });
-  video.addEventListener('emptied', () => { unavailable.hidden = true; });
+  video.addEventListener('loadedmetadata', () => { unavailable.hidden = true; video.controls = true; });
+  video.addEventListener('emptied', () => { unavailable.hidden = true; video.controls = true; });
   checkUnavailable();
   setTimeout(checkUnavailable, 1500);
   const other = document.getElementById('other');
