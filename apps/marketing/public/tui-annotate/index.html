@@ -616,8 +616,9 @@ description = "manage annotations"</pre>
       video.pause();
       unavailable.hidden = true;
       video.poster = poster[which];
-      video.querySelector('source').src = src[which];
+      sourceEl.src = src[which];
       video.load();
+      setTimeout(checkUnavailable, 1500);
     }
     unavailable.href = post[which];
     if (play) video.play().catch(() => {});
@@ -625,8 +626,18 @@ description = "manage annotations"</pre>
   }
   const unavailable = document.getElementById('unavailable');
   // The media host may not exist yet (or a viewer may be offline): keep the poster, offer the post.
-  video.querySelector('source').addEventListener('error', () => { unavailable.hidden = false; });
-  video.addEventListener('error', () => { unavailable.hidden = false; });
+  // State-based, because a fast DNS failure can happen before any listener is attached.
+  const sourceEl = video.querySelector('source');
+  function checkUnavailable() {
+    const failed = video.error || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE;
+    unavailable.hidden = !failed;
+  }
+  sourceEl.addEventListener('error', checkUnavailable);
+  video.addEventListener('error', checkUnavailable);
+  video.addEventListener('loadedmetadata', () => { unavailable.hidden = true; });
+  video.addEventListener('emptied', () => { unavailable.hidden = true; });
+  checkUnavailable();
+  setTimeout(checkUnavailable, 1500);
   const other = document.getElementById('other');
   function syncOther() {
     const next = current === 'full' ? 'lite' : 'full';
