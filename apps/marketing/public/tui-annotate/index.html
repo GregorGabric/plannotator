@@ -357,7 +357,7 @@
 
 <main>
   <section class="wrap hero" aria-labelledby="h1">
-    <img class="hero-banner" src="assets/banner.webp" width="2172" height="724" alt="Herdr Annotate" fetchpriority="high">
+    <img class="hero-banner" src="/tui-annotate/assets/banner.webp" width="2172" height="724" alt="Herdr Annotate" fetchpriority="high">
     <h1 id="h1" class="display">Annotate anything in your terminal. <em>Send it back to your agents.</em></h1>
     <p class="lead">Comment on any text in your terminal, review plans, specs, wikis and your agent's replies, and send the comments with a native human-in-the-loop UX.</p>
     <p class="hero-links"><a class="corner" href="https://github.com/plannotator/herdr-annotate">GitHub ↗</a><span class="core">Don't use Herdr? The core is <a href="#tui">plannotator-tui</a>, a standalone terminal app.</span></p>
@@ -420,7 +420,7 @@
       </div>
     </div>
     <div class="frame" id="demo" role="tabpanel" aria-labelledby="tab-full">
-      <video id="video" controls muted playsinline preload="metadata" poster="assets/full-poster.jpg" width="2560" height="1612">
+      <video id="video" controls muted playsinline preload="metadata" poster="/tui-annotate/assets/full-poster.jpg" width="2560" height="1612">
         <source src="https://media.plannotator.ai/tui-annotate/full-demo.mp4" type="video/mp4">
       </video>
       <a class="unavailable" id="unavailable" href="https://x.com/plannotator/status/2093419561077154287" hidden><span class="play" aria-hidden="true">▶</span>Watch on X</a>
@@ -432,15 +432,15 @@
 
     <div class="stills m-hide">
       <figure>
-        <button class="zoom" type="button" data-full="assets/still-full-review.jpg" aria-label="Enlarge: Plannotator TUI inside Herdr: a file tree on the left, a Markdown document with a selected line and a comment box that says Write a."><img src="assets/still-full-review.jpg" width="1600" height="1008" loading="lazy" alt="Plannotator TUI inside Herdr: a Markdown document with a green looks-good highlight, a yellow comment highlight and a red struck-through line, each with its bubble in the rail on the right, and a Send button in the header."></button>
+        <button class="zoom" type="button" data-full="/tui-annotate/assets/still-full-review.jpg" aria-label="Enlarge: Plannotator TUI inside Herdr: a file tree on the left, a Markdown document with a selected line and a comment box that says Write a."><img src="/tui-annotate/assets/still-full-review.jpg" width="1600" height="1008" loading="lazy" alt="Plannotator TUI inside Herdr: a Markdown document with a green looks-good highlight, a yellow comment highlight and a red struck-through line, each with its bubble in the rail on the right, and a Send button in the header."></button>
         <figcaption><strong><span class="tag full lead">Full</span>Review in place</strong>Select a line, then comment, mark it good, or mark it for deletion.</figcaption>
       </figure>
       <figure>
-        <button class="zoom" type="button" data-full="assets/still-full-sent.jpg" aria-label="Enlarge: The agent's prompt showing four numbered pieces of feedback with line ranges and quoted text."><img src="assets/still-full-sent.jpg" width="1600" height="1008" loading="lazy" alt="The agent's prompt showing four numbered pieces of feedback with line ranges and quoted text."></button>
+        <button class="zoom" type="button" data-full="/tui-annotate/assets/still-full-sent.jpg" aria-label="Enlarge: The agent's prompt showing four numbered pieces of feedback with line ranges and quoted text."><img src="/tui-annotate/assets/still-full-sent.jpg" width="1600" height="1008" loading="lazy" alt="The agent's prompt showing four numbered pieces of feedback with line ranges and quoted text."></button>
         <figcaption><strong><span class="tag full lead">Full</span>Send</strong>Each comment arrives in the agent with its line numbers and the quoted text.</figcaption>
       </figure>
       <figure>
-        <button class="zoom" type="button" data-full="assets/still-lite-manage.jpg" aria-label="Enlarge: The Lite annotations popover over a pi session, listing five annotations with the selected text and comment on the right."><img src="assets/still-lite-manage.jpg" width="1600" height="1008" loading="lazy" alt="The Lite annotations popover over a pi session, listing five annotations with the selected text and comment on the right."></button>
+        <button class="zoom" type="button" data-full="/tui-annotate/assets/still-lite-manage.jpg" aria-label="Enlarge: The Lite annotations popover over a pi session, listing five annotations with the selected text and comment on the right."><img src="/tui-annotate/assets/still-lite-manage.jpg" width="1600" height="1008" loading="lazy" alt="The Lite annotations popover over a pi session, listing five annotations with the selected text and comment on the right."></button>
         <figcaption><strong><span class="tag lite lead">Lite</span>Manage</strong><kbd>prefix</kbd>+<kbd>m</kbd> lists your comments. Copy one, copy all, or archive them.</figcaption>
       </figure>
     </div>
@@ -567,7 +567,7 @@ description = "manage annotations"</pre>
           <a href="https://plannotator.ai">Part of Plannotator</a>
         </nav>
       </div>
-      <a class="m-hide" href="https://github.com/plannotator/plannotator-tui" aria-label="Plannotator TUI on GitHub"><img class="tui-banner" src="assets/tui-banner.webp" width="1814" height="322" loading="lazy" alt="Plannotator TUI"></a>
+      <a class="m-hide" href="https://github.com/plannotator/plannotator-tui" aria-label="Plannotator TUI on GitHub"><img class="tui-banner" src="/tui-annotate/assets/tui-banner.webp" width="1814" height="322" loading="lazy" alt="Plannotator TUI"></a>
     </div>
   </section>
 </main>
@@ -602,7 +602,7 @@ description = "manage annotations"</pre>
   // --delete sync). Until the host exists, the frame shows the poster with a link to the X post.
   const MEDIA_BASE = 'https://media.plannotator.ai/tui-annotate';
   const src = { full: `${MEDIA_BASE}/full-demo.mp4`, lite: `${MEDIA_BASE}/lite-demo.mp4` };
-  const poster = { full: 'assets/full-poster.jpg', lite: 'assets/lite-poster.jpg' };
+  const poster = { full: '/tui-annotate/assets/full-poster.jpg', lite: '/tui-annotate/assets/lite-poster.jpg' };
   const post = { full: 'https://x.com/plannotator/status/2093419561077154287', lite: 'https://x.com/plannotator/status/2092757422322627008' };
   let current = 'full';
 
