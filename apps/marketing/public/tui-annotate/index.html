@@ -422,7 +422,7 @@
     </div>
     <div class="frame" id="demo" role="tabpanel" aria-labelledby="tab-full">
       <video id="video" controls muted playsinline preload="metadata" poster="/tui-annotate/assets/full-poster.jpg" width="2560" height="1612">
-        <source src="https://media.plannotator.ai/tui-annotate/full-demo.mp4" type="video/mp4">
+        <source src="https://media.plannotator.ai/tui-annotate/full-demo-v1.mp4" type="video/mp4">
       </video>
       <a class="unavailable" id="unavailable" href="https://x.com/plannotator/status/2093419561077154287" hidden><span class="play" aria-hidden="true">▶</span>Watch on X</a>
     </div>
@@ -599,10 +599,10 @@ description = "manage annotations"</pre>
   const cap = document.getElementById('cap');
   const panel = document.getElementById('demo');
   const tabs = [...document.querySelectorAll('.tab')];
-  // Videos are served from the media host, not from the site bucket (kept out of git and the
-  // --delete sync). Until the host exists, the frame shows the poster with a link to the X post.
+  // Videos are served from the media host (R2), not from the site bucket. Object names are
+  // versioned because they are cached as immutable: a re-encode gets a new name, never a purge.
   const MEDIA_BASE = 'https://media.plannotator.ai/tui-annotate';
-  const src = { full: `${MEDIA_BASE}/full-demo.mp4`, lite: `${MEDIA_BASE}/lite-demo.mp4` };
+  const src = { full: `${MEDIA_BASE}/full-demo-v1.mp4`, lite: `${MEDIA_BASE}/lite-demo-v1.mp4` };
   const poster = { full: '/tui-annotate/assets/full-poster.jpg', lite: '/tui-annotate/assets/lite-poster.jpg' };
   const post = { full: 'https://x.com/plannotator/status/2093419561077154287', lite: 'https://x.com/plannotator/status/2092757422322627008' };
   let current = 'full';
