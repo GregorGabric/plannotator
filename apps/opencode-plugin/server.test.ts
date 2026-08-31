@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import serverPlugin, {
+  createPlanReadyNotifier,
   pushComposedSystemReminder,
   replacePlanningSystemParts,
 } from "./server";
+import { createV2BridgeClient, formatSessionUrlNotice } from "./v2-client";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const originalAllowSubagents = process.env.PLANNOTATOR_ALLOW_SUBAGENTS;
 
@@ -371,5 +375,79 @@ describe("system part consolidation (#1114 regression class)", () => {
     expect(text).toContain("Second host part");
     expect(text.endsWith("## Plan Submission reminder")).toBe(true);
     expect(text.indexOf("Host base rules")).toBeLessThan(text.indexOf("Second host part"));
+  });
+});
+
+describe("V2 plan review URL delivery", () => {
+  const SESSION_URL = "http://127.0.0.1:19432";
+
+  // Regression: only the slash-command path was fixed at first. The plan path
+  // builds its own client, so a remote reviewer who reached the review through
+  // submit_plan still saw nothing: no browser is opened for them, and the
+  // plugin's console output is discarded by the host.
+  test("the embedded plan path posts the session URL as a transcript notice", async () => {
+    const synthetic = mock(async (_input: unknown) => ({}));
+    const client = createV2BridgeClient({
+      ctx: { session: { synthetic } } as never,
+      getAgents: async () => [],
+      sessionID: "session-1",
+    });
+
+    createPlanReadyNotifier(client)(SESSION_URL);
+    await Promise.resolve();
+
+    expect(synthetic).toHaveBeenCalledTimes(1);
+    expect(synthetic.mock.calls[0]![0]).toMatchObject({
+      sessionID: "session-1",
+      description: formatSessionUrlNotice(SESSION_URL),
+      resume: false,
+    });
+  });
+
+  // Regression: the fallback must stay SILENT, not fall back to app.log. That
+  // is console.error, the same stderr handleServerReady has already printed the
+  // URL to, so logging here would duplicate the line in remote mode and add a
+  // stray one locally. This hook was empty for exactly that reason.
+  test("without session.synthetic the plan path stays silent", () => {
+    const log = mock((_entry: unknown) => {});
+    const client = createV2BridgeClient({
+      ctx: { session: {} },
+      getAgents: async () => [],
+      sessionID: "session-1",
+    });
+    client.app.log = log as never;
+
+    expect(client.notifyUrl).toBeUndefined();
+    expect(() => createPlanReadyNotifier(client)(SESSION_URL)).not.toThrow();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  // Regression: the notifier tests above all pass while the plan path itself is
+  // wired to nothing, which is exactly the shape the bug had. Reaching the real
+  // wiring means running a plan review, so these two facts are pinned at source
+  // level instead: without the session id the client can build no notifier, and
+  // without the ready hook nothing ever calls it. Either one silently restores
+  // the invisible URL with no other symptom.
+  test("the plan path threads the session id and drives the ready hook", () => {
+    const source = readFileSync(path.join(import.meta.dir, "server.ts"), "utf-8");
+
+    // Booleans, not toMatch: a failing regex against a whole source file dumps
+    // the file into the report and buries the one line that matters.
+    expect(/sessionID:\s*toolContext\.sessionID/.test(source)).toBe(true);
+    expect(/logReady:\s*createPlanReadyNotifier\(/.test(source)).toBe(true);
+  });
+
+  // Regression: a rejected notice must not surface as an unhandled rejection
+  // and must not take the plan review down with it.
+  test("a rejecting notice is caught", async () => {
+    const client = createV2BridgeClient({
+      ctx: { session: { synthetic: async () => { throw new Error("session gone"); } } } as never,
+      getAgents: async () => [],
+      sessionID: "session-1",
+    });
+
+    expect(() => createPlanReadyNotifier(client)(SESSION_URL)).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
   });
 });

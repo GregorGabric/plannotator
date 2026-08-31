@@ -24,7 +24,12 @@ import {
 } from "./cli-bridge";
 import { switchV2SessionAgent } from "./agent-switch";
 import { registerNativeCommands } from "./native-commands";
-import { normalizeAgentList, type V2ContextLike } from "./v2-client";
+import {
+  createV2BridgeClient,
+  formatSessionUrlNotice,
+  normalizeAgentList,
+  type V2ContextLike,
+} from "./v2-client";
 import { executeSubmitPlan } from "./submit-plan-executor";
 import type { PlanEdit } from "./plan-edits";
 import { getPlanningPrompt } from "./planning-prompt";
@@ -38,6 +43,13 @@ type V2Client = {
     agents: () => Promise<{ data: OpenCodeBridgeAgent[] }>;
     log: (entry: { level: "info" | "error"; message: string }) => void;
   };
+  /**
+   * Visible delivery for the session URL, present only when the host can post
+   * a transcript notice. `cli-bridge` prefers it over the (absent on V2) toast
+   * for the CLI runtime; `createPlanReadyNotifier` is the embedded runtime's
+   * equivalent. See `createSessionUrlNotifier` in `v2-client.ts`.
+   */
+  notifyUrl?: (input: { url: string; message: string }) => Promise<unknown>;
 };
 
 type EmbeddedRuntimeModule = {
@@ -196,7 +208,14 @@ const serverPlugin = {
           const session = await ctx.session.get({ sessionID: toolContext.sessionID });
           const directory = session.location.directory;
           const bridge = await getBridgeContext(getAgents);
-          const client = createV2Client(getAgents);
+          // Same client the native command path uses, and for the same reason:
+          // `sessionID` is what lets the session URL reach a remote reviewer, who
+          // gets no browser opened and cannot see the plugin's console output.
+          const client = createV2BridgeClient({
+            ctx: v2,
+            getAgents,
+            sessionID: toolContext.sessionID,
+          });
           const result = await executeSubmitPlan({
             edits: getPlanEdits(input),
             invokingAgent: toolContext.agent,
@@ -252,23 +271,6 @@ function getPlanTimeoutSeconds(): number | null {
   return parsed === 0 ? null : parsed;
 }
 
-function createV2Client(
-  getAgents: () => Promise<OpenCodeBridgeAgent[]>,
-): V2Client {
-  const loggedUrls = new Set<string>();
-  return {
-    app: {
-      agents: async () => ({ data: await getAgents() }),
-      log: ({ message }) => {
-        const url = /https?:\/\/\S+/.exec(message)?.[0];
-        if (url && loggedUrls.has(url)) return;
-        if (url) loggedUrls.add(url);
-        console.error(message);
-      },
-    },
-  };
-}
-
 function allowSubagents(): boolean {
   const value = process.env.PLANNOTATOR_ALLOW_SUBAGENTS?.trim();
   return value === "1" || value === "true";
@@ -310,6 +312,35 @@ function getPlanHtml(): string {
   return planHtml;
 }
 
+/**
+ * The embedded runtime's ready hook: put the session URL where a reviewer can
+ * see it, and nowhere else.
+ *
+ * This still must NOT go to `client.app.log`. That is `console.error`, the same
+ * stderr stream `handleServerReady` has already printed the URL to, so logging
+ * here would duplicate the line in remote mode and add a stray one locally
+ * (which is why this hook used to be empty). The transcript notice is a
+ * different surface entirely, and on OpenCode 2 it is the only one a remote
+ * reviewer can actually see: the host discards a server plugin's stderr unless
+ * it was started with `OPENCODE_PRINT_LOGS=1`.
+ *
+ * Best-effort in both directions: an older host exposes no `session.synthetic`,
+ * so `notifyUrl` is absent and this stays silent, exactly as before.
+ */
+export function createPlanReadyNotifier(client: V2Client): (url: string) => void {
+  return (url: string) => {
+    const notify = client.notifyUrl;
+    if (typeof notify !== "function") return;
+    try {
+      void notify({ url, message: formatSessionUrlNotice(url) }).catch(() => {
+        // A cosmetic notice must never surface as an unhandled rejection.
+      });
+    } catch {
+      // Visible URL delivery is best-effort.
+    }
+  };
+}
+
 async function runPlanReview(input: {
   client: V2Client;
   runtime: RuntimeMode;
@@ -338,14 +369,7 @@ async function runPlanReview(input: {
         htmlContent: getPlanHtml(),
         timeoutSeconds: input.timeoutSeconds,
         abortSignal: input.abortSignal,
-        // Intentionally empty. OpenCode 2's server-plugin context exposes no log or
-        // tui domain, and the V2 client's app.log falls through to console.error,
-        // which is the same stderr stream handleServerReady already prints to.
-        // Wiring this up would duplicate the session URL in remote mode and add a
-        // stray line locally. V1 does target client.app.log and client.tui.showToast,
-        // which are HTTP surfaces separate from stderr, so V1 never repeats itself.
-        // A real toast here needs an upstream OpenCode API that does not exist yet.
-        logReady: () => {},
+        logReady: createPlanReadyNotifier(input.client),
       });
     } catch (error) {
       if (input.runtime === "embedded") throw error;

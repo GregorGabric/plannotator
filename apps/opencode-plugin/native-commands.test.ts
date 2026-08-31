@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -484,6 +484,17 @@ describe("shared command stubs", () => {
 
 describe("V2 session URL delivery", () => {
   const SESSION_URL = "http://127.0.0.1:19432";
+
+  // cli-bridge logs every forwarded line, and the V2 client's app.log is
+  // console.error, so without this each test here prints a URL into the suite
+  // output. Restored per test so a real failure elsewhere still reports.
+  const originalConsoleError = console.error;
+  beforeEach(() => {
+    console.error = () => {};
+  });
+  afterEach(() => {
+    console.error = originalConsoleError;
+  });
 
   function makeSyntheticCtx() {
     const synthetic = mock(async (_input: unknown) => ({}));
