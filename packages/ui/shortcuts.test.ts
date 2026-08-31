@@ -82,6 +82,7 @@ describe('shortcuts', () => {
       'Vim Text Navigation',
       'Vim Annotation Actions',
       'Image Annotator',
+      'History',
     ]);
 
     expect(annotateSections.map(section => section.title)).toEqual([
@@ -94,6 +95,7 @@ describe('shortcuts', () => {
       'Vim Text Navigation',
       'Vim Annotation Actions',
       'Image Annotator',
+      'History',
     ]);
 
     expect(getShortcut(planReviewSettingsShortcutRegistry, 'plan-review-editor-settings', 'submitPlan')?.description).toBe('Approve / Send feedback');
@@ -107,6 +109,7 @@ describe('shortcuts', () => {
       'Search',
       'Layout',
       'File Actions',
+      'History',
       'File Navigation',
       'All-Files View',
       'Annotations',
@@ -346,6 +349,15 @@ describe('shortcuts', () => {
 
     expect(handled).toBe(false);
     expect(preventDefaultCalls).toBe(0);
+  });
+
+  it('keeps review copy and collapse bindings distinct from annotation history', () => {
+    expect(matchesShortcutBinding({
+      key: 'y', code: 'KeyY', metaKey: true, ctrlKey: false, shiftKey: true, altKey: false,
+    }, 'Mod+Y')).toBe(false);
+    expect(matchesShortcutBinding({
+      key: 'z', code: 'KeyZ', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
+    }, 'Mod+Z')).toBe(false);
   });
 
   it('switches annotation mode on Shift+1-4 across keyboard layouts', () => {

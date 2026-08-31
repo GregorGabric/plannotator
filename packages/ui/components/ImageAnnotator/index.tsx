@@ -4,6 +4,8 @@ import { Toolbar } from './Toolbar';
 import { renderStroke } from './utils';
 import type { Point, AnnotatorState } from './types';
 import { DEFAULT_STATE } from './types';
+import { useImageAnnotatorShortcuts } from '../../shortcuts';
+import { clearStrokeHistory, recordStroke, redoStroke, undoStroke } from './strokeHistory';
 
 interface ImageAnnotatorProps {
   imageSrc: string;
@@ -34,46 +36,6 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
       setName(initialName);
     }
   }, [isOpen, initialName]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Don't intercept when typing in the name input
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT') {
-        if (e.key === 'Escape') {
-          // Blur and let the next Escape close
-          target.blur();
-          e.preventDefault();
-        }
-        return;
-      }
-
-      // Escape or Enter to accept
-      if (e.key === 'Escape' || e.key === 'Enter') {
-        e.preventDefault();
-        handleAccept();
-        return;
-      }
-
-      // Cmd+Z to undo
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-        e.preventDefault();
-        handleUndo();
-        return;
-      }
-
-      // 1/2/3 to switch tools
-      if (e.key === '1') setState(s => ({ ...s, tool: 'pen' }));
-      if (e.key === '2') setState(s => ({ ...s, tool: 'arrow' }));
-      if (e.key === '3') setState(s => ({ ...s, tool: 'circle' }));
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, state.strokes]);
 
   const handleStrokeStart = useCallback((point: Point) => {
     const id = crypto.randomUUID();
@@ -107,27 +69,20 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
       if (!s.currentStroke || s.currentStroke.points.length < 2) {
         return { ...s, currentStroke: null };
       }
-      return {
-        ...s,
-        strokes: [...s.strokes, s.currentStroke],
-        currentStroke: null,
-      };
+      return recordStroke(s, s.currentStroke);
     });
   }, []);
 
   const handleUndo = useCallback(() => {
-    setState(s => ({
-      ...s,
-      strokes: s.strokes.slice(0, -1),
-    }));
+    setState(undoStroke);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    setState(redoStroke);
   }, []);
 
   const handleClear = useCallback(() => {
-    setState(s => ({
-      ...s,
-      strokes: [],
-      currentStroke: null,
-    }));
+    setState(clearStrokeHistory);
   }, []);
 
   const handleImageLoad = useCallback((img: HTMLImageElement) => {
@@ -159,7 +114,8 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
 
       // Composite image + drawings
       const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d')!;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context is unavailable');
 
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
@@ -190,6 +146,29 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
     }
   };
 
+  const keyboardTargetIsInput = (event: KeyboardEvent): boolean =>
+    event.composedPath()[0] instanceof HTMLInputElement;
+
+  useImageAnnotatorShortcuts({
+    handlers: {
+      penTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'pen' })) },
+      arrowTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'arrow' })) },
+      circleTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'circle' })) },
+      undo: {
+        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && state.strokes.length > 0,
+        handle: handleUndo,
+      },
+      redo: {
+        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && state.futureStrokes.length > 0,
+        handle: handleRedo,
+      },
+      save: {
+        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event),
+        handle: () => { void handleAccept(); },
+      },
+    },
+  });
+
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget) {
       handleAccept();
@@ -212,10 +191,12 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
           color={state.color}
           strokeSize={state.strokeSize}
           canUndo={state.strokes.length > 0}
+          canRedo={state.futureStrokes.length > 0}
           onToolChange={(tool) => setState(s => ({ ...s, tool }))}
           onColorChange={(color) => setState(s => ({ ...s, color }))}
           onStrokeSizeChange={(strokeSize) => setState(s => ({ ...s, strokeSize }))}
           onUndo={handleUndo}
+          onRedo={handleRedo}
           onClear={handleClear}
           onSave={handleAccept}
         />
@@ -242,6 +223,11 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.currentTarget.blur();
+                  return;
+                }
                 if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   handleAccept();

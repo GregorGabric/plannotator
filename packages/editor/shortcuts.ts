@@ -9,6 +9,7 @@ import {
   defineShortcutScope,
   documentViewShortcuts,
   goalSetupShortcuts,
+  historyShortcuts,
   htmlAnnotateShortcuts,
   imageAnnotatorShortcuts,
   inputMethodShortcuts,
@@ -92,6 +93,7 @@ const sharedPlanSurfaceShortcuts = [
   commentPopoverShortcuts,
   annotationPanelShortcuts,
   imageAnnotatorShortcuts,
+  historyShortcuts,
 ] as const;
 
 export const planReviewSettingsShortcutRegistry = createShortcutRegistry([
