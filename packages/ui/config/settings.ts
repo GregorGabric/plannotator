@@ -261,6 +261,21 @@ export const SETTINGS = {
     serverKey: undefined, fromServer: undefined, toServer: undefined,
   },
 
+  // Mark a file viewed when the reviewer scrolls past it or moves on to
+  // another file. Cookie-only like the other review-chrome preferences: it
+  // shapes how the local file list checks itself off and changes no review
+  // semantics (viewed gates nothing on submit).
+  reviewAutoViewed: {
+    defaultValue: true as boolean,
+    fromCookie: () => {
+      const value = storage.getItem('plannotator-review-auto-viewed');
+      return value === 'true' ? true : value === 'false' ? false : undefined;
+    },
+    toCookie: (value: boolean) =>
+      storage.setItem('plannotator-review-auto-viewed', String(value)),
+    serverKey: undefined, fromServer: undefined, toServer: undefined,
+  },
+
   reviewShowStageControls: {
     defaultValue: true as boolean,
     fromCookie: () => {

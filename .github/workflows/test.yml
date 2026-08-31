@@ -113,12 +113,14 @@ jobs:
           packages/review-editor/edit/selectionActionPopover.test.ts
           packages/review-editor/components/AllFilesCodeView.lifecycle.test.tsx
           packages/review-editor/components/AllFilesCodeView.generated.test.tsx
+          packages/review-editor/components/AllFilesCodeView.autoViewed.test.tsx
           packages/review-editor/components/DiffViewer.compactTouchSelection.test.tsx
           packages/guide-viewer/GuideSectionCard.test.tsx
           packages/guide-viewer/GuideView.test.tsx
           packages/guide-viewer/GuideViewportManager.test.tsx
           packages/review-editor/components/guide/GuideExportButton.test.tsx
           packages/review-editor/hooks/useReviewSearch.test.tsx
+          packages/review-editor/hooks/useAutoViewed.test.tsx
           packages/review-editor/hooks/useCallFlowAnalysis.test.tsx
           packages/review-editor/hooks/useCallFlowInstall.test.tsx
           packages/review-editor/hooks/useCallFlowAutoInstall.test.tsx

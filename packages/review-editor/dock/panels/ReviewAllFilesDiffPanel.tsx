@@ -69,6 +69,7 @@ export const ReviewAllFilesDiffPanel: React.FC<IDockviewPanelProps> = () => {
       activeSearchMatch={state.allFilesActiveSearchMatch}
       onCodeNavRequest={state.onCodeNavRequest}
       onVisibleFileChange={state.onAllFilesVisibleFileChange}
+      onFileScrolledPast={state.onAllFilesFileScrolledPast}
       fileOrder={state.allFilesOrder}
       registerCollapseAllToggle={state.registerAllFilesCollapseToggle}
       onAllCollapsedChange={state.onAllFilesCollapsedChange}

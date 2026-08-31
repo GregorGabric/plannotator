@@ -215,7 +215,9 @@ export interface ReviewState {
 
   // Diff navigation
   openDiffFile: (filePath: string) => void;
-  onAllFilesVisibleFileChange: (filePath: string | null) => void;
+  onAllFilesVisibleFileChange: (filePath: string | null, info?: { collapsed: boolean }) => void;
+  /** Auto-mark-viewed: the reader moved on from this file (see useAutoViewed). */
+  onAllFilesFileScrolledPast: (filePath: string) => void;
   isAllFilesActive: boolean;
   // Which left panel drives the all-files item order ('list' = sections order).
   allFilesOrder: 'tree' | 'list';
