@@ -252,8 +252,22 @@ export interface AllFilesCodeViewProps {
   activeSearchMatch?: ReviewSearchMatch | null;
   // Token code navigation (P7). Cmd/Ctrl-click a token resolves symbol defs/refs.
   onCodeNavRequest?: (request: import('@plannotator/shared/code-nav').CodeNavRequest) => void;
-  // File-tree active-file highlight follows scroll.
-  onVisibleFileChange?: (filePath: string | null) => void;
+  // File-tree active-file highlight follows scroll. The second argument
+  // reports whether the newly active item is COLLAPSED, which auto-mark-viewed
+  // needs (a folded card shows no content, so time parked on it is not
+  // reading time). Optional and additive — existing one-argument handlers are
+  // unaffected.
+  onVisibleFileChange?: (filePath: string | null, info?: { collapsed: boolean }) => void;
+  /**
+   * Auto-mark-viewed: the reader MOVED ON from `filePath`. Fired on a downward
+   * active-file transition once the passed file's successor has reached the
+   * viewport top (so the file genuinely scrolled out above rather than merely
+   * losing the active race), and on every at-bottom tick for the final file,
+   * which can never scroll out above. Collapsed items never fire.
+   *
+   * Optional: without it this component behaves exactly as before.
+   */
+  onFileScrolledPast?: (filePath: string) => void;
   /** Tokenized request to reveal a file through CodeView's own item navigation.
    *  Guided Review uses this for outline chips and sidebar/AI jumps. The token
    *  lets repeated requests for the same path fire again. */
@@ -490,6 +504,15 @@ function buildItemIdentity(
   return { items, filePathToItemId, filePathToItemIds, itemIdToFilePath, itemIdToFile };
 }
 
+/**
+ * Slack allowed when deciding a file has scrolled out ABOVE the viewport for
+ * auto-mark-viewed. The active-file rule uses a +50px threshold, so a file can
+ * become "not active" while a sliver of it is still on screen; this epsilon
+ * keeps the pass check honest without demanding pixel-exact alignment on a
+ * momentum-scrolled frame.
+ */
+const SCROLLED_PAST_EPSILON_PX = 8;
+
 // Resolved pixel height of the custom header. Must equal FileHeader's fixed
 // container height (`style={{ height: 'var(--panel-header-h)' }}`) so CodeView's
 // virtualization reserves exactly the right space for the header. FileHeader is
@@ -556,6 +579,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   activeSearchMatch = null,
   onCodeNavRequest,
   onVisibleFileChange,
+  onFileScrolledPast,
   fileScrollTarget,
   fileOrder,
   registerCollapseAllToggle,
@@ -639,6 +663,18 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   // The file path CodeView currently reports as visible (active-file highlight).
   // Reset on diff switch so stepping/highlighting never anchors on an old file.
   const visibleFileRef = useRef<string | null>(null);
+  // The ITEM behind visibleFileRef. Auto-mark-viewed compares item positions
+  // (a path can own several items when a diff renders it twice), so the path
+  // alone cannot answer "did we move down?".
+  const visibleItemIdRef = useRef<string | null>(null);
+  // The item the reader has left but whose pass geometry has not resolved yet.
+  const passCandidateItemRef = useRef<string | null>(null);
+  // Whether a REAL scroll has happened on the current file set. The at-bottom
+  // branch below is true from the very first tick when the diff fits the
+  // viewport, and that tick is the mount seed — emitting there would mark a
+  // file the reviewer merely arrived at, without touching anything, which is
+  // the one thing auto-mark-viewed must never do.
+  const hasScrolledRef = useRef(false);
 
   // The file CodeView last reported a selection / line-click in. The toolbar is
   // keyed off this file's path + patch, but the value is sourced from the
@@ -978,6 +1014,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     setSelectedLines(null);
     pendingToolbarRange.current = null;
     visibleFileRef.current = null;
+    visibleItemIdRef.current = null;
+    passCandidateItemRef.current = null;
+    hasScrolledRef.current = false;
     // An edit session cannot survive the CodeView remount (Pierre tears the
     // editor down without a completion callback), and fileSetKey also changes
     // on sort-order / collapse-default flips, not just diff switches. The
@@ -1957,6 +1996,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     const rendered = viewer.getRenderedItems();
     if (rendered.length === 0) return;
     const scrollTop = viewer.getScrollTop();
+    const isCollapsed = (itemId: string) => viewerRef.current?.getItem(itemId)?.collapsed === true;
     // The active file is the last rendered item whose top is at or above the
     // current scroll position (with a small threshold), i.e. the file the user
     // is currently reading. Falls back to the first rendered item.
@@ -1972,15 +2012,56 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     // one. Uses CodeView's cached accessors — raw container.scrollHeight /
     // clientHeight reads here forced a synchronous layout on EVERY scroll
     // event, right after the frame's DOM writes (measurable jank).
-    if (
-      viewer.getScrollTop() + viewer.getHeight() >= viewer.getScrollHeight() - 2
-    ) {
+    const atBottom =
+      viewer.getScrollTop() + viewer.getHeight() >= viewer.getScrollHeight() - 2;
+    if (atBottom) {
       bestId = rendered[rendered.length - 1].id;
     }
     const path = itemIdToFilePath.get(bestId) ?? null;
     if (path !== visibleFileRef.current) {
+      // Auto-mark-viewed (Rule 1): the file the reader just left becomes a
+      // PASS CANDIDATE. It is not marked yet — the geometry still has to say
+      // it genuinely scrolled out above.
+      const previousItemId = visibleItemIdRef.current;
+      if (previousItemId != null && previousItemId !== bestId) {
+        passCandidateItemRef.current = previousItemId;
+      }
+      visibleItemIdRef.current = bestId;
       visibleFileRef.current = path;
-      onVisibleFileChange?.(path);
+      onVisibleFileChange?.(path, { collapsed: isCollapsed(bestId) });
+    }
+    // Resolve the candidate — possibly a tick or two after the transition. The
+    // active-file rule switches at scrollTop+50 while a pass demands the
+    // successor actually reach the viewport top, so one scroll frame can land
+    // inside that gap; judging only on the transition tick would skip the file
+    // for good. An upward move (or a return to the candidate itself) drops it:
+    // going back is not moving on.
+    if (onFileScrolledPast && passCandidateItemRef.current != null) {
+      const candidateId = passCandidateItemRef.current;
+      const candidateIndex = orderedItemIds.indexOf(candidateId);
+      const currentIndex = orderedItemIds.indexOf(bestId);
+      const candidatePath = itemIdToFilePath.get(candidateId);
+      if (candidateIndex === -1 || candidatePath == null || currentIndex <= candidateIndex
+          || isCollapsed(candidateId)) {
+        passCandidateItemRef.current = null;
+      } else {
+        // Successor top comes from getTopForItem, which is defined for every
+        // item (not just the rendered window), so no extra geometry is needed.
+        const successorTop = viewer.getTopForItem(orderedItemIds[candidateIndex + 1]);
+        if (successorTop != null && successorTop <= scrollTop + SCROLLED_PAST_EPSILON_PX) {
+          passCandidateItemRef.current = null;
+          onFileScrolledPast(candidatePath);
+        }
+      }
+    }
+    // The last file can never scroll out above, so reaching the end of the
+    // diff is its completion signal. Re-fires on every at-bottom tick; the
+    // owner's dwell floor decides whether it actually marks. Gated on a real
+    // scroll having happened, because a diff shorter than the viewport is
+    // at-bottom from the mount seed onwards.
+    if (atBottom && hasScrolledRef.current && path != null && onFileScrolledPast
+        && !isCollapsed(bestId)) {
+      onFileScrolledPast(path);
     }
   });
 
@@ -1990,6 +2071,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   const scrollReportRafRef = useRef<number | null>(null);
   const handleScroll = useStableCallback((position: number) => {
     lastScrollTsRef.current = Date.now();
+    hasScrolledRef.current = true;
     onScrollPositionChange?.(position);
     if (scrollReportRafRef.current != null) return;
     scrollReportRafRef.current = requestAnimationFrame(() => {
