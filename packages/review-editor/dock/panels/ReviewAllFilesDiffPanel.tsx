@@ -84,7 +84,6 @@ export const ReviewAllFilesDiffPanel: React.FC<IDockviewPanelProps> = () => {
       // the ONLY surface that opts in (Guided Review's viewport manager
       // evicts CodeViews, which would destroy an active editor session).
       enableEditSuggestions={state.editSuggestionsEnabled}
-      onEditSessionActiveChange={state.onEditSessionActiveChange}
       onAddSuggestionsForFile={state.onAddSuggestionsForFile}
       onAddEditorCommentForFile={state.onAddEditorCommentForFile}
     />

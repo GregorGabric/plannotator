@@ -19,8 +19,6 @@ export interface AnnotatorState {
   color: string;
   strokeSize: number;
   strokes: Stroke[];
-  /** Strokes removed by undo, newest redo candidate last. */
-  futureStrokes?: Stroke[];
   currentStroke: Stroke | null;
 }
 
@@ -37,6 +35,5 @@ export const DEFAULT_STATE: AnnotatorState = {
   color: COLORS[0],
   strokeSize: 6,
   strokes: [],
-  futureStrokes: [],
   currentStroke: null,
 };

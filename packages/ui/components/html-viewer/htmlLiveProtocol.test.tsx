@@ -87,8 +87,6 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     annotateModeActive?: boolean;
     onAnnotateModeExit?: () => void;
     onAnnotateModeToggle?: () => void;
-    onHistoryUndo?: () => void;
-    onHistoryRedo?: () => void;
   } = {}) {
     if (!htmlViewerModule) throw new Error('DOM test environment is not registered');
     const HtmlViewer = htmlViewerModule.HtmlViewer;
@@ -113,8 +111,6 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
           annotateModeActive={options.annotateModeActive}
           onAnnotateModeExit={options.onAnnotateModeExit}
           onAnnotateModeToggle={options.onAnnotateModeToggle}
-          onHistoryUndo={options.onHistoryUndo}
-          onHistoryRedo={options.onHistoryRedo}
           fullViewport
         />,
       );
@@ -337,40 +333,23 @@ describe.if(hasDom)('live parent side (HtmlViewer with src + liveSession)', () =
     expect(modePosts()[0]!.data.active).toBe(false);
   });
 
-  test('annotate and history bridge commands reach callbacks only when authenticated', async () => {
+  test('annotate-exit and annotate-toggle reach the parent callbacks only when authenticated', async () => {
     let exits = 0;
     let toggles = 0;
-    let undos = 0;
-    let redos = 0;
-    const { post, postedToIframe } = await mountLiveViewer({
+    const { post } = await mountLiveViewer({
       annotateModeActive: true,
       onAnnotateModeExit: () => { exits += 1; },
       onAnnotateModeToggle: () => { toggles += 1; },
-      onHistoryUndo: () => { undos += 1; },
-      onHistoryRedo: () => { redos += 1; },
     });
-    await post({ type: 'plannotator-bridge-ready', protocolVersion: BRIDGE_PROTOCOL_VERSION, pageUrl: '/', token: LIVE_TOKEN });
-    expect(postedToIframe.some(({ data }) =>
-      data.type === 'plannotator-bridge-set-history-shortcuts'
-      && data.undo === true
-      && data.redo === true
-    )).toBe(true);
     await post({ type: 'plannotator-bridge-annotate-exit' });
     await post({ type: 'plannotator-bridge-annotate-toggle', token: 'forged' });
-    await post({ type: 'plannotator-bridge-history-undo', token: 'forged' });
     await post({ type: 'plannotator-bridge-annotate-exit', token: LIVE_TOKEN }, 'http://evil.example');
     expect(exits).toBe(0);
     expect(toggles).toBe(0);
-    expect(undos).toBe(0);
-    expect(redos).toBe(0);
     await post({ type: 'plannotator-bridge-annotate-exit', token: LIVE_TOKEN });
     await post({ type: 'plannotator-bridge-annotate-toggle', token: LIVE_TOKEN });
-    await post({ type: 'plannotator-bridge-history-undo', token: LIVE_TOKEN });
-    await post({ type: 'plannotator-bridge-history-redo', token: LIVE_TOKEN });
     expect(exits).toBe(1);
     expect(toggles).toBe(1);
-    expect(undos).toBe(1);
-    expect(redos).toBe(1);
   });
 });
 
@@ -739,52 +718,6 @@ describe.if(hasDom)('live bridge gate (composed body in the eval harness)', () =
     bridgeDocument.body.dispatchEvent(chord);
     expect(countToggles()).toBe(before + 1);
     expect(chord.defaultPrevented).toBe(true);
-  });
-
-  test('history shortcuts forward from the iframe but preserve native editing owners', () => {
-    const count = (type: 'history-undo' | 'history-redo') => primaryPosts(type).length;
-    const undoBefore = count('history-undo');
-    const redoBefore = count('history-redo');
-
-    const disabledUndo = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true });
-    bridgeDocument.body.dispatchEvent(disabledUndo);
-    expect(disabledUndo.defaultPrevented).toBe(false);
-    expect(count('history-undo')).toBe(undoBefore);
-    postToBridge({
-      type: 'plannotator-bridge-set-history-shortcuts',
-      undo: true,
-      redo: true,
-      token: bridgeToken,
-    });
-
-    const undo = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true });
-    bridgeDocument.body.dispatchEvent(undo);
-    const shiftRedo = new KeyboardEvent('keydown', { key: 'Z', shiftKey: true, metaKey: true, bubbles: true, cancelable: true });
-    bridgeDocument.body.dispatchEvent(shiftRedo);
-    const yRedo = new KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true, cancelable: true });
-    bridgeDocument.body.dispatchEvent(yRedo);
-
-    expect(count('history-undo')).toBe(undoBefore + 1);
-    expect(count('history-redo')).toBe(redoBefore + 2);
-    expect(undo.defaultPrevented).toBe(true);
-    expect(shiftRedo.defaultPrevented).toBe(true);
-    expect(yRedo.defaultPrevented).toBe(true);
-
-    const input = bridgeDocument.createElement('input');
-    const textarea = bridgeDocument.createElement('textarea');
-    const editable = bridgeDocument.createElement('div');
-    editable.contentEditable = 'true';
-    const codeMirror = bridgeDocument.createElement('div');
-    codeMirror.className = 'cm-editor';
-    const codeMirrorContent = bridgeDocument.createElement('div');
-    codeMirror.appendChild(codeMirrorContent);
-    bridgeDocument.body.append(input, textarea, editable, codeMirror);
-    for (const target of [input, textarea, editable, codeMirrorContent]) {
-      const nativeUndo = new KeyboardEvent('keydown', { key: 'z', metaKey: true, bubbles: true, cancelable: true });
-      target.dispatchEvent(nativeUndo);
-      expect(nativeUndo.defaultPrevented).toBe(false);
-    }
-    expect(count('history-undo')).toBe(undoBefore + 1);
   });
 
   test('a placed marker still opens its comment in Interact mode', async () => {

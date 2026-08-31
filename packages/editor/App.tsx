@@ -774,9 +774,6 @@ const App: React.FC = () => {
     apply: applyDocumentHistory,
   });
   useEffect(() => {
-    annotationHistory.clear();
-  }, [annotationHistory, historyContext]);
-  useEffect(() => {
     if (submitted) annotationHistory.clear();
   }, [annotationHistory, submitted]);
   // Desktop uses the main document element as its native scroll viewport.
@@ -1464,24 +1461,11 @@ const App: React.FC = () => {
     [annotateMode, canHandleDocumentChromeShortcut],
   );
 
-  const canHandleAnnotationHistory = useCallback(() => {
-    if (documentReadOnly || submitted || isSubmitting || isExiting) return false;
-    if (isEditingMarkdown || pendingPasteImage) return false;
+  const canHandleAnnotationHistoryShortcut = useCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || documentReadOnly || submitted || isSubmitting || isExiting) return false;
+    if (isEditingMarkdown || pendingPasteImage || isNativeHistoryOwner(event)) return false;
     return !hasActiveHistoryOverlay(document);
   }, [documentReadOnly, isEditingMarkdown, isExiting, isSubmitting, pendingPasteImage, submitted]);
-
-  const canHandleAnnotationHistoryShortcut = useCallback((event: KeyboardEvent) => {
-    if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
-    return canHandleAnnotationHistory();
-  }, [canHandleAnnotationHistory]);
-
-  const handleEmbeddedHistoryUndo = useCallback(() => {
-    if (canHandleAnnotationHistory() && annotationHistory.canUndo) annotationHistory.undo();
-  }, [annotationHistory, canHandleAnnotationHistory]);
-
-  const handleEmbeddedHistoryRedo = useCallback(() => {
-    if (canHandleAnnotationHistory() && annotationHistory.canRedo) annotationHistory.redo();
-  }, [annotationHistory, canHandleAnnotationHistory]);
 
   useHistoryShortcuts({
     handlers: {
@@ -4095,7 +4079,7 @@ const App: React.FC = () => {
   });
   restoreCheckboxOverridesRef.current = checkbox.restoreOverrides;
 
-  const deleteAnnotation = (id: string, recordHistory: boolean) => {
+  const deleteAnnotation = (id: string, history: 'record' | 'silent') => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
     if (ann?.source) annotationHistory.clear();
@@ -4119,7 +4103,7 @@ const App: React.FC = () => {
         const annotationIndex = annotationsRef.current.findIndex((item) => item.id === id);
         checkbox.revertOverride(ann.blockId);
         removeAnnotation(id);
-        if (recordHistory) annotationHistory.record({
+        if (history === 'record') annotationHistory.record({
           kind: 'checkbox',
           mutation: {
             blockId: ann.blockId,
@@ -4131,18 +4115,19 @@ const App: React.FC = () => {
           beforeSelection,
           afterSelection: selectionRef.current,
         });
-      } else {
-        // Preserve the generic deletion fallback for a stale checkbox id so
-        // selection/highlight cleanup still runs even when its row is gone.
-        removeAnnotation(id);
+        return;
       }
+      removeAnnotation(id);
       return;
     }
     const index = annotationsRef.current.findIndex((annotation) => annotation.id === id);
-    if (!ann || index < 0) return;
+    if (!ann || index < 0) {
+      removeAnnotation(id);
+      return;
+    }
     const beforeSelection = selectionRef.current;
     removeAnnotation(id);
-    if (recordHistory && isHumanHistoryMutation(ann)) {
+    if (history === 'record' && isHumanHistoryMutation(ann)) {
       annotationHistory.record({
         kind: 'annotation',
         mutation: { kind: 'delete', item: ann, index },
@@ -4151,11 +4136,14 @@ const App: React.FC = () => {
       });
     }
   };
+  const handleDeleteAnnotation = (id: string) => deleteAnnotation(id, 'record');
+  const deleteAnnotationSilently = (id: string) => deleteAnnotation(id, 'silent');
 
-  const handleDeleteAnnotation = (id: string) => deleteAnnotation(id, true);
-  const deleteAnnotationWithoutHistory = (id: string) => deleteAnnotation(id, false);
-
-  const editAnnotation = (id: string, updates: Partial<Annotation>, recordHistory: boolean) => {
+  const editAnnotation = (
+    id: string,
+    updates: Partial<Annotation>,
+    history: 'record' | 'silent',
+  ) => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
     if (ann?.source) annotationHistory.clear();
@@ -4167,7 +4155,7 @@ const App: React.FC = () => {
     const after = { ...ann, ...updates };
     annotationsRef.current = annotationsRef.current.map((annotation) => annotation.id === id ? after : annotation);
     setAnnotations(annotationsRef.current);
-    if (recordHistory && isHumanHistoryMutation(ann)) {
+    if (history === 'record' && isHumanHistoryMutation(ann)) {
       annotationHistory.record({
         kind: 'annotation',
         mutation: { kind: 'edit', before: ann, after },
@@ -4176,9 +4164,10 @@ const App: React.FC = () => {
       });
     }
   };
-
-  const handleEditAnnotation = (id: string, updates: Partial<Annotation>) => editAnnotation(id, updates, true);
-  const editAnnotationWithoutHistory = (id: string, updates: Partial<Annotation>) => editAnnotation(id, updates, false);
+  const handleEditAnnotation = (id: string, updates: Partial<Annotation>) =>
+    editAnnotation(id, updates, 'record');
+  const editAnnotationSilently = (id: string, updates: Partial<Annotation>) =>
+    editAnnotation(id, updates, 'silent');
 
   // WebMCP (browser-agent tools). The hook detects `document.modelContext`
   // once and does nothing in a browser without it; the banner state below
@@ -4228,11 +4217,11 @@ const App: React.FC = () => {
     },
     editAnnotation: (id, patch) => {
       annotationHistory.clear();
-      editAnnotationWithoutHistory(id, patch);
+      editAnnotationSilently(id, patch);
     },
     deleteAnnotation: (id) => {
       annotationHistory.clear();
-      deleteAnnotationWithoutHistory(id);
+      deleteAnnotationSilently(id);
     },
     selectAnnotation: handleSelectAnnotation,
     showBanner: showAgentNudge,
@@ -5959,8 +5948,6 @@ const App: React.FC = () => {
                     annotateModeActive={htmlAnnotateArmed}
                     onAnnotateModeExit={documentReadOnly ? undefined : handleHtmlAnnotateExit}
                     onAnnotateModeToggle={documentReadOnly ? undefined : handleHtmlAnnotateToggle}
-                    onHistoryUndo={documentReadOnly ? undefined : handleEmbeddedHistoryUndo}
-                    onHistoryRedo={documentReadOnly ? undefined : handleEmbeddedHistoryRedo}
                     vimModeEnabled={liveApp ? false : vimModeEnabled && htmlAnnotateArmed}
                     vimHudEnabled={!liveApp && vimModeEnabled && htmlAnnotateArmed && vimHudEnabled}
                     vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}

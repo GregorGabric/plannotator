@@ -69,14 +69,6 @@ describe('undo history', () => {
     expect(applyCollectionMutations([], mutations, 'redo', getId)[1]?.inReplyTo).toBe('parent');
   });
 
-  it('supports a fresh lifecycle baseline without retaining abandoned actions', () => {
-    const recorded = recordUndoAction(createUndoHistoryState<string>(), 'a1', 2);
-    expect(takeUndoAction(recorded).action).toBe('a1');
-    const cleared = createUndoHistoryState<string>();
-    expect(takeUndoAction(cleared).action).toBeNull();
-    expect(takeRedoAction(cleared, 2).action).toBeNull();
-  });
-
   it('explicitly excludes external and agent-authored mutations', () => {
     expect(isHumanHistoryMutation({})).toBe(true);
     expect(isHumanHistoryMutation({ source: 'browser-agent' })).toBe(false);

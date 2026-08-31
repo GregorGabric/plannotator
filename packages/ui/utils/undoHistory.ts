@@ -121,6 +121,7 @@ const ACTIVE_HISTORY_OVERLAY_SELECTOR = [
   '[role="dialog"]',
   '[data-popover-layer]',
   '[data-comment-popover="true"]',
+  '[data-history-owner]',
   '.cm-editor.cm-focused',
 ].join(',');
 

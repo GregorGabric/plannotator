@@ -2,10 +2,16 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Canvas } from './Canvas';
 import { Toolbar } from './Toolbar';
 import { renderStroke } from './utils';
-import type { Point, AnnotatorState } from './types';
-import { DEFAULT_STATE } from './types';
+import type { Point } from './types';
 import { useImageAnnotatorShortcuts } from '../../shortcuts';
-import { clearStrokeHistory, recordStroke, redoStroke, undoStroke } from './strokeHistory';
+import {
+  DEFAULT_STROKE_HISTORY_STATE,
+  clearStrokeHistory,
+  recordStroke,
+  redoStroke,
+  undoStroke,
+  type StrokeHistoryState,
+} from './strokeHistory';
 
 interface ImageAnnotatorProps {
   imageSrc: string;
@@ -23,7 +29,7 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
   onClose,
   initialName = '',
 }) => {
-  const [state, setState] = useState<AnnotatorState>(DEFAULT_STATE);
+  const [state, setState] = useState<StrokeHistoryState>(DEFAULT_STROKE_HISTORY_STATE);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState(initialName);
   const imageRef = useRef<HTMLImageElement | null>(null);
@@ -32,7 +38,7 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
   // Reset state when dialog opens
   useEffect(() => {
     if (isOpen) {
-      setState(DEFAULT_STATE);
+      setState(DEFAULT_STROKE_HISTORY_STATE);
       setName(initialName);
     }
   }, [isOpen, initialName]);
@@ -159,7 +165,7 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
         handle: handleUndo,
       },
       redo: {
-        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && (state.futureStrokes?.length ?? 0) > 0,
+        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && state.futureStrokes.length > 0,
         handle: handleRedo,
       },
       save: {
@@ -191,7 +197,7 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
           color={state.color}
           strokeSize={state.strokeSize}
           canUndo={state.strokes.length > 0}
-          canRedo={(state.futureStrokes?.length ?? 0) > 0}
+          canRedo={state.futureStrokes.length > 0}
           onToolChange={(tool) => setState(s => ({ ...s, tool }))}
           onColorChange={(color) => setState(s => ({ ...s, color }))}
           onStrokeSizeChange={(strokeSize) => setState(s => ({ ...s, strokeSize }))}

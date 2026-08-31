@@ -351,13 +351,16 @@ describe('shortcuts', () => {
     expect(preventDefaultCalls).toBe(0);
   });
 
-  it('keeps review copy and collapse bindings distinct from annotation history', () => {
-    expect(matchesShortcutBinding({
-      key: 'y', code: 'KeyY', metaKey: true, ctrlKey: false, shiftKey: true, altKey: false,
-    }, 'Mod+Y')).toBe(false);
-    expect(matchesShortcutBinding({
-      key: 'z', code: 'KeyZ', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false,
-    }, 'Mod+Z')).toBe(false);
+  it('assigns review history, copy, and collapse chords to their real registry owners', () => {
+    const claimants = (binding: string) => listRegistryShortcuts(reviewSettingsShortcutRegistry)
+      .filter((entry) => entry.bindings.includes(binding))
+      .map((entry) => `${entry.scopeId}.${entry.actionId}`);
+
+    expect(claimants('Mod+Z')).toEqual(['history.undo']);
+    expect(claimants('Mod+Shift+Z')).toEqual(['history.redo']);
+    expect(claimants('Mod+Y')).toEqual(['history.redo']);
+    expect(claimants('Z')).toEqual(['review-all-files-diff.undoCollapse']);
+    expect(claimants('Mod+Shift+Y')).toEqual(['review-editor.copyFeedback']);
   });
 
   it('switches annotation mode on Shift+1-4 across keyboard layouts', () => {

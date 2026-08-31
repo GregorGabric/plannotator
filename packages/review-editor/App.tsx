@@ -423,7 +423,6 @@ const ReviewApp: React.FC = () => {
   const reviewShowStageControls = useConfigValue('reviewShowStageControls');
   // EXPERIMENTAL: edit code in place to author suggestions (default OFF).
   const editSuggestionsEnabled = useConfigValue('editSuggestions');
-  const [reviewEditSessionActive, setReviewEditSessionActive] = useState(false);
   const semanticDiffEnabled = useConfigValue('semanticDiffEnabled');
   const callFlowEnabled = useConfigValue('callFlowEnabled');
   const confirmedAnalysisSettings = useRef({ semanticDiff: semanticDiffEnabled, callFlow: callFlowEnabled });
@@ -630,9 +629,6 @@ const ReviewApp: React.FC = () => {
     context: reviewHistoryContext,
     apply: applyReviewHistory,
   });
-  useEffect(() => {
-    reviewHistory.clear();
-  }, [reviewHistory, reviewHistoryContext]);
   useEffect(() => {
     reviewHistory.clear();
   }, [diffData?.rawPatch, reviewHistory]);
@@ -3144,7 +3140,6 @@ const ReviewApp: React.FC = () => {
     onAddAnnotation: handleAddAnnotation,
     onAddAnnotationForFile: handleAddAnnotationForFile,
     editSuggestionsEnabled,
-    onEditSessionActiveChange: setReviewEditSessionActive,
     onAddSuggestionsForFile: handleAddSuggestionsForFile,
     onAddEditorCommentForFile: handleAddEditorCommentForFile,
     onAddFileComment: handleAddFileComment,
@@ -3588,7 +3583,6 @@ const ReviewApp: React.FC = () => {
 
   const canHandleReviewHistoryShortcut = useCallback((event: KeyboardEvent): boolean => {
     if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
-    if (reviewEditSessionActive) return false;
     if (submitted || isSendingFeedback || isApproving || isExiting || isPlatformActioning || isLoadingDiff) return false;
     if (guideOpen || openSettingsMenu || showDestinationMenu || platformCommentDialog || showExportModal || showWorktreeDialog || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return false;
     if (showLookAndFeel || showGuideIntro || showReviewSetup || editModeIntroVisible || tourDialogJobId) return false;
@@ -3603,7 +3597,6 @@ const ReviewApp: React.FC = () => {
     editModeIntroVisible,
     openSettingsMenu,
     platformCommentDialog,
-    reviewEditSessionActive,
     showApproveWarning,
     showDestinationMenu,
     showExitWarning,

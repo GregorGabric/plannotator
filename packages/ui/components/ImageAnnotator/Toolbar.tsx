@@ -203,19 +203,21 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         <UndoIcon />
       </button>
 
-      <button
-        type="button"
-        onClick={onRedo}
-        disabled={!canRedo}
-        title="Redo (Cmd+Shift+Z)"
-        className={`p-1.5 rounded transition-colors ${
-          canRedo
-            ? 'hover:bg-muted text-muted-foreground hover:text-foreground'
-            : 'text-muted-foreground/30 cursor-not-allowed'
-        }`}
-      >
-        <RedoIcon />
-      </button>
+      {onRedo && (
+        <button
+          type="button"
+          onClick={onRedo}
+          disabled={!canRedo}
+          title="Redo (Cmd+Shift+Z)"
+          className={`p-1.5 rounded transition-colors ${
+            canRedo
+              ? 'hover:bg-muted text-muted-foreground hover:text-foreground'
+              : 'text-muted-foreground/30 cursor-not-allowed'
+          }`}
+        >
+          <RedoIcon />
+        </button>
+      )}
 
       {/* Clear all */}
       <button

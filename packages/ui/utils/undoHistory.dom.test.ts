@@ -1,13 +1,29 @@
 import '../test-setup/happy-dom';
-import { describe, expect, it } from 'bun:test';
-import React from 'react';
-import { act } from 'react';
-import { createRoot } from 'react-dom/client';
+import { afterEach, describe, expect, it } from 'bun:test';
+import React, { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import {
+  dispatchShortcutEvent,
+  historyShortcuts,
+  useHistoryShortcuts,
+  useImageAnnotatorShortcuts,
+} from '../shortcuts';
 import { useUndoHistory, type UndoHistoryApi } from '../hooks/useUndoHistory';
-import { dispatchShortcutEvent, historyShortcuts, imageAnnotatorShortcuts } from '../shortcuts';
 import { hasActiveHistoryOverlay, isNativeHistoryOwner } from './undoHistory';
 
 const hasDom = typeof document !== 'undefined';
+let root: Root | null = null;
+let host: HTMLDivElement | null = null;
+
+afterEach(async () => {
+  if (root) {
+    await act(async () => root?.unmount());
+  }
+  root = null;
+  host?.remove();
+  host = null;
+  if (hasDom) document.body.innerHTML = '';
+});
 
 function keyboardEvent(target: Element, options: KeyboardEventInit): KeyboardEvent {
   const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...options });
@@ -23,6 +39,50 @@ function nativeOwner(target: Element): boolean {
   keyboardEvent(target, { key: 'z', ctrlKey: true });
   return ownsHistory;
 }
+
+const ShortcutArbitrationHarness: React.FC<{
+  imageOpen: boolean;
+  calls: string[];
+}> = ({ imageOpen, calls }) => {
+  useHistoryShortcuts({
+    handlers: {
+      undo: {
+        when: (event) => !event.defaultPrevented
+          && !isNativeHistoryOwner(event)
+          && !hasActiveHistoryOverlay(document),
+        handle: () => calls.push('document'),
+      },
+    },
+  });
+  return imageOpen
+    ? React.createElement(ImageShortcutOwner, { calls })
+    : React.createElement('button', { type: 'button' }, 'Document target');
+};
+
+const ImageShortcutOwner: React.FC<{ calls: string[] }> = ({ calls }) => {
+  useImageAnnotatorShortcuts({
+    handlers: {
+      undo: {
+        when: (event) => !event.defaultPrevented,
+        handle: () => calls.push('image'),
+      },
+    },
+  });
+  return React.createElement('button', { type: 'button', 'data-popover-layer': true }, 'Image target');
+};
+
+let renderCount = 0;
+let historyApi: UndoHistoryApi<string> | null = null;
+const appliedHistory: string[] = [];
+
+const UndoHistoryHarness: React.FC<{ context: string }> = ({ context }) => {
+  renderCount += 1;
+  historyApi = useUndoHistory({
+    context,
+    apply: (action, direction) => appliedHistory.push(`${direction}:${action}`),
+  });
+  return null;
+};
 
 describe('undo shortcut ownership', () => {
   it.skipIf(!hasDom)('leaves native and shadow-DOM text history alone', () => {
@@ -65,61 +125,39 @@ describe('undo shortcut ownership', () => {
     expect(nativeEvent.defaultPrevented).toBe(false);
   });
 
-  it.skipIf(!hasDom)('lets the active image tool win the intentionally shared binding', () => {
-    const button = document.createElement('button');
-    const imageOverlay = document.createElement('div');
-    imageOverlay.dataset.popoverLayer = 'true';
-    imageOverlay.append(button);
-    document.body.append(imageOverlay);
-    const event = keyboardEvent(button, { key: 'z', ctrlKey: true });
-    const calls: string[] = [];
-    expect(dispatchShortcutEvent(historyShortcuts, {
-      undo: {
-        when: () => !hasActiveHistoryOverlay(document),
-        handle: () => calls.push('document'),
-      },
-    }, event)).toBe(false);
-    expect(dispatchShortcutEvent(imageAnnotatorShortcuts, {
-      undo: () => calls.push('image'),
-    }, event)).toBe(true);
-    expect(calls).toEqual(['image']);
-  });
-
-  it.skipIf(!hasDom)('resets on context changes without rendering for history operations', async () => {
-    const host = document.createElement('div');
+  it.skipIf(!hasDom)('lets the mounted image scope win through the real overlay gate', async () => {
+    host = document.createElement('div');
     document.body.append(host);
-    const root = createRoot(host);
-    let api: UndoHistoryApi<string> | null = null;
-    let renders = 0;
-    const applied: string[] = [];
-    const Harness: React.FC<{ context: string }> = ({ context }) => {
-      renders += 1;
-      api = useUndoHistory({
-        context,
-        apply: (action, direction) => applied.push(`${direction}:${action}`),
-      });
-      return null;
-    };
+    root = createRoot(host);
+    const calls: string[] = [];
+    await act(async () => {
+      root?.render(React.createElement(ShortcutArbitrationHarness, { imageOpen: true, calls }));
+    });
 
-    await act(async () => root.render(React.createElement(Harness, { context: 'document:a' })));
-    const initialRenders = renders;
-    api!.record('a1');
-    expect(api!.canUndo).toBe(true);
-    expect(api!.undo()).toBe(true);
-    expect(api!.redo()).toBe(true);
-    api!.clear();
-    expect(renders).toBe(initialRenders);
-    expect(applied).toEqual(['undo:a1', 'redo:a1']);
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      code: 'KeyZ',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+    expect(calls).toEqual(['image']);
+    expect(event.defaultPrevented).toBe(true);
 
-    api!.record('a2');
-    await act(async () => root.render(React.createElement(Harness, { context: 'document:b' })));
-    expect(api!.canUndo).toBe(false);
-    api!.record('b1');
-    await act(async () => root.render(React.createElement(Harness, { context: 'document:a' })));
-    expect(api!.canUndo).toBe(false);
-
-    await act(async () => root.unmount());
-    host.remove();
+    await act(async () => {
+      root?.render(React.createElement(ShortcutArbitrationHarness, { imageOpen: false, calls }));
+    });
+    const documentEvent = new KeyboardEvent('keydown', {
+      key: 'z',
+      code: 'KeyZ',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(documentEvent);
+    expect(calls).toEqual(['image', 'document']);
+    expect(documentEvent.defaultPrevented).toBe(true);
   });
 
   it.skipIf(!hasDom)('detects dialogs, composers, and focused source editors', () => {
@@ -129,10 +167,48 @@ describe('undo shortcut ownership', () => {
     for (const markup of [
       '<div role="dialog"></div>',
       '<div data-comment-popover="true"></div>',
+      '<div data-history-owner="edit-session"></div>',
       '<div class="cm-editor cm-focused"></div>',
     ]) {
       root.innerHTML = markup;
       expect(hasActiveHistoryOverlay(root)).toBe(true);
     }
+  });
+
+  it.skipIf(!hasDom)('updates history imperatively without rerendering its owner', async () => {
+    renderCount = 0;
+    historyApi = null;
+    appliedHistory.length = 0;
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => {
+      root?.render(React.createElement(UndoHistoryHarness, { context: 'document:a' }));
+    });
+    const api = historyApi;
+    if (!api) throw new Error('undo history did not mount');
+    const rendersAfterMount = renderCount;
+
+    api.record('add');
+    expect(api.canUndo).toBe(true);
+    expect(renderCount).toBe(rendersAfterMount);
+    expect(api.undo()).toBe(true);
+    expect(appliedHistory).toEqual(['undo:add']);
+    expect(renderCount).toBe(rendersAfterMount);
+
+    await act(async () => {
+      root?.render(React.createElement(UndoHistoryHarness, { context: 'document:b' }));
+    });
+    const nextApi = historyApi;
+    if (!nextApi) throw new Error('undo history did not update');
+    expect(nextApi.canUndo).toBe(false);
+    expect(nextApi.canRedo).toBe(false);
+
+    nextApi.record('second-context');
+    await act(async () => {
+      root?.render(React.createElement(UndoHistoryHarness, { context: 'document:a' }));
+    });
+    expect(nextApi.canUndo).toBe(false);
+    expect(nextApi.canRedo).toBe(false);
   });
 });

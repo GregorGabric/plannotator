@@ -209,9 +209,6 @@ export interface HtmlViewerProps {
   onAnnotateModeExit?: () => void;
   /** Mod+Shift+A pressed while focus lived inside the iframe. */
   onAnnotateModeToggle?: () => void;
-  /** Annotation-history shortcuts pressed while focus lived inside the iframe. */
-  onHistoryUndo?: () => void;
-  onHistoryRedo?: () => void;
   /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
   vimModeEnabled?: boolean;
   /** Replace the iframe-local compact badge with the shared live key HUD. */
@@ -320,8 +317,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
       annotateModeActive = true,
       onAnnotateModeExit,
       onAnnotateModeToggle,
-      onHistoryUndo,
-      onHistoryRedo,
       vimModeEnabled = false,
       vimHudEnabled = false,
       vimHudKeyPanelEnabled = true,
@@ -377,10 +372,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
     onAnnotateModeExitRef.current = onAnnotateModeExit;
     const onAnnotateModeToggleRef = useRef(onAnnotateModeToggle);
     onAnnotateModeToggleRef.current = onAnnotateModeToggle;
-    const onHistoryUndoRef = useRef(onHistoryUndo);
-    onHistoryUndoRef.current = onHistoryUndo;
-    const onHistoryRedoRef = useRef(onHistoryRedo);
-    onHistoryRedoRef.current = onHistoryRedo;
 
     /** Single choke point for direct-to-bridge posts: live sessions get the
      *  token + concrete targetOrigin, srcdoc keeps "*" and no token. */
@@ -706,14 +697,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
           onAnnotateModeToggleRef.current?.();
           return;
         }
-        if (isRecord(e.data) && e.data.type === `${PREFIX}history-undo`) {
-          onHistoryUndoRef.current?.();
-          return;
-        }
-        if (isRecord(e.data) && e.data.type === `${PREFIX}history-redo`) {
-          onHistoryRedoRef.current?.();
-          return;
-        }
         const vimCopy = parseVimBridgeCopy(e.data);
         if (vimCopy !== null) {
           const iframe = iframeRef.current;
@@ -874,17 +857,6 @@ export const HtmlViewer = forwardRef<ViewerHandle, HtmlViewerProps>(
         { type: `${PREFIX}set-annotate-mode`, active: annotateModeActive },
       );
     }, [iframeReadyVersion, annotateModeActive]);
-
-    // History chords are opt-in so a standalone/published HtmlViewer that
-    // supplies no handlers never loses the embedded page's native shortcuts.
-    useEffect(() => {
-      if (iframeReadyVersion === 0) return;
-      postToBridge({
-        type: `${PREFIX}set-history-shortcuts`,
-        undo: !!onHistoryUndo,
-        redo: !!onHistoryRedo,
-      });
-    }, [iframeReadyVersion, onHistoryRedo, onHistoryUndo]);
 
     // Parent-side Esc rung: with focus outside the iframe the bridge never
     // sees the keydown. Any open composer/toolbar/picker still closes first —
