@@ -1,4 +1,5 @@
 import {
+  annotateNoteShortcuts,
   annotationModeShortcuts,
   annotationPanelShortcuts,
   annotationToolbarShortcuts,
@@ -103,6 +104,9 @@ export const planReviewSettingsShortcutRegistry = createShortcutRegistry([
 
 export const annotateSettingsShortcutRegistry = createShortcutRegistry([
   annotateEditorSettingsShortcuts,
+  // Annotate-only: the quick-note field lives on the annotate Send control and
+  // has no plan-review counterpart.
+  annotateNoteShortcuts,
   annotateSidebarShortcuts,
   ...sharedPlanSurfaceShortcuts,
 ] as const);

@@ -1,5 +1,6 @@
 import React from 'react';
 import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
+import { AnnotateNoteSheet, type AnnotateSubmitNoteControl } from './AnnotateSendControl';
 
 type CompactPlanDecisionActionId = Extract<
   CompactPlanAction['id'],
@@ -58,6 +59,11 @@ interface CompactPlanReviewProps {
   primaryActionId?: CompactPlanReviewAction['id'];
   onOpenAnnotations: () => void;
   onOpenAI?: () => void;
+  /** Annotate surfaces only. The compact shell has no header Send control, so
+   *  the quick note lives here, always expanded — a menu row cannot hold a
+   *  text field, and the decision list's ids are a closed union. */
+  submitNote?: AnnotateSubmitNoteControl;
+  submitNoteDisabled?: boolean;
 }
 
 /** Compact review summary and the incumbent session decision actions. */
@@ -67,6 +73,8 @@ export const CompactPlanReview: React.FC<CompactPlanReviewProps> = ({
   primaryActionId,
   onOpenAnnotations,
   onOpenAI,
+  submitNote,
+  submitNoteDisabled = false,
 }) => {
   const orderedActions = [...actions].sort((left, right) => {
     if (left.id === primaryActionId) return -1;
@@ -107,6 +115,21 @@ export const CompactPlanReview: React.FC<CompactPlanReviewProps> = ({
             )}
           </div>
         </section>
+
+        {submitNote && (
+          <section aria-labelledby="pn-compact-review-note-title">
+            <h2 id="pn-compact-review-note-title" className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              Quick note
+            </h2>
+            <div className="mt-2">
+              <AnnotateNoteSheet
+                note={submitNote}
+                disabled={submitNoteDisabled}
+                hint="Sent in one step, with anything you have already annotated."
+              />
+            </div>
+          </section>
+        )}
 
         <section aria-labelledby="pn-compact-review-decision-title">
           <h2 id="pn-compact-review-decision-title" className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">

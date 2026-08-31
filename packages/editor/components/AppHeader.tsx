@@ -11,6 +11,7 @@ import type { UIPreferences } from '@plannotator/ui/utils/uiPreferences';
 import { SparklesIcon } from '@plannotator/ui/components/SparklesIcon';
 import type { CompactPlanAction } from '@plannotator/ui/components/PlanHeaderMenu';
 import { HtmlSurfaceControls } from '@plannotator/ui/components/HtmlSurfaceControls';
+import { AnnotateSendControl, type AnnotateSubmitNoteControl } from './AnnotateSendControl';
 
 /** Plannotator's refresh strings for the published control: the document
  * is a file on disk, so the refresh says so. */
@@ -99,6 +100,10 @@ interface AppHeaderProps {
   onGoalSetupExit: () => void;
   onGoalSetupSubmit: () => void;
   onAnnotateFeedback: () => void;
+  /** Annotate surfaces only: the split Send control's quick-note field.
+   *  Absent (plan review, and any host that does not wire it) keeps the
+   *  incumbent header exactly as it was. */
+  submitNote?: AnnotateSubmitNoteControl;
   onAnnotateApprove: () => void;
   onFeedback: () => void;
   onApprove: () => void;
@@ -187,6 +192,7 @@ export const AppHeader = React.memo<AppHeaderProps>(({
   onGoalSetupExit,
   onGoalSetupSubmit,
   onAnnotateFeedback,
+  submitNote,
   onAnnotateApprove,
   onFeedback,
   onApprove,
@@ -318,14 +324,28 @@ export const AppHeader = React.memo<AppHeaderProps>(({
                   disabled={isSubmitting || isExiting}
                   isLoading={isExiting}
                 />
-                {hasAnyAnnotations && (
-                  <FeedbackButton
-                    onClick={onAnnotateFeedback}
+                {submitNote ? (
+                  // The split control renders in BOTH states: with feedback the
+                  // primary button is the incumbent Send Feedback, and without
+                  // it the same button opens the note field instead of staying
+                  // hidden (its incumbent zero-annotation behavior).
+                  <AnnotateSendControl
+                    hasFeedback={hasAnyAnnotations}
                     disabled={isSubmitting || isExiting}
                     isLoading={isSubmitting}
-                    label="Send Feedback"
-                    title="Send Feedback"
+                    onSend={onAnnotateFeedback}
+                    note={submitNote}
                   />
+                ) : (
+                  hasAnyAnnotations && (
+                    <FeedbackButton
+                      onClick={onAnnotateFeedback}
+                      disabled={isSubmitting || isExiting}
+                      isLoading={isSubmitting}
+                      label="Send Feedback"
+                      title="Send Feedback"
+                    />
+                  )
                 )}
               </>
             ) : (

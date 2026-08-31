@@ -38,6 +38,7 @@ import { getCallbackConfig, CallbackAction, executeCallback } from '@plannotator
 import { useAgents } from '@plannotator/ui/hooks/useAgents';
 import { useActiveSection } from '@plannotator/ui/hooks/useActiveSection';
 import { storage } from '@plannotator/ui/utils/storage';
+import { getIdentity } from '@plannotator/ui/utils/identity';
 import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { configStore, useConfigValue } from '@plannotator/ui/config';
 import { CompletionOverlay } from '@plannotator/ui/components/CompletionOverlay';
@@ -174,6 +175,7 @@ import {
   CompactPlanReview,
   type CompactPlanReviewAction,
 } from './components/CompactPlanReview';
+import type { AnnotateSubmitNoteControl } from './components/AnnotateSendControl';
 import {
   COMPACT_PLAN_ARTIFACT,
   openCompactPlanNavigator,
@@ -521,6 +523,12 @@ const App: React.FC = () => {
   const [annotateMode, setAnnotateMode] = useState(false);
   const [gate, setGate] = useState(false);
   const [approvalNotesSupported, setApprovalNotesSupported] = useState(false);
+  // One-step "submit with a note" (annotate surfaces). The typed text lives in
+  // the control itself; App only tracks the note it has committed and is
+  // waiting to submit. An unsent note is deliberately NOT persisted: it becomes
+  // a real, drafted annotation the moment it is sent, and a one-liner is
+  // cheaper to retype than a second draft channel is to maintain.
+  const [pendingSubmitNoteId, setPendingSubmitNoteId] = useState<string | null>(null);
   const [clientLease, setClientLease] = useState<AnnotateClientLeaseConfig | null>(null);
   const [annotateSource, setAnnotateSource] = useState<'file' | 'message' | 'folder' | null>(null);
   const [recentMessages, setRecentMessages] = useState<PickerMessage[]>([]);
@@ -4958,6 +4966,75 @@ const App: React.FC = () => {
     sendFeedback();
   }, [maybeConfirmUnsavedSourceFileEdits]);
 
+  // --- One-step submit with a note (annotate surfaces only) -----------------
+  // Reading an agent's message and wanting to reply "that's fine, but watch the
+  // migration" took four interactions (open the global-comment composer, type,
+  // save, Send). The note is created as a GLOBAL_COMMENT at SUBMIT time, so it
+  // rides exportAnnotations and the /api/feedback annotations array exactly
+  // like a composer-made global comment: zero server change on either runtime.
+  //
+  // It is committed into `annotations` (not threaded through the payload
+  // builders) so every annotate export path picks it up for free — including
+  // annotate-last's multi-message export, whose entries are rebuilt from the
+  // live linked-doc session snapshot rather than from `allAnnotations`.
+  // The submit itself waits a render for that commit; see the effect below.
+  const commitSubmitNote = useCallback((text: string): string | null => {
+    const trimmed = text.trim();
+    if (!trimmed) return null;
+    const note: Annotation = {
+      id: `global-note-${Date.now()}`,
+      blockId: '',
+      startOffset: 0,
+      endOffset: 0,
+      type: AnnotationType.GLOBAL_COMMENT,
+      text: trimmed,
+      originalText: '',
+      createdA: Date.now(),
+      author: getIdentity(),
+    };
+    // Deliberately NOT annotationHistory.record: the note exists for the
+    // duration of one submit, and an undo of it after the send would restore
+    // nothing the agent has not already been told.
+    annotationsRef.current = [...annotationsRef.current, note];
+    setAnnotations(annotationsRef.current);
+    return note.id;
+  }, []);
+
+  const handleSubmitNote = useCallback((text: string) => {
+    if (isSubmitting || isExiting) return;
+    const noteId = commitSubmitNote(text);
+    if (!noteId) {
+      // Empty field: fall back to the plain send when something is queued,
+      // otherwise there is genuinely nothing to submit.
+      if (hasFeedbackToSend) handleHeaderAnnotateFeedback();
+      return;
+    }
+    setPendingSubmitNoteId(noteId);
+  }, [
+    commitSubmitNote,
+    handleHeaderAnnotateFeedback,
+    hasFeedbackToSend,
+    isExiting,
+    isSubmitting,
+  ]);
+
+  // The commit above is a state write, so the feedback payload builders (which
+  // close over `allAnnotations`) only see the note on the NEXT render. Submit
+  // from an effect once the note is actually in state rather than guessing.
+  useEffect(() => {
+    if (!pendingSubmitNoteId) return;
+    if (!annotations.some((a) => a.id === pendingSubmitNoteId)) return;
+    setPendingSubmitNoteId(null);
+    handleHeaderAnnotateFeedback();
+  }, [annotations, handleHeaderAnnotateFeedback, pendingSubmitNoteId]);
+
+  const submitNoteControl = useMemo<AnnotateSubmitNoteControl | undefined>(
+    () => (annotateMode && isApiMode && !documentReadOnly
+      ? { onSubmit: handleSubmitNote }
+      : undefined),
+    [annotateMode, documentReadOnly, handleSubmitNote, isApiMode],
+  );
+
   const handleHeaderAnnotateApprove = useCallback(() => {
     if (maybeConfirmUnsavedSourceFileEdits('approve', requestAnnotateApprove)) return;
     requestAnnotateApprove();
@@ -5508,6 +5585,7 @@ const App: React.FC = () => {
           onGoalSetupExit={handleGoalSetupExit}
           onGoalSetupSubmit={handleGoalSetupSubmit}
           onAnnotateFeedback={handleHeaderAnnotateFeedback}
+          submitNote={submitNoteControl}
           onAnnotateApprove={handleHeaderAnnotateApprove}
           onFeedback={handleHeaderFeedback}
           onApprove={handleHeaderApprove}
@@ -5588,6 +5666,8 @@ const App: React.FC = () => {
               primaryActionId={compactPrimaryReviewActionId}
               onOpenAnnotations={() => switchCompactPlanSurface('annotations')}
               onOpenAI={canUseAskAI ? () => switchCompactPlanSurface('ai') : undefined}
+              submitNote={submitNoteControl}
+              submitNoteDisabled={compactActionBusy}
             />
           </CompactPlanStage>
         )}

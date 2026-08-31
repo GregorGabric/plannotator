@@ -298,6 +298,12 @@ User annotates content, provides feedback
 Send Annotations → feedback sent to agent session
 ```
 
+### Submit with a note
+
+Every annotate surface (file, folder, `annotate-last` message, URL, live app) has a split Send control: the primary button is the incumbent Send Feedback, and the caret beside it opens a one-line "Add a note..." field whose Enter submits the note TOGETHER with any annotations already queued, in one interaction. With nothing queued the primary button opens that field instead of staying hidden, which is what it did before (submitting an empty review was never useful). Escape closes the field without submitting and keeps the typed text for the rest of the session; an unsent note is deliberately not drafted, because it becomes a real, drafted annotation the moment it is sent.
+
+The note is created as a `GLOBAL_COMMENT` at SUBMIT time and committed into `annotations` (`commitSubmitNote` in `packages/editor/App.tsx`), so it rides `exportAnnotations` and the `/api/feedback` annotations array exactly like a composer-made global comment: **zero server change on either runtime** — both `/api/feedback` handlers take a pre-rendered feedback string plus an opaque `unknown[]`. Committing it into state rather than threading it through the payload builders is what makes `annotate-last`'s multi-message export pick it up, since those entries are rebuilt from the live linked-doc session snapshot rather than from `allAnnotations`; the submit therefore waits one render for the commit (an effect keyed on the pending note id). It is NOT recorded in the annotation undo/redo history: it exists for the duration of one submit. On HTML and live-app surfaces the comment-only clamp does not apply — that clamp sits on the iframe's postMessage ingest, and this note is created in the parent. Plan mode is untouched: the control is annotate-only. The compact touch shell has no header Send control, so the field lives in its "Review and finish" surface instead. The affordance is `packages/editor/components/AnnotateSendControl.tsx`; the chords are documented by the `annotate-note` shortcut scope.
+
 ### Tolerant argument resolution
 
 Slash-command hosts forward raw user words to `plannotator annotate` verbatim (on Claude Code through a bash-substitution prefix that runs before the model sees anything), so non-strict invocations resolve their arguments in three tiers. The shared logic lives in `packages/shared/annotate-target.ts` (vendored to Pi) and is wired into the CLI's annotate branch plus the OpenCode and Pi command parsers:
