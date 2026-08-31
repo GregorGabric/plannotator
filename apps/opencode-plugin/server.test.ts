@@ -21,6 +21,12 @@ type SessionContextHook = (event: {
 function createContext(
   options: Record<string, unknown> = {},
   agents: Array<{ id: string; description?: string; mode: string; hidden: boolean }> = [],
+  hostOverrides: {
+    // Pre-#44765 hosts expose no command domain; the adapter must then register
+    // no commands and behave exactly as it did before.
+    command?: { transform: (apply: (draft: { add: (definition: any) => void }) => void) => Promise<unknown> };
+    agentListShape?: "envelope" | "array";
+  } = {},
 ) {
   let toolDefinition: Record<string, any> | undefined;
   let sessionContextHook: SessionContextHook | undefined;
@@ -29,8 +35,11 @@ function createContext(
   return {
     context: {
       options,
+      ...(hostOverrides.command ? { command: hostOverrides.command } : {}),
       agent: {
-        list: async () => ({ location: { directory: "/project" }, data: agents }),
+        list: async () => (hostOverrides.agentListShape === "array"
+          ? agents
+          : { location: { directory: "/project" }, data: agents }),
         transform: async () => ({ dispose: async () => {} }),
       },
       session: {
@@ -194,6 +203,70 @@ describe("OpenCode V2 server plugin", () => {
       tools: {
         submit_plan: { description: "Submit", input: {} },
       },
+    };
+
+    await testContext.getSessionContextHook()?.(event);
+    expect(event.tools.submit_plan).toBeUndefined();
+  });
+
+  test("registers the slash commands only on a host that exposes the command API", async () => {
+    const registered: string[] = [];
+    const withCommands = createContext({}, [], {
+      command: {
+        transform: async (apply) => {
+          apply({ add: (definition) => registered.push(definition.name) });
+          return { dispose: async () => {} };
+        },
+      },
+    });
+    await serverPlugin.setup(withCommands.context as never);
+    expect(registered).toEqual([
+      "plannotator-review",
+      "plannotator-annotate",
+      "plannotator-last",
+    ]);
+
+    // No command domain: nothing registered, and the pre-existing submit_plan
+    // contract is untouched.
+    const withoutCommands = createContext();
+    await serverPlugin.setup(withoutCommands.context as never);
+    expect(withoutCommands.getToolDefinition()?.name).toBe("submit_plan");
+  });
+
+  test("registers slash commands even when submit_plan is disabled", async () => {
+    // `workflow: "manual"` returns early before the tool registration, which is
+    // exactly the mode that depends on the slash commands existing.
+    const registered: string[] = [];
+    const testContext = createContext({ workflow: "manual" }, [], {
+      command: {
+        transform: async (apply) => {
+          apply({ add: (definition) => registered.push(definition.name) });
+          return { dispose: async () => {} };
+        },
+      },
+    });
+    await serverPlugin.setup(testContext.context as never);
+
+    expect(registered).toHaveLength(3);
+    expect(testContext.getToolDefinition()).toBeUndefined();
+  });
+
+  test("reads a bare-array agent list, so subagent gating still applies", async () => {
+    // Newer plugin hosts answer agent.list() with an array rather than the
+    // `{ data }` envelope; reading `.data` blindly emptied the list and let
+    // subagents keep submit_plan.
+    delete process.env.PLANNOTATOR_ALLOW_SUBAGENTS;
+    const testContext = createContext(
+      { workflow: "all-agents" },
+      [{ id: "researcher", mode: "subagent", hidden: false }],
+      { agentListShape: "array" },
+    );
+    await serverPlugin.setup(testContext.context as never);
+    const event = {
+      agent: "researcher",
+      system: [{ type: "text" as const, text: "Base system prompt" }],
+      messages: [],
+      tools: { submit_plan: { description: "Submit", input: {} } },
     };
 
     await testContext.getSessionContextHook()?.(event);
