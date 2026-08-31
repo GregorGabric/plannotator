@@ -104,7 +104,10 @@ export async function runNativeCommand(
   // tolerant argument resolution takes it from here: nothing is parsed or
   // rewritten on the way through.
   const rawArgs = typeof invocation.prompt?.text === "string" ? invocation.prompt.text : "";
-  const client = createV2BridgeClient({ ctx: deps.ctx, getAgents: deps.getAgents });
+  // `sessionID` is what lets the bridge put the session URL where the user can
+  // actually see it. Without it (and on a host with no `session.synthetic`) a
+  // remote review would only print its URL into a stream OpenCode discards.
+  const client = createV2BridgeClient({ ctx: deps.ctx, getAgents: deps.getAgents, sessionID });
 
   const run = deps.runCommand ?? ((request: CliCommandRequest) => handleCliCommand(request as never));
   await run({

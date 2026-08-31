@@ -33,11 +33,23 @@ echo "==> installing @opencode-ai/cli@$tag into $work"
 cd "$work"
 npm init -y >/dev/null 2>&1
 npm install --no-audit --no-fund "@opencode-ai/cli@$tag" >/dev/null
-opencode_bin="$work/node_modules/.bin/opencode"
-if [ ! -x "$opencode_bin" ]; then
-  echo "No opencode binary at $opencode_bin" >&2
+# @opencode-ai/cli publishes its binary as `opencode2` on every dist-tag
+# (`latest`, `next`, `beta`, `dev`); only the separate `opencode-ai` package
+# installs `opencode`. Looking for the wrong one failed this script before it
+# ever started a server, so try both and say which names were checked.
+opencode_bin=""
+for candidate in opencode2 opencode; do
+  if [ -x "$work/node_modules/.bin/$candidate" ]; then
+    opencode_bin="$work/node_modules/.bin/$candidate"
+    break
+  fi
+done
+if [ -z "$opencode_bin" ]; then
+  echo "No OpenCode binary in $work/node_modules/.bin (looked for: opencode2, opencode)" >&2
+  ls -1 "$work/node_modules/.bin" >&2 || true
   exit 1
 fi
+echo "==> using $opencode_bin"
 "$opencode_bin" --version
 
 echo "==> building and packing the plugin"
