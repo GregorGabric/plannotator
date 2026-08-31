@@ -82,6 +82,7 @@ describe('shortcuts', () => {
       'Vim Text Navigation',
       'Vim Annotation Actions',
       'Image Annotator',
+      'History',
     ]);
 
     expect(annotateSections.map(section => section.title)).toEqual([
@@ -94,6 +95,7 @@ describe('shortcuts', () => {
       'Vim Text Navigation',
       'Vim Annotation Actions',
       'Image Annotator',
+      'History',
     ]);
 
     expect(getShortcut(planReviewSettingsShortcutRegistry, 'plan-review-editor-settings', 'submitPlan')?.description).toBe('Approve / Send feedback');
@@ -107,6 +109,7 @@ describe('shortcuts', () => {
       'Search',
       'Layout',
       'File Actions',
+      'History',
       'File Navigation',
       'All-Files View',
       'Annotations',
@@ -346,6 +349,18 @@ describe('shortcuts', () => {
 
     expect(handled).toBe(false);
     expect(preventDefaultCalls).toBe(0);
+  });
+
+  it('assigns review history, copy, and collapse chords to their real registry owners', () => {
+    const claimants = (binding: string) => listRegistryShortcuts(reviewSettingsShortcutRegistry)
+      .filter((entry) => entry.bindings.includes(binding))
+      .map((entry) => `${entry.scopeId}.${entry.actionId}`);
+
+    expect(claimants('Mod+Z')).toEqual(['history.undo']);
+    expect(claimants('Mod+Shift+Z')).toEqual(['history.redo']);
+    expect(claimants('Mod+Y')).toEqual(['history.redo']);
+    expect(claimants('Z')).toEqual(['review-all-files-diff.undoCollapse']);
+    expect(claimants('Mod+Shift+Y')).toEqual(['review-editor.copyFeedback']);
   });
 
   it('switches annotation mode on Shift+1-4 across keyboard layouts', () => {

@@ -75,10 +75,12 @@ jobs:
           packages/review-editor/components/DiffViewer.headerControls.test.tsx
 
       # Seam contracts + the remaining DOM-gated tests. Scoped to the DOM files
-      # (not the whole ui suite) to keep this process light.
+      # (not the whole ui suite) to keep this process light. Files get isolated
+      # globals because theme, storage, and DOM test state must not leak between
+      # suites when Bun schedules them differently across platforms.
       - name: Run UI seam-contract + DOM tests
         run: >-
-          DOM_TESTS=1 bun test
+          DOM_TESTS=1 bun test --isolate
           packages/ui/markdownEditorFidelity.test.tsx
           packages/ui/annotationDraftPersistence.test.tsx
           packages/ui/codeAnnotationDraftPersistence.test.tsx
@@ -135,6 +137,8 @@ jobs:
           packages/ui/components/AnnotationPanel.props.test.tsx
           packages/ui/components/Viewer.consumer.test.tsx
           packages/ui/components/Viewer.codeBlockHighlightSwap.test.tsx
+          packages/ui/components/ImageAnnotator/ImageAnnotator.shortcuts.test.tsx
+          packages/ui/utils/undoHistory.dom.test.ts
           packages/ui/utils/codeBlockMark.test.ts
           packages/ui/components/InlineMarkdown.seam.test.tsx
           packages/ui/components/ImageThumbnail.seam.test.tsx
@@ -154,6 +158,7 @@ jobs:
           packages/ui/components/AnnotationPanel.unanchored.test.tsx
           packages/ui/hooks/useHtmlRefresh.test.tsx
           packages/ui/hooks/useSharing.contentRevision.test.tsx
+          packages/ui/hooks/useSharing.shortUrlLifecycle.test.tsx
           packages/ui/components/AnnotationToolbar.commentOnly.test.tsx
           packages/ui/components/CommentPopover.quickLookGood.test.tsx
           packages/editor/actionsLabelMode.test.ts

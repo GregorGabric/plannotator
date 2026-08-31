@@ -88,6 +88,7 @@ import { useArchive } from '@plannotator/ui/hooks/useArchive';
 import { useEditorAnnotations } from '@plannotator/ui/hooks/useEditorAnnotations';
 import { useExternalAnnotations } from '@plannotator/ui/hooks/useExternalAnnotations';
 import { useExternalAnnotationHighlights } from '@plannotator/ui/hooks/useExternalAnnotationHighlights';
+import { useUndoHistory } from '@plannotator/ui/hooks/useUndoHistory';
 import { buildPlanAgentInstructions } from '@plannotator/ui/utils/planAgentInstructions';
 import { useFileBrowser } from '@plannotator/ui/hooks/useFileBrowser';
 import { getFileEditStatus } from '@plannotator/ui/components/sidebar/FileBrowser';
@@ -132,14 +133,28 @@ import {
   useDocumentViewShortcuts,
   useDoubleTapShortcuts,
   useHtmlAnnotateShortcuts,
+  useHistoryShortcuts,
 } from '@plannotator/ui/shortcuts';
+import {
+  applyCollectionMutation,
+  hasActiveHistoryOverlay,
+  isHumanHistoryMutation,
+  isNativeHistoryOwner,
+  syncHistoryHighlight,
+  type CollectionMutation,
+  type HistoryDirection,
+} from '@plannotator/ui/utils/undoHistory';
 const USE_DIFF_DEMO =
   import.meta.env.VITE_DIFF_DEMO === '1' ||
   import.meta.env.VITE_DIFF_DEMO === 'true';
 const DEMO_PLAN_CONTENT = USE_DIFF_DEMO
   ? DIFF_DEMO_PLAN_CONTENT
   : DEFAULT_DEMO_PLAN_CONTENT;
-import { useCheckboxOverrides } from './hooks/useCheckboxOverrides';
+import {
+  useCheckboxOverrides,
+  type CheckboxOverrideSnapshot,
+  type CheckboxToggleMutation,
+} from './hooks/useCheckboxOverrides';
 import {
   usePlanDiffNavigationAutoExit,
   usePlanDiffViewAutoExit,
@@ -326,6 +341,39 @@ type CompactPlanTransientSurface = Extract<
   { readonly type: 'annotations' | 'ai' | 'review' }
 >['type'];
 
+interface HistorySelection {
+  annotationId: string | null;
+  codeAnnotationId: string | null;
+}
+
+type DocumentHistoryAction =
+  | {
+      kind: 'annotation';
+      mutation: CollectionMutation<Annotation>;
+      beforeSelection: HistorySelection;
+      afterSelection: HistorySelection;
+    }
+  | {
+      kind: 'code-annotation';
+      mutation: CollectionMutation<CodeAnnotation>;
+      beforeSelection: HistorySelection;
+      afterSelection: HistorySelection;
+    }
+  | {
+      kind: 'checkbox';
+      mutation: CheckboxToggleMutation;
+      beforeSelection: HistorySelection;
+      afterSelection: HistorySelection;
+    };
+
+const itemId = (item: { id: string }): string => item.id;
+
+function annotationOwnsHighlight(annotation: Annotation): boolean {
+  return !annotation.diffContext
+    && annotation.type !== AnnotationType.GLOBAL_COMMENT
+    && !annotation.id.startsWith('ann-checkbox-');
+}
+
 /** Hint shown following the cursor while hovering a sidebar/panel resize handle. */
 const RESIZE_HANDLE_TOOLTIP = 'Click to close · Drag to resize';
 
@@ -338,8 +386,14 @@ const App: React.FC = () => {
     annotationsRef.current = annotations;
   }, [annotations]);
   const [codeAnnotations, setCodeAnnotations] = useState<CodeAnnotation[]>([]);
+  const codeAnnotationsRef = useRef(codeAnnotations);
+  codeAnnotationsRef.current = codeAnnotations;
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [selectedCodeAnnotationId, setSelectedCodeAnnotationId] = useState<string | null>(null);
+  const selectionRef = useRef<HistorySelection>({ annotationId: null, codeAnnotationId: null });
+  selectionRef.current = { annotationId: selectedAnnotationId, codeAnnotationId: selectedCodeAnnotationId };
+  const restoreCheckboxOverridesRef = useRef<(snapshot: CheckboxOverrideSnapshot) => void>(() => {});
+  const checkboxSelectionBeforeRef = useRef<HistorySelection | null>(null);
   const editableDocuments = useEditableDocuments();
   const activeEditableDocument = editableDocuments.activeDocument;
   const displayedMarkdown = activeEditableDocument?.currentText ?? markdown;
@@ -648,6 +702,80 @@ const App: React.FC = () => {
     setCompactInputMethod(inputMethod);
   }, [inputMethod, isCompactTouchLayout]);
   const viewerRef = useRef<ViewerHandle>(null);
+  const historyContext = [
+    annotateSource ?? 'plan',
+    selectedMessageId ?? 'message',
+    linkedDocParsePath ?? sourceFilePath ?? 'root',
+    livePageUrl || 'page',
+  ].join(':');
+  const applyDocumentHistory = useCallback((action: DocumentHistoryAction, direction: HistoryDirection) => {
+    if (action.kind === 'checkbox') {
+      const snapshot = direction === 'undo'
+        ? action.mutation.beforeOverrides
+        : action.mutation.afterOverrides;
+      const checkboxAnnotations = direction === 'undo'
+        ? action.mutation.beforeAnnotations
+        : action.mutation.afterAnnotations;
+      restoreCheckboxOverridesRef.current(snapshot);
+      setAnnotations((current) => {
+        const withoutBlockAnnotations = current.filter((annotation) =>
+          annotation.blockId !== action.mutation.blockId
+          || !annotation.id.startsWith('ann-checkbox-')
+        );
+        const next = checkboxAnnotations.reduce(
+          (items, entry) => applyCollectionMutation(
+            items,
+            { kind: 'add', item: entry.annotation, index: entry.index },
+            'redo',
+            itemId,
+          ),
+          withoutBlockAnnotations,
+        );
+        annotationsRef.current = next;
+        return next;
+      });
+      const selection = direction === 'undo' ? action.beforeSelection : action.afterSelection;
+      setSelectedAnnotationId(selection.annotationId);
+      setSelectedCodeAnnotationId(selection.codeAnnotationId);
+      selectionRef.current = selection;
+      return;
+    }
+
+    const selection = direction === 'undo' ? action.beforeSelection : action.afterSelection;
+    if (action.kind === 'code-annotation') {
+      setCodeAnnotations((current) => {
+        const next = applyCollectionMutation(current, action.mutation, direction, itemId);
+        codeAnnotationsRef.current = next;
+        return next;
+      });
+    } else {
+      setAnnotations((current) => {
+        const next = applyCollectionMutation(current, action.mutation, direction, itemId);
+        annotationsRef.current = next;
+        return next;
+      });
+      const annotation = action.mutation.kind === 'edit'
+        ? (direction === 'undo' ? action.mutation.before : action.mutation.after)
+        : action.mutation.item;
+      const shouldPaint = annotationOwnsHighlight(annotation)
+        && ((action.mutation.kind === 'add' && direction === 'redo')
+          || (action.mutation.kind === 'delete' && direction === 'undo')
+          || action.mutation.kind === 'edit');
+      if (annotationOwnsHighlight(annotation)) {
+        syncHistoryHighlight(viewerRef.current, annotation, shouldPaint);
+      }
+    }
+    setSelectedAnnotationId(selection.annotationId);
+    setSelectedCodeAnnotationId(selection.codeAnnotationId);
+    selectionRef.current = selection;
+  }, []);
+  const annotationHistory = useUndoHistory<DocumentHistoryAction>({
+    context: historyContext,
+    apply: applyDocumentHistory,
+  });
+  useEffect(() => {
+    if (submitted) annotationHistory.clear();
+  }, [annotationHistory, submitted]);
   // Desktop uses the main document element as its native scroll viewport.
   // Compact coarse-pointer browsers use the page scroller so Mobile Safari
   // receives the document scroll gesture it requires to collapse its chrome.
@@ -1072,13 +1200,18 @@ const App: React.FC = () => {
     );
   }, []);
 
+  const handleBeforeDocumentNavigation = useCallback(() => {
+    annotationHistory.clear();
+    snapshotActiveEditableDocument();
+  }, [annotationHistory, snapshotActiveEditableDocument]);
+
   // Linked document navigation
   const linkedDocHook = useLinkedDoc({
     markdown, annotations, selectedAnnotationId, globalAttachments,
     setMarkdown, setAnnotations, setSelectedAnnotationId, setGlobalAttachments,
     renderAs, rawHtml, shareHtml, setRenderAs, setRawHtml, setShareHtml,
     viewerRef, sidebar: linkedDocSidebar, sourceFilePath, sourceConverted,
-    onBeforeNavigate: snapshotActiveEditableDocument,
+    onBeforeNavigate: handleBeforeDocumentNavigation,
     onDocumentLoaded: handleLinkedDocumentLoaded,
     onDocumentActivated: handleLinkedDocumentActivated,
     getDocumentMarkdown: getLinkedDocumentMarkdown,
@@ -1200,12 +1333,16 @@ const App: React.FC = () => {
     setMarkdown, setAnnotations, setSelectedAnnotationId, setSubmitted,
   });
   const documentReadOnly = archive.archiveMode;
+  useEffect(() => {
+    annotationHistory.clear();
+  }, [annotationHistory, archive.archiveMode]);
   // A Refresh lands the bytes and, for the root document, the version diff
   // the server recomputed against them (previousPlan/versionInfo still name
   // the saved baseline). The view returns to normal mode with the "Show
   // changes" toggle available whenever a diff came back; a refresh of a
   // linked doc keeps the root's version fields untouched, as before.
   const applyRefreshedHtml = useCallback((refreshed: HtmlRefreshedDocument) => {
+    annotationHistory.clear();
     setRawHtml(refreshed.rawHtml);
     setShareHtml('');
     setIsPlanDiffActive(false);
@@ -1216,7 +1353,7 @@ const App: React.FC = () => {
     setHtmlDiffHtml(refreshed.diffHtml ?? null);
     setPreviousPlan(refreshed.previousPlan ?? null);
     setVersionInfo(refreshed.versionInfo ?? null);
-  }, [linkedDocHook.isActive]);
+  }, [annotationHistory, linkedDocHook.isActive]);
   // Annotations a Refresh could no longer anchor: the panel shows an
   // "Unanchored" chip on them. Set from the refresh's restore report only,
   // so the chip is exactly the toast's list; a document change clears it.
@@ -1323,6 +1460,25 @@ const App: React.FC = () => {
     (event: KeyboardEvent) => annotateMode && canHandleDocumentChromeShortcut(event),
     [annotateMode, canHandleDocumentChromeShortcut],
   );
+
+  const canHandleAnnotationHistoryShortcut = useCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || documentReadOnly || submitted || isSubmitting || isExiting) return false;
+    if (isEditingMarkdown || pendingPasteImage || isNativeHistoryOwner(event)) return false;
+    return !hasActiveHistoryOverlay(document);
+  }, [documentReadOnly, isEditingMarkdown, isExiting, isSubmitting, pendingPasteImage, submitted]);
+
+  useHistoryShortcuts({
+    handlers: {
+      undo: {
+        when: (event) => canHandleAnnotationHistoryShortcut(event) && annotationHistory.canUndo,
+        handle: () => { annotationHistory.undo(); },
+      },
+      redo: {
+        when: (event) => canHandleAnnotationHistoryShortcut(event) && annotationHistory.canRedo,
+        handle: () => { annotationHistory.redo(); },
+      },
+    },
+  });
 
   // Focus mode from the keyboard. Mirrors the document card's `Focus` control —
   // including its availability — so the shortcut can never park the layout in a
@@ -1508,6 +1664,8 @@ const App: React.FC = () => {
     const msg = recentMessages.find((m) => m.messageId === messageId);
     if (!msg || messageId === selectedMessageId) return;
 
+    annotationHistory.clear();
+
     const states = saveCurrentMessageState();
     const targetState = normalizeMessageState(
       states.get(messageId) ?? createEmptyMessageState(msg),
@@ -1523,6 +1681,7 @@ const App: React.FC = () => {
     selectedMessageId,
     saveCurrentMessageState,
     linkedDocHook.restoreSession,
+    annotationHistory,
   ]);
 
   const handleFileBrowserSelect = React.useCallback(async (absolutePath: string, dirPath: string): Promise<void> => {
@@ -2077,6 +2236,7 @@ const App: React.FC = () => {
   // Apply shared annotations to DOM after they're loaded
   useEffect(() => {
     if (pendingSharedAnnotations && pendingSharedAnnotations.length > 0) {
+      annotationHistory.clear();
       // Small delay to ensure DOM is rendered
       const timer = setTimeout(() => {
         // Clear existing highlights first (important when loading new share URL)
@@ -2089,7 +2249,7 @@ const App: React.FC = () => {
       }, 100);
       return () => clearTimeout(timer);
     }
-  }, [pendingSharedAnnotations, clearPendingSharedAnnotations, resetExternalHighlights]);
+  }, [annotationHistory, pendingSharedAnnotations, clearPendingSharedAnnotations, resetExternalHighlights]);
 
   // Markdown edit mode: single consolidated gate. The editor only ever opens on
   // the main plan/file markdown — never on HTML surfaces, archive/goal-setup
@@ -2117,6 +2277,7 @@ const App: React.FC = () => {
   // `list` defaults to current state; draft restore passes the restored set,
   // which isn't in state yet when the remap runs.
   const applyEditedDocument = useCallback((next: string, list?: Annotation[]): Annotation[] => {
+    annotationHistory.clear();
     const sourceAnnotations = list ?? annotationsRef.current;
     // Match the display parse (blocks memo) — the active document's
     // frontmatter rule must apply here too or the remapped blockIds drift.
@@ -2134,7 +2295,7 @@ const App: React.FC = () => {
     annotationsRef.current = remapped;
     setAnnotations(remapped);
     return remapped;
-  }, []);
+  }, [annotationHistory]);
 
   // The Viewer is remounted after every edit-mode exit (it was unmounted while
   // editing), so highlight DOM is rebuilt from scratch. Re-anchor via the same
@@ -2296,6 +2457,7 @@ const App: React.FC = () => {
   }, [resolveSavedFileChangeSource]);
 
   const handleRestoreDraft = React.useCallback(async () => {
+    annotationHistory.clear();
     const {
       annotations: restored,
       codeAnnotations: restoredCode,
@@ -2425,7 +2587,7 @@ const App: React.FC = () => {
       }, 100);
     }
     scheduleDraftSave();
-  }, [restoreDraft, validateDraftSavedFileChanges, editStats, isEditingMarkdown, editableDocuments, activeEditableDocument, markdown, applyEditedDocument, repaintHighlights, scheduleDraftSave]);
+  }, [annotationHistory, restoreDraft, validateDraftSavedFileChanges, editStats, isEditingMarkdown, editableDocuments, activeEditableDocument, markdown, applyEditedDocument, repaintHighlights, scheduleDraftSave]);
 
   const handleEditToggle = useCallback(() => {
     if (isEditingMarkdown) {
@@ -3507,6 +3669,7 @@ const App: React.FC = () => {
         if (agentFeedbackDelivery && sendToAgentTerminal(agentFeedback)) {
           setAgentTerminalDelivery(agentFeedbackDelivery);
           dismissDraft();
+          annotationHistory.clear();
           setIsSubmitting(false);
           return;
         }
@@ -3752,9 +3915,21 @@ const App: React.FC = () => {
       liveApp && livePageUrl && ann.type !== AnnotationType.GLOBAL_COMMENT
         ? { ...ann, pageUrl: livePageUrl }
         : ann;
-    setAnnotations(prev => [...prev, stamped]);
+    const beforeSelection = selectionRef.current;
+    const index = annotationsRef.current.length;
+    annotationsRef.current = [...annotationsRef.current, stamped];
+    setAnnotations(annotationsRef.current);
     setSelectedAnnotationId(stamped.id);
     setSelectedCodeAnnotationId(null);
+    selectionRef.current = { annotationId: stamped.id, codeAnnotationId: null };
+    if (isHumanHistoryMutation(stamped)) {
+      annotationHistory.record({
+        kind: 'annotation',
+        mutation: { kind: 'add', item: stamped, index },
+        beforeSelection,
+        afterSelection: selectionRef.current,
+      });
+    }
     // Annotation activity keeps the HTML-surface preferences alive: re-stamp
     // the input method and chrome records so they only expire for users who
     // have not annotated HTML within the staleness TTL (see preferenceTtl.ts).
@@ -3770,6 +3945,10 @@ const App: React.FC = () => {
   const handleSelectAnnotation = React.useCallback((id: string | null) => {
     setSelectedAnnotationId(id);
     if (id) setSelectedCodeAnnotationId(null);
+    selectionRef.current = {
+      annotationId: id,
+      codeAnnotationId: id ? null : selectionRef.current.codeAnnotationId,
+    };
     if (id && isMobile && !isCompactTouchLayout && wideModeType === null) setIsPanelOpen(true);
   }, [isCompactTouchLayout, isMobile, wideModeType]);
 
@@ -3789,10 +3968,20 @@ const App: React.FC = () => {
       createdAt: Date.now(),
       author: configStore.get('displayName') || undefined,
     };
-    setCodeAnnotations(prev => [...prev, annotation]);
+    const beforeSelection = selectionRef.current;
+    const index = codeAnnotationsRef.current.length;
+    codeAnnotationsRef.current = [...codeAnnotationsRef.current, annotation];
+    setCodeAnnotations(codeAnnotationsRef.current);
     setSelectedAnnotationId(null);
     setSelectedCodeAnnotationId(annotation.id);
-  }, [documentReadOnly]);
+    selectionRef.current = { annotationId: null, codeAnnotationId: annotation.id };
+    annotationHistory.record({
+      kind: 'code-annotation',
+      mutation: { kind: 'add', item: annotation, index },
+      beforeSelection,
+      afterSelection: selectionRef.current,
+    });
+  }, [annotationHistory, documentReadOnly]);
 
   // The code popout is full-viewport modal — the annotation panel is behind it.
   // This handler only fires when the popout is closed (sidebar visible), so
@@ -3802,68 +3991,183 @@ const App: React.FC = () => {
     if (!annotation) return;
     setSelectedAnnotationId(null);
     setSelectedCodeAnnotationId(id);
+    selectionRef.current = { annotationId: null, codeAnnotationId: id };
     codeFilePopout.open(annotation.filePath);
     if (isMobile && !isCompactTouchLayout && wideModeType === null) setIsPanelOpen(true);
   }, [codeAnnotations, codeFilePopout.open, isCompactTouchLayout, isMobile, wideModeType]);
 
   const handleDeleteCodeAnnotation = React.useCallback((id: string) => {
     if (documentReadOnly) return;
-    setCodeAnnotations(prev => prev.filter(a => a.id !== id));
-    if (selectedCodeAnnotationId === id) setSelectedCodeAnnotationId(null);
-  }, [documentReadOnly, selectedCodeAnnotationId]);
+    const index = codeAnnotationsRef.current.findIndex((annotation) => annotation.id === id);
+    const annotation = codeAnnotationsRef.current[index];
+    if (!annotation) return;
+    const beforeSelection = selectionRef.current;
+    codeAnnotationsRef.current = codeAnnotationsRef.current.filter((item) => item.id !== id);
+    setCodeAnnotations(codeAnnotationsRef.current);
+    if (beforeSelection.codeAnnotationId === id) setSelectedCodeAnnotationId(null);
+    const afterSelection = beforeSelection.codeAnnotationId === id
+      ? { ...beforeSelection, codeAnnotationId: null }
+      : beforeSelection;
+    selectionRef.current = afterSelection;
+    if (isHumanHistoryMutation(annotation)) {
+      annotationHistory.record({
+        kind: 'code-annotation',
+        mutation: { kind: 'delete', item: annotation, index },
+        beforeSelection,
+        afterSelection,
+      });
+    }
+  }, [annotationHistory, documentReadOnly]);
 
   const handleEditCodeAnnotation = React.useCallback((id: string, updates: Partial<CodeAnnotation>) => {
     if (documentReadOnly) return;
-    setCodeAnnotations(prev => prev.map(a => a.id === id ? { ...a, ...updates } : a));
-  }, [documentReadOnly]);
+    const before = codeAnnotationsRef.current.find((annotation) => annotation.id === id);
+    if (!before) return;
+    const after = { ...before, ...updates };
+    codeAnnotationsRef.current = codeAnnotationsRef.current.map((annotation) => annotation.id === id ? after : annotation);
+    setCodeAnnotations(codeAnnotationsRef.current);
+    if (isHumanHistoryMutation(before)) {
+      annotationHistory.record({
+        kind: 'code-annotation',
+        mutation: { kind: 'edit', before, after },
+        beforeSelection: selectionRef.current,
+        afterSelection: selectionRef.current,
+      });
+    }
+  }, [annotationHistory, documentReadOnly]);
 
   // Core annotation removal — highlight cleanup + state filter + selection clear
   const removeAnnotation = (id: string) => {
     if (documentReadOnly) return;
     viewerRef.current?.removeHighlight(id);
-    setAnnotations(prev => prev.filter(a => a.id !== id));
-    if (selectedAnnotationId === id) setSelectedAnnotationId(null);
+    annotationsRef.current = annotationsRef.current.filter((annotation) => annotation.id !== id);
+    setAnnotations(annotationsRef.current);
+    if (selectionRef.current.annotationId === id) {
+      setSelectedAnnotationId(null);
+      selectionRef.current = { ...selectionRef.current, annotationId: null };
+    }
   };
 
   // Interactive checkbox toggling with annotation tracking
   const checkbox = useCheckboxOverrides({
     blocks,
     annotations,
-    addAnnotation: handleAddAnnotation,
-    removeAnnotation,
+    addAnnotation: (annotation) => {
+      checkboxSelectionBeforeRef.current ??= selectionRef.current;
+      const index = annotationsRef.current.length;
+      annotationsRef.current = [...annotationsRef.current, annotation];
+      setAnnotations(annotationsRef.current);
+      setSelectedAnnotationId(annotation.id);
+      setSelectedCodeAnnotationId(null);
+      selectionRef.current = { annotationId: annotation.id, codeAnnotationId: null };
+      return index;
+    },
+    removeAnnotation: (id) => {
+      checkboxSelectionBeforeRef.current ??= selectionRef.current;
+      removeAnnotation(id);
+    },
+    onToggleMutation: (mutation) => {
+      const beforeSelection = checkboxSelectionBeforeRef.current ?? selectionRef.current;
+      annotationHistory.record({
+        kind: 'checkbox',
+        mutation,
+        beforeSelection,
+        afterSelection: selectionRef.current,
+      });
+      checkboxSelectionBeforeRef.current = null;
+    },
   });
+  restoreCheckboxOverridesRef.current = checkbox.restoreOverrides;
 
-  const handleDeleteAnnotation = (id: string) => {
+  const deleteAnnotation = (id: string, history: 'record' | 'silent') => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
+    if (ann?.source) annotationHistory.clear();
     // External annotations (live in SSE hook) route to the SSE hook, not local state.
     // Check membership by ID — source alone is insufficient because share-imported
     // and draft-restored annotations also carry source but live in local state.
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       deleteExternalAnnotation(id);
-      if (selectedAnnotationId === id) setSelectedAnnotationId(null);
+      if (selectionRef.current.annotationId === id) {
+        selectionRef.current = { ...selectionRef.current, annotationId: null };
+        setSelectedAnnotationId(null);
+      }
       return;
     }
-    // If this is a checkbox annotation, revert the visual override
+    // Checkbox deletion is one composite action: visual state and generated
+    // annotation must travel together through history.
     if (id.startsWith('ann-checkbox-')) {
       if (ann) {
+        const beforeSelection = selectionRef.current;
+        const beforeOverrides = [...checkbox.overrides.entries()] as CheckboxOverrideSnapshot;
+        const annotationIndex = annotationsRef.current.findIndex((item) => item.id === id);
         checkbox.revertOverride(ann.blockId);
+        removeAnnotation(id);
+        if (history === 'record') annotationHistory.record({
+          kind: 'checkbox',
+          mutation: {
+            blockId: ann.blockId,
+            beforeOverrides,
+            afterOverrides: beforeOverrides.filter(([blockId]) => blockId !== ann.blockId),
+            beforeAnnotations: [{ annotation: ann, index: annotationIndex }],
+            afterAnnotations: [],
+          },
+          beforeSelection,
+          afterSelection: selectionRef.current,
+        });
+        return;
       }
+      removeAnnotation(id);
+      return;
     }
+    const index = annotationsRef.current.findIndex((annotation) => annotation.id === id);
+    if (!ann || index < 0) {
+      removeAnnotation(id);
+      return;
+    }
+    const beforeSelection = selectionRef.current;
     removeAnnotation(id);
+    if (history === 'record' && isHumanHistoryMutation(ann)) {
+      annotationHistory.record({
+        kind: 'annotation',
+        mutation: { kind: 'delete', item: ann, index },
+        beforeSelection,
+        afterSelection: selectionRef.current,
+      });
+    }
   };
+  const handleDeleteAnnotation = (id: string) => deleteAnnotation(id, 'record');
+  const deleteAnnotationSilently = (id: string) => deleteAnnotation(id, 'silent');
 
-  const handleEditAnnotation = (id: string, updates: Partial<Annotation>) => {
+  const editAnnotation = (
+    id: string,
+    updates: Partial<Annotation>,
+    history: 'record' | 'silent',
+  ) => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
+    if (ann?.source) annotationHistory.clear();
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       updateExternalAnnotation(id, updates);
       return;
     }
-    setAnnotations(prev => prev.map(a =>
-      a.id === id ? { ...a, ...updates } : a
-    ));
+    if (!ann) return;
+    const after = { ...ann, ...updates };
+    annotationsRef.current = annotationsRef.current.map((annotation) => annotation.id === id ? after : annotation);
+    setAnnotations(annotationsRef.current);
+    if (history === 'record' && isHumanHistoryMutation(ann)) {
+      annotationHistory.record({
+        kind: 'annotation',
+        mutation: { kind: 'edit', before: ann, after },
+        beforeSelection: selectionRef.current,
+        afterSelection: selectionRef.current,
+      });
+    }
   };
+  const handleEditAnnotation = (id: string, updates: Partial<Annotation>) =>
+    editAnnotation(id, updates, 'record');
+  const editAnnotationSilently = (id: string, updates: Partial<Annotation>) =>
+    editAnnotation(id, updates, 'silent');
 
   // WebMCP (browser-agent tools). The hook detects `document.modelContext`
   // once and does nothing in a browser without it; the banner state below
@@ -3907,9 +4211,18 @@ const App: React.FC = () => {
     openFolderFile: handleFileBrowserSelect,
     viewerRef,
     scrollViewport,
-    addAnnotation: handleAddAnnotation,
-    editAnnotation: handleEditAnnotation,
-    deleteAnnotation: handleDeleteAnnotation,
+    addAnnotation: (annotation) => {
+      annotationHistory.clear();
+      handleAddAnnotation(annotation);
+    },
+    editAnnotation: (id, patch) => {
+      annotationHistory.clear();
+      editAnnotationSilently(id, patch);
+    },
+    deleteAnnotation: (id) => {
+      annotationHistory.clear();
+      deleteAnnotationSilently(id);
+    },
     selectAnnotation: handleSelectAnnotation,
     showBanner: showAgentNudge,
   });
@@ -3917,13 +4230,14 @@ const App: React.FC = () => {
 
   const handleIdentityChange = useCallback((oldIdentity: string, newIdentity: string) => {
     if (documentReadOnly) return;
+    annotationHistory.clear();
     setAnnotations(prev => prev.map(ann =>
       ann.author === oldIdentity ? { ...ann, author: newIdentity } : ann
     ));
     setCodeAnnotations(prev => prev.map(ann =>
       ann.author === oldIdentity ? { ...ann, author: newIdentity } : ann
     ));
-  }, [documentReadOnly]);
+  }, [annotationHistory, documentReadOnly]);
 
   const handleAddGlobalAttachment = (image: ImageAttachment) => {
     if (documentReadOnly) return;
