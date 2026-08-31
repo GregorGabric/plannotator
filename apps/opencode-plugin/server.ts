@@ -22,7 +22,9 @@ import {
   type OpenCodeBridgeContext,
   type OpenCodePlanReviewResult,
 } from "./cli-bridge";
-import { resolveTargetAgent } from "./agent-switch";
+import { switchV2SessionAgent } from "./agent-switch";
+import { registerNativeCommands } from "./native-commands";
+import { normalizeAgentList, type V2ContextLike } from "./v2-client";
 import { executeSubmitPlan } from "./submit-plan-executor";
 import type { PlanEdit } from "./plan-edits";
 import { getPlanningPrompt } from "./planning-prompt";
@@ -63,18 +65,37 @@ const serverPlugin = {
     const getAgents = async (): Promise<OpenCodeBridgeAgent[]> => {
       if (cachedAgents) return cachedAgents;
       try {
-        const response = await ctx.agent.list();
-        cachedAgents = response.data.map((agent) => ({
-          name: agent.id,
-          description: agent.description,
-          mode: agent.mode,
-          hidden: agent.hidden,
-        }));
+        // The documented success shape is the `{ location, data }` envelope.
+        // `normalizeAgentList` also accepts a bare array because reading
+        // `.data` off anything else throws into this catch, where the failure
+        // is invisible: an empty agent list silently disables subagent gating
+        // and agent-switch validation rather than reporting anything.
+        cachedAgents = normalizeAgentList(await ctx.agent.list());
       } catch {
         cachedAgents = [];
       }
       return cachedAgents;
     };
+
+    // The pinned `@opencode-ai/plugin` types predate the command-execution API
+    // (PR #44765), so the context is re-viewed through a duck-typed shape. Every
+    // capability behind it is probed before use.
+    const v2 = ctx as unknown as V2ContextLike;
+
+    // Native slash commands are registered before the submit_plan early return
+    // below, so `workflow: "manual"`, which registers no tool, still gets them.
+    // Wrapped because a transform rejection must never fail plugin setup: the
+    // whole Plannotator integration would go down for a slash command that has
+    // a working markdown fallback.
+    try {
+      await registerNativeCommands({
+        ctx: v2,
+        getAgents,
+        getBridgeContext: () => getBridgeContext(getAgents),
+      });
+    } catch (error) {
+      console.error(`[Plannotator] Could not register the OpenCode 2 slash commands: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     if (shouldModifyPrompts(workflowOptions)) {
       await ctx.session.hook("context", async (event) => {
@@ -194,18 +215,16 @@ const serverPlugin = {
               directory,
               bridge,
             }),
-            resolveTargetAgent: async ({ requestedAgent }) => {
-              const targetAgent = resolveTargetAgent(requestedAgent);
-              if (!targetAgent) return undefined;
-              const available = (await getAgents()).some((agent) => agent.name === targetAgent);
-              if (!available) {
-                console.error(`[Plannotator] Configured OpenCode agent "${targetAgent}" is not available; approving the plan without switching agents.`);
-                return undefined;
-              }
-              // The current OpenCode 2 API exposes no session-agent switch operation to plugins.
-              console.error("[Plannotator] OpenCode 2 does not currently expose agent switching to plugins; approving the plan without switching agents.");
-              return undefined;
-            },
+            resolveTargetAgent: async ({ requestedAgent }) => await switchV2SessionAgent({
+              ctx: v2,
+              sessionID: toolContext.sessionID,
+              requestedAgent,
+              getAgents,
+            }),
+            // The switch above is the whole handoff on V2. Its session.prompt
+            // has no `noReply` equivalent, so an injected approval note would
+            // start a model turn the reviewer never asked for; the submit_plan
+            // tool result already carries the approval text.
             sendApprovalHandoff: async () => {},
           });
 
