@@ -42,6 +42,10 @@ const VIEWPORT_HEIGHT = 500;
 const viewerState = {
   scrollTop: 0,
   collapsed: new Set<string>(),
+  // Overridable so a diff SHORTER than the viewport can be modelled: that is
+  // at-bottom from the very first tick, including the mount seed.
+  scrollHeight: SCROLL_HEIGHT,
+  height: VIEWPORT_HEIGHT,
 };
 let emitScroll: ((position: number) => void) | null = null;
 let lastCodeViewProps: Record<string, unknown> | null = null;
@@ -108,8 +112,8 @@ mock.module('@pierre/diffs/react', () => ({
         // which is what the active-file loop actually walks.
         getRenderedItems: () => [...itemsRef.current.keys()].map((id) => ({ id })),
         getScrollTop: () => viewerState.scrollTop,
-        getScrollHeight: () => SCROLL_HEIGHT,
-        getHeight: () => VIEWPORT_HEIGHT,
+        getScrollHeight: () => viewerState.scrollHeight,
+        getHeight: () => viewerState.height,
         getTopForItem: (id: string) => ITEM_TOPS[id],
         scrollTo: () => {},
       }),
@@ -201,6 +205,8 @@ afterEach(async () => {
   lastCodeViewProps = null;
   viewerState.scrollTop = 0;
   viewerState.collapsed = new Set();
+  viewerState.scrollHeight = SCROLL_HEIGHT;
+  viewerState.height = VIEWPORT_HEIGHT;
 });
 
 afterAll(() => {
@@ -308,6 +314,26 @@ describe.if(hasDom)('AllFilesCodeView auto-view emission', () => {
     });
     await scrollTo(1000);
     expect(reports.at(-1)).toEqual(['b.ts', true]);
+  });
+
+  test('a diff that fits the viewport marks nothing until the reader actually scrolls', async () => {
+    // The at-bottom branch is true from the FIRST tick when the whole diff
+    // fits on screen, and that tick is the mount seed. Emitting there would
+    // check a file off that the reviewer merely arrived at, without touching
+    // anything, and would fire the first-time toast at a motionless page.
+    // "Arriving at a file never marks it" is the whole contract.
+    const passed: string[] = [];
+    viewerState.scrollHeight = 400;
+    viewerState.height = 400;
+    await render({ onFileScrolledPast: (path) => passed.push(path) });
+    // Mount seed has run (and re-runs on the fileSetKey effect); no scroll yet.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 60)); });
+    expect(passed).toEqual([]);
+
+    // One real scroll event and the at-bottom signal is honoured again. The
+    // at-bottom override reports the LAST item, so that is what emits.
+    await scrollTo(0);
+    expect(passed).toEqual(['c.ts']);
   });
 
   test('without the handler the component behaves exactly as before', async () => {

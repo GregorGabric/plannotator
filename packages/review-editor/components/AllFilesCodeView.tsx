@@ -669,6 +669,12 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   const visibleItemIdRef = useRef<string | null>(null);
   // The item the reader has left but whose pass geometry has not resolved yet.
   const passCandidateItemRef = useRef<string | null>(null);
+  // Whether a REAL scroll has happened on the current file set. The at-bottom
+  // branch below is true from the very first tick when the diff fits the
+  // viewport, and that tick is the mount seed — emitting there would mark a
+  // file the reviewer merely arrived at, without touching anything, which is
+  // the one thing auto-mark-viewed must never do.
+  const hasScrolledRef = useRef(false);
 
   // The file CodeView last reported a selection / line-click in. The toolbar is
   // keyed off this file's path + patch, but the value is sourced from the
@@ -1010,6 +1016,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     visibleFileRef.current = null;
     visibleItemIdRef.current = null;
     passCandidateItemRef.current = null;
+    hasScrolledRef.current = false;
     // An edit session cannot survive the CodeView remount (Pierre tears the
     // editor down without a completion callback), and fileSetKey also changes
     // on sort-order / collapse-default flips, not just diff switches. The
@@ -2050,8 +2057,11 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     }
     // The last file can never scroll out above, so reaching the end of the
     // diff is its completion signal. Re-fires on every at-bottom tick; the
-    // owner's dwell floor decides whether it actually marks.
-    if (atBottom && path != null && onFileScrolledPast && !isCollapsed(bestId)) {
+    // owner's dwell floor decides whether it actually marks. Gated on a real
+    // scroll having happened, because a diff shorter than the viewport is
+    // at-bottom from the mount seed onwards.
+    if (atBottom && hasScrolledRef.current && path != null && onFileScrolledPast
+        && !isCollapsed(bestId)) {
       onFileScrolledPast(path);
     }
   });
@@ -2062,6 +2072,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   const scrollReportRafRef = useRef<number | null>(null);
   const handleScroll = useStableCallback((position: number) => {
     lastScrollTsRef.current = Date.now();
+    hasScrolledRef.current = true;
     onScrollPositionChange?.(position);
     if (scrollReportRafRef.current != null) return;
     scrollReportRafRef.current = requestAnimationFrame(() => {

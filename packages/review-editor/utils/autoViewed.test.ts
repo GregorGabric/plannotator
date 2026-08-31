@@ -14,6 +14,7 @@ import {
   AutoViewedTracker,
   createViewedSyncBatcher,
   resolveContentChangedUnviews,
+  resolveDiffSwitchUnviews,
 } from './autoViewed';
 
 describe('AutoViewedTracker', () => {
@@ -89,6 +90,25 @@ describe('AutoViewedTracker', () => {
     }
     expect(enabled.filePassed('a.ts', AUTO_VIEW_DWELL_MS + 50)).toBe('marked');
     expect(disabled.filePassed('a.ts', AUTO_VIEW_DWELL_MS + 50)).toBe('disabled');
+  });
+
+  test('time spent while disabled is not banked, so enabling cannot mark instantly', () => {
+    // Guards "off" meaning merely "does not mark right now": if dwell kept
+    // accruing behind the switch, turning the feature on mid-read would check
+    // the current file off on the next pass using time the reviewer spent
+    // with it deliberately disabled.
+    const tracker = new AutoViewedTracker({ enabled: false });
+    tracker.readingFileChanged('a.ts', 0);
+    tracker.tick(AUTO_VIEW_DWELL_MS + 500); // a full dwell's worth, while off
+    expect(tracker.dwellFor('a.ts')).toBe(0);
+
+    tracker.setEnabled(true, AUTO_VIEW_DWELL_MS + 500);
+    expect(tracker.filePassed('a.ts', AUTO_VIEW_DWELL_MS + 500)).toBe('dwell');
+
+    // Only genuinely fresh reading time marks it.
+    tracker.readingFileChanged('a.ts', AUTO_VIEW_DWELL_MS + 500);
+    tracker.readingFileChanged('b.ts', 2 * AUTO_VIEW_DWELL_MS + 600);
+    expect(tracker.filePassed('a.ts', 2 * AUTO_VIEW_DWELL_MS + 600)).toBe('marked');
   });
 
   test('un-viewing suppresses auto-view until the file is viewed by hand again', () => {
@@ -219,5 +239,114 @@ describe('resolveContentChangedUnviews (Rule 5)', () => {
         viewedFiles: new Set(['a.ts', 'b.ts']),
       }),
     ).toEqual([]);
+  });
+});
+
+
+describe('resolveDiffSwitchUnviews (Rule 5 call-site scope)', () => {
+  // Every diff transition in the review app funnels through ONE apply path, so
+  // what decides whether Rule 5 may act is the transition, not the patch
+  // delta. These pin which transitions qualify. The delta logic itself is
+  // covered above; here the content always changed, so a non-empty result
+  // means "this transition was allowed to un-view".
+  const isCommitDiffType = (diffType: string) => /(^|:)commit:/.test(diffType);
+  const previousFiles = [
+    { path: 'a.ts', patch: 'PATCH-A-V1' },
+    { path: 'b.ts', patch: 'PATCH-B-V1' },
+  ];
+  const nextFiles = [
+    { path: 'a.ts', patch: 'PATCH-A-V2' },
+    { path: 'b.ts', patch: 'PATCH-B-V1' },
+  ];
+  const viewedFiles = new Set(['a.ts', 'b.ts']);
+  const base = {
+    enabled: true, isCommitDiffType, previousFiles, nextFiles, viewedFiles,
+  };
+
+  test('a staleness refresh with changed content un-views the changed file', () => {
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: true,
+      requestedDiffType: 'since-base',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'since-base',
+    })).toEqual(['a.ts']);
+  });
+
+  test('entering a commit detour un-views nothing', () => {
+    // The Commits rail auto-opens HEAD on entry and every commit diff has
+    // different per-path text, so an ungated Rule 5 stripped the checkmark off
+    // every file that commit touched. A commit detour is documented as inert
+    // (Rule 4) and reading a historical rendition is not reviewing the change.
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: false,
+      requestedDiffType: 'commit:abc1234',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'commit:abc1234',
+    })).toEqual([]);
+    // Belt and braces: even a caller that wrongly opts in cannot un-view on a
+    // commit-family diff, on either side of the transition.
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: true,
+      requestedDiffType: 'commit:abc1234',
+      activeDiffType: 'commit:abc1234',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'commit:abc1234',
+    })).toEqual([]);
+  });
+
+  test('the hide-whitespace toggle un-views nothing', () => {
+    // It re-fetches the same selection and every patch legitimately differs,
+    // but that delta is a presentation choice, not the content changing.
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: false,
+      requestedDiffType: 'since-base',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'since-base',
+    })).toEqual([]);
+  });
+
+  test('a diff-type or base switch un-views nothing, even if it opts in', () => {
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: true,
+      requestedDiffType: 'uncommitted',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'uncommitted',
+    })).toEqual([]);
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      contentRefresh: true,
+      requestedDiffType: 'since-base',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/develop',
+      activeBase: 'origin/main',
+      appliedDiffType: 'since-base',
+    })).toEqual([]);
+  });
+
+  test('the off switch still severs it on an otherwise-qualifying refresh', () => {
+    expect(resolveDiffSwitchUnviews({
+      ...base,
+      enabled: false,
+      contentRefresh: true,
+      requestedDiffType: 'since-base',
+      activeDiffType: 'since-base',
+      requestedBase: 'origin/main',
+      activeBase: 'origin/main',
+      appliedDiffType: 'since-base',
+    })).toEqual([]);
   });
 });

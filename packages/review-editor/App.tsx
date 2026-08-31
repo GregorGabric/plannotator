@@ -80,7 +80,7 @@ import { PRSwitchOverlay } from './components/PRSwitchOverlay';
 import { usePRStack } from './hooks/usePRStack';
 import { useDiffFreshness } from './hooks/useDiffFreshness';
 import { useAutoViewed } from './hooks/useAutoViewed';
-import { resolveContentChangedUnviews } from './utils/autoViewed';
+import { resolveDiffSwitchUnviews } from './utils/autoViewed';
 import { needsAutoViewedNotice, markAutoViewedNoticeSeen, turnOffAutoViewed, toggleAutoViewed } from './utils/autoViewedNotice';
 import { usePRSession, type PRSessionUpdate } from './hooks/usePRSession';
 import { useAnnotationFactory } from './hooks/useAnnotationFactory';
@@ -2239,8 +2239,15 @@ const ReviewApp: React.FC = () => {
 
   // Git add/staging logic
   const handleFileViewedFromStage = useCallback(
-    (path: string) => setViewedFiles(prev => new Set(prev).add(path)),
-    [],
+    (path: string) => {
+      setViewedFiles(prev => new Set(prev).add(path));
+      // Staging marks a file viewed, so it is a deliberate "I am done with
+      // this" exactly like `v`, the header button and the tree row — and like
+      // them it must clear any auto-view suppression, or a file the reviewer
+      // un-viewed and later staged would stay permanently off-limits.
+      applyAutoViewSuppression(path, true);
+    },
+    [applyAutoViewSuppression],
   );
   // Files already staged when the sidecar snapshot was taken — the hook folds
   // these into the effective staged set so pre-staged files toggle correctly.
@@ -2374,7 +2381,23 @@ const ReviewApp: React.FC = () => {
   // Shared helper: fetch a diff switch and update state.
   // Returns true on success, false on failure — callers that optimistically
   // updated UI state (e.g. the base picker) can use this to revert.
-  const fetchDiffSwitch = useCallback(async (fullDiffType: string, baseOverride?: string, options?: { preserveFile?: boolean; explicitBase?: boolean }): Promise<boolean> => {
+  const fetchDiffSwitch = useCallback(async (
+    fullDiffType: string,
+    baseOverride?: string,
+    options?: {
+      preserveFile?: boolean;
+      explicitBase?: boolean;
+      /**
+       * Re-fetch of the SAME diff selection, where a per-path patch delta is a
+       * real content change. Set ONLY by the staleness refresh and the
+       * post-fetch base refresh: it is what licenses auto-mark-viewed's Rule 5
+       * to drop a checkmark. Never set by the whitespace toggle (its deltas
+       * are a presentation choice) nor by any switch that changes what is
+       * being compared, including a commit detour.
+       */
+      contentRefresh?: boolean;
+    },
+  ): Promise<boolean> => {
     setIsLoadingDiff(true);
     try {
       const res = await fetch('/api/diff/switch', {
@@ -2432,8 +2455,21 @@ const ReviewApp: React.FC = () => {
       // Rule 5 of auto-mark-viewed: a checkmark on content that has since
       // changed is misleading, so it drops. No platform sync — GitHub applies
       // the same rule to its own viewed state server-side.
-      const unviewed = resolveContentChangedUnviews({
+      //
+      // This is the ONE apply path every diff transition funnels through, so
+      // the scope gate lives in resolveDiffSwitchUnviews rather than here: an
+      // opt-in from the caller, re-checked against the identity of the diff.
+      // Without it, entering a commit detour or folding whitespace out would
+      // strip checkmarks off files nothing changed in.
+      const unviewed = resolveDiffSwitchUnviews({
         enabled: autoViewedEnabled,
+        contentRefresh: options?.contentRefresh === true,
+        requestedDiffType: fullDiffType,
+        activeDiffType: diffType,
+        requestedBase: baseOverride ?? selectedBase,
+        activeBase: selectedBase,
+        appliedDiffType: data.diffType,
+        isCommitDiffType,
         previousFiles: files,
         nextFiles,
         viewedFiles: viewedFilesRef.current,
@@ -2527,7 +2563,7 @@ const ReviewApp: React.FC = () => {
     } finally {
       setIsLoadingDiff(false);
     }
-  }, [dockApi, resetStagedFiles, selectedBase, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection, autoViewedEnabled]);
+  }, [dockApi, resetStagedFiles, selectedBase, diffHideWhitespace, files, activeFileIndex, openDiffFile, applySemanticDiffAdvert, applyCallFlowAdvert, clearPendingSelection, autoViewedEnabled, diffType]);
 
   // Switch the base branch the current diff compares against.
   // Only triggers a refetch when the active mode actually uses a base.
@@ -2800,7 +2836,7 @@ const ReviewApp: React.FC = () => {
       setBaseBehindRemote(data.baseBehindRemote === true);
       const now = liveSelectionRef.current;
       if (now.diffType === captured.diffType && now.selectedBase === captured.selectedBase) {
-        await fetchDiffSwitch(captured.diffType, captured.selectedBase ?? undefined, { preserveFile: true });
+        await fetchDiffSwitch(captured.diffType, captured.selectedBase ?? undefined, { preserveFile: true, contentRefresh: true });
       }
     } catch {
       // Best-effort: the banner stays and the user can retry.
@@ -2831,8 +2867,9 @@ const ReviewApp: React.FC = () => {
       return;
     }
     // Same params, fresh snapshot. preserveFile keeps the reviewer on the
-    // file they were reading.
-    void fetchDiffSwitch(diffType, selectedBase, { preserveFile: true });
+    // file they were reading; contentRefresh licenses Rule 5, because here a
+    // per-path patch delta really is the content having changed underneath.
+    void fetchDiffSwitch(diffType, selectedBase, { preserveFile: true, contentRefresh: true });
     // New commits are part of what went stale — bring the rail along.
     if (showCommitsPanel) commitsView.refresh();
   }, [prMetadata, prDiffScope, prPatchIncomplete, handlePRDiffScopeSelect, handleLoadFullDiff, fetchDiffSwitch, diffType, selectedBase, showCommitsPanel, commitsView.refresh]);

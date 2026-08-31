@@ -68,8 +68,10 @@ export class AutoViewedTracker {
   }
 
   /**
-   * Flip the off switch. Commits whatever dwell has accrued first so toggling
-   * mid-read neither loses nor invents reading time.
+   * Flip the off switch. Commits first, so disabling banks the reading time
+   * that was legitimately accrued up to this instant, and enabling starts the
+   * current file's clock from now rather than crediting the disabled stretch
+   * (see `commit`).
    */
   setEnabled(enabled: boolean, nowMs: number): void {
     this.commit(nowMs);
@@ -188,7 +190,12 @@ export class AutoViewedTracker {
   }
 
   private commit(nowMs: number): void {
-    if (this.activePath !== null && this.activeCountable && nowMs > this.activeSince) {
+    // Disabled means fully inert, not merely "does not mark": banking dwell
+    // while the switch is off would let turning it back on mid-read check the
+    // current file off instantly, on time the reviewer spent with the feature
+    // deliberately disabled. activeSince still advances, so enabling starts a
+    // fresh clock rather than replaying the gap.
+    if (this.enabled && this.activePath !== null && this.activeCountable && nowMs > this.activeSince) {
       this.dwell.set(this.activePath, this.dwellFor(this.activePath) + (nowMs - this.activeSince));
     }
     this.activeSince = nowMs;
@@ -289,4 +296,57 @@ export function resolveContentChangedUnviews(input: {
     if (before !== undefined && before !== file.patch) changed.push(file.path);
   }
   return changed;
+}
+
+/**
+ * Which transitions Rule 5 is allowed to act on, and what it un-views there.
+ *
+ * `resolveContentChangedUnviews` answers "what changed?"; this answers the
+ * question that has to come first, "is this even a moment where a per-path
+ * patch delta MEANS the content changed?" They are separate because every
+ * diff transition funnels through one apply path in the review app: the
+ * staleness refresh, a base-branch switch, the hide-whitespace toggle and a
+ * `commit:<sha>` detour all land there. Treating them alike un-views files
+ * merely because the reviewer looked at a historical commit or folded
+ * whitespace out, which is the opposite of what Rule 5 is for and contradicts
+ * Rule 4's "a commit detour is inert".
+ *
+ * So the call site must OPT IN (`contentRefresh`), and even then this
+ * re-checks the identity of the diff: same selection, same base, and never a
+ * commit-family diff on either side of the transition. A future caller that
+ * passes the flag on a diff-CHANGING switch still cannot un-view anything.
+ */
+export function resolveDiffSwitchUnviews(input: {
+  enabled: boolean;
+  /**
+   * The call site declares this a re-fetch of the SAME diff selection, where a
+   * per-path patch delta is a real content change (the staleness refresh and
+   * the post-fetch base refresh). Never set by the whitespace toggle, whose
+   * deltas are a presentation choice, nor by any switch that changes what is
+   * being compared.
+   */
+  contentRefresh: boolean;
+  requestedDiffType: string;
+  activeDiffType: string;
+  requestedBase?: string | null;
+  activeBase?: string | null;
+  /** The diff type the server actually applied. */
+  appliedDiffType: string;
+  /** True for `commit:<sha>` (and worktree-scoped variants of it). */
+  isCommitDiffType: (diffType: string) => boolean;
+  previousFiles: ReadonlyArray<{ path: string; patch: string }>;
+  nextFiles: ReadonlyArray<{ path: string; patch: string }>;
+  viewedFiles: ReadonlySet<string>;
+}): string[] {
+  if (!input.contentRefresh) return [];
+  if (input.requestedDiffType !== input.activeDiffType) return [];
+  if ((input.requestedBase ?? null) !== (input.activeBase ?? null)) return [];
+  if (input.isCommitDiffType(input.requestedDiffType)) return [];
+  if (input.isCommitDiffType(input.appliedDiffType)) return [];
+  return resolveContentChangedUnviews({
+    enabled: input.enabled,
+    previousFiles: input.previousFiles,
+    nextFiles: input.nextFiles,
+    viewedFiles: input.viewedFiles,
+  });
 }
