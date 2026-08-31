@@ -1,8 +1,11 @@
-import { useReducer, useRef } from 'react';
+import { useRef } from 'react';
 import {
-  createContextualUndoHistory,
-  type ContextualUndoHistory,
+  createUndoHistoryState,
+  recordUndoAction,
+  takeRedoAction,
+  takeUndoAction,
   type HistoryDirection,
+  type UndoHistoryState,
 } from '../utils/undoHistory';
 
 /** Imperative bounded history API used by surface-specific command adapters. */
@@ -13,7 +16,6 @@ export interface UndoHistoryApi<TAction> {
   undo: () => boolean;
   redo: () => boolean;
   clear: () => void;
-  clearAll: () => void;
 }
 
 interface UndoHistoryOptions<TAction> {
@@ -23,61 +25,54 @@ interface UndoHistoryOptions<TAction> {
 }
 
 /**
- * Keep independent bounded stacks per surface context while replaying actions
- * through the latest adapter callbacks.
+ * Keep one bounded stack for the active surface context while replaying
+ * actions through the latest adapter callback. A context change starts a fresh
+ * baseline immediately; history is intentionally not cached across navigation.
  */
 export function useUndoHistory<TAction>({
   context,
   apply,
   capacity = 50,
 }: UndoHistoryOptions<TAction>): UndoHistoryApi<TAction> {
-  const optionsRef = useRef({ context, apply });
-  optionsRef.current = { context, apply };
-  const historyRef = useRef<ContextualUndoHistory<TAction> | null>(null);
-  historyRef.current ??= createContextualUndoHistory<TAction>(capacity);
-  const [, render] = useReducer((revision: number) => revision + 1, 0);
+  const optionsRef = useRef({ apply, capacity });
+  optionsRef.current = { apply, capacity };
+  const contextRef = useRef(context);
+  const historyRef = useRef<UndoHistoryState<TAction>>(createUndoHistoryState<TAction>());
+  if (contextRef.current !== context) {
+    contextRef.current = context;
+    historyRef.current = createUndoHistoryState<TAction>();
+  }
   const apiRef = useRef<UndoHistoryApi<TAction> | null>(null);
 
   if (!apiRef.current) {
     apiRef.current = {
       get canUndo() {
-        return (historyRef.current?.read(optionsRef.current.context).past.length ?? 0) > 0;
+        return historyRef.current.past.length > 0;
       },
       get canRedo() {
-        return (historyRef.current?.read(optionsRef.current.context).future.length ?? 0) > 0;
+        return historyRef.current.future.length > 0;
       },
       record(action) {
-        const current = optionsRef.current;
-        historyRef.current?.record(current.context, action);
-        render();
+        historyRef.current = recordUndoAction(historyRef.current, action, optionsRef.current.capacity);
       },
       undo() {
         const current = optionsRef.current;
-        const action = historyRef.current?.takeUndo(current.context) ?? null;
-        if (action === null) return false;
-        current.apply(action, 'undo');
-        render();
+        const step = takeUndoAction(historyRef.current);
+        if (step.action === null) return false;
+        historyRef.current = step.state;
+        current.apply(step.action, 'undo');
         return true;
       },
       redo() {
         const current = optionsRef.current;
-        const action = historyRef.current?.takeRedo(current.context) ?? null;
-        if (action === null) return false;
-        current.apply(action, 'redo');
-        render();
+        const step = takeRedoAction(historyRef.current, optionsRef.current.capacity);
+        if (step.action === null) return false;
+        historyRef.current = step.state;
+        current.apply(step.action, 'redo');
         return true;
       },
       clear() {
-        const key = optionsRef.current.context;
-        const state = historyRef.current?.read(key);
-        if (!state) return;
-        if (state.past.length === 0 && state.future.length === 0) return;
-        historyRef.current?.clear(key);
-        render();
-      },
-      clearAll() {
-        historyRef.current?.clearAll();
-        render();
+        historyRef.current = createUndoHistoryState<TAction>();
       },
     };
   }

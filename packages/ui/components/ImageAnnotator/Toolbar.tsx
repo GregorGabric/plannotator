@@ -7,12 +7,12 @@ interface ToolbarProps {
   color: string;
   strokeSize: number;
   canUndo: boolean;
-  canRedo: boolean;
+  canRedo?: boolean;
   onToolChange: (tool: Tool) => void;
   onColorChange: (color: string) => void;
   onStrokeSizeChange: (size: number) => void;
   onUndo: () => void;
-  onRedo: () => void;
+  onRedo?: () => void;
   onClear: () => void;
   onSave: () => void;
 }
@@ -90,7 +90,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   color,
   strokeSize,
   canUndo,
-  canRedo,
+  canRedo = false,
   onToolChange,
   onColorChange,
   onStrokeSizeChange,

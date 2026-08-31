@@ -26,6 +26,7 @@ import {
   __resetCodeHighlightCacheForTests,
   __setCodeHighlightModuleForTests,
 } from '../utils/codeHighlight';
+import { syncHistoryHighlight } from '../utils/undoHistory';
 
 const hasDom = typeof document !== 'undefined';
 
@@ -107,11 +108,13 @@ interface Controls {
   setColorTheme: (theme: string) => void;
   viewer: ViewerHandle | null;
   removeAnnotation: (id: string) => void;
+  replayAnnotation: (annotation: Annotation) => void;
 }
 const controls: Controls = {
   setColorTheme: () => {},
   viewer: null,
   removeAnnotation: () => {},
+  replayAnnotation: () => {},
 };
 
 const Harness: React.FC<{ initial: Annotation[] }> = ({ initial }) => {
@@ -126,6 +129,9 @@ const Harness: React.FC<{ initial: Annotation[] }> = ({ initial }) => {
     controls.removeAnnotation = (id: string) => {
       viewerRef.current?.removeHighlight(id);
       setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    };
+    controls.replayAnnotation = (annotation: Annotation) => {
+      syncHistoryHighlight(viewerRef.current, annotation, true);
     };
   });
   return (
@@ -197,11 +203,35 @@ afterEach(async () => {
   controls.viewer = null;
   controls.setColorTheme = () => {};
   controls.removeAnnotation = () => {};
+  controls.replayAnnotation = () => {};
   if (hasDom) document.body.innerHTML = '';
   __resetCodeHighlightCacheForTests();
 });
 
 describe('code-block annotations across highlight swaps', () => {
+  test.skipIf(!hasDom)('a history repaint survives the next palette swap', async () => {
+    const { mod } = fakePierre('immediate');
+    __setCodeHighlightModuleForTests(mod);
+    const annotation = codeBlockAnnotation('codeblock-history', AnnotationType.COMMENT);
+
+    await mountHarness([annotation]);
+    await flush();
+    expect(codeEl().querySelector(`[data-bind-id="${annotation.id}"]`)).not.toBeNull();
+
+    await act(async () => {
+      controls.replayAnnotation(annotation);
+    });
+    expect(codeEl().querySelector(`[data-bind-id="${annotation.id}"]`)).not.toBeNull();
+
+    await act(async () => {
+      controls.setColorTheme('kanagawa-wave');
+    });
+    await flush();
+
+    expect(codeEl().querySelector(`[data-bind-id="${annotation.id}"]`)).not.toBeNull();
+    expect(tokenColors().join(' ')).toContain(TOKEN_COLOR['kanagawa-wave']);
+  });
+
   test.skipIf(!hasDom)('a palette change re-themes the tokens and keeps the mark', async () => {
     const { mod } = fakePierre('immediate');
     __setCodeHighlightModuleForTests(mod);

@@ -87,6 +87,8 @@ export interface ReviewState {
   /** EXPERIMENTAL edit-to-suggestion flag (cookie setting, default OFF). Only
    * the plain all-files panel consumes it — Guided Review surfaces stay off. */
   editSuggestionsEnabled: boolean;
+  /** Sink for whether the all-files CodeMirror Edit Mode session is active. */
+  onEditSessionActiveChange: (active: boolean) => void;
   /** Sink for suggestions derived from a completed edit session (one hunk per
    * contiguous changed region; becomes normal suggestion annotations). */
   onAddSuggestionsForFile: (filePath: string, hunks: SuggestionHunk[]) => void;

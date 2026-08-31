@@ -20,7 +20,7 @@ export interface AnnotatorState {
   strokeSize: number;
   strokes: Stroke[];
   /** Strokes removed by undo, newest redo candidate last. */
-  futureStrokes: Stroke[];
+  futureStrokes?: Stroke[];
   currentStroke: Stroke | null;
 }
 

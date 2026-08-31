@@ -423,6 +423,7 @@ const ReviewApp: React.FC = () => {
   const reviewShowStageControls = useConfigValue('reviewShowStageControls');
   // EXPERIMENTAL: edit code in place to author suggestions (default OFF).
   const editSuggestionsEnabled = useConfigValue('editSuggestions');
+  const [reviewEditSessionActive, setReviewEditSessionActive] = useState(false);
   const semanticDiffEnabled = useConfigValue('semanticDiffEnabled');
   const callFlowEnabled = useConfigValue('callFlowEnabled');
   const confirmedAnalysisSettings = useRef({ semanticDiff: semanticDiffEnabled, callFlow: callFlowEnabled });
@@ -630,13 +631,13 @@ const ReviewApp: React.FC = () => {
     apply: applyReviewHistory,
   });
   useEffect(() => {
-    reviewHistory.clearAll();
+    reviewHistory.clear();
   }, [reviewHistory, reviewHistoryContext]);
   useEffect(() => {
-    reviewHistory.clearAll();
+    reviewHistory.clear();
   }, [diffData?.rawPatch, reviewHistory]);
   useEffect(() => {
-    if (submitted) reviewHistory.clearAll();
+    if (submitted) reviewHistory.clear();
   }, [reviewHistory, submitted]);
 
   // The Commits view (linear history rail) exists for plain local git
@@ -909,7 +910,7 @@ const ReviewApp: React.FC = () => {
   });
 
   const handleRestoreDraft = useCallback(() => {
-    reviewHistory.clearAll();
+    reviewHistory.clear();
     const restored = restoreDraft();
     if (restored.annotations.length > 0) setAnnotations(restored.annotations);
     if (restored.descriptionAnnotations.length > 0) setDescriptionAnnotations(restored.descriptionAnnotations);
@@ -2131,7 +2132,7 @@ const ReviewApp: React.FC = () => {
     decorations?: ConventionalDecoration[],
   ) => {
     const ann = allAnnotationsRef.current.find(a => a.id === id);
-    if (ann?.source) reviewHistory.clearAll();
+    if (ann?.source) reviewHistory.clear();
     const updates: Partial<CodeAnnotation> = {
       ...(text !== undefined && { text }),
       ...(suggestedCode !== undefined && { suggestedCode }),
@@ -2166,7 +2167,7 @@ const ReviewApp: React.FC = () => {
   // deleting the currently-selected annotation.
   const handleDeleteAnnotation = useCallback((id: string) => {
     const ann = allAnnotationsRef.current.find(a => a.id === id);
-    if (ann?.source) reviewHistory.clearAll();
+    if (ann?.source) reviewHistory.clear();
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       deleteExternalAnnotation(id);
       if (selectedAnnotationIdRef.current === id) {
@@ -2196,7 +2197,7 @@ const ReviewApp: React.FC = () => {
 
   // Handle identity change - update author on existing annotations
   const handleIdentityChange = useCallback((oldIdentity: string, newIdentity: string) => {
-    reviewHistory.clearAll();
+    reviewHistory.clear();
     annotationsRef.current = annotationsRef.current.map(ann =>
       ann.author === oldIdentity ? { ...ann, author: newIdentity } : ann
     );
@@ -3143,6 +3144,7 @@ const ReviewApp: React.FC = () => {
     onAddAnnotation: handleAddAnnotation,
     onAddAnnotationForFile: handleAddAnnotationForFile,
     editSuggestionsEnabled,
+    onEditSessionActiveChange: setReviewEditSessionActive,
     onAddSuggestionsForFile: handleAddSuggestionsForFile,
     onAddEditorCommentForFile: handleAddEditorCommentForFile,
     onAddFileComment: handleAddFileComment,
@@ -3586,6 +3588,7 @@ const ReviewApp: React.FC = () => {
 
   const canHandleReviewHistoryShortcut = useCallback((event: KeyboardEvent): boolean => {
     if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
+    if (reviewEditSessionActive) return false;
     if (submitted || isSendingFeedback || isApproving || isExiting || isPlatformActioning || isLoadingDiff) return false;
     if (guideOpen || openSettingsMenu || showDestinationMenu || platformCommentDialog || showExportModal || showWorktreeDialog || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return false;
     if (showLookAndFeel || showGuideIntro || showReviewSetup || editModeIntroVisible || tourDialogJobId) return false;
@@ -3600,6 +3603,7 @@ const ReviewApp: React.FC = () => {
     editModeIntroVisible,
     openSettingsMenu,
     platformCommentDialog,
+    reviewEditSessionActive,
     showApproveWarning,
     showDestinationMenu,
     showExitWarning,

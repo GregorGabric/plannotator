@@ -2,7 +2,6 @@ import { describe, expect, it } from 'bun:test';
 import {
   applyCollectionMutation,
   applyCollectionMutations,
-  createContextualUndoHistory,
   createUndoHistoryState,
   isHumanHistoryMutation,
   recordUndoAction,
@@ -70,17 +69,12 @@ describe('undo history', () => {
     expect(applyCollectionMutations([], mutations, 'redo', getId)[1]?.inReplyTo).toBe('parent');
   });
 
-  it('isolates contexts and clears lifecycle baselines', () => {
-    const history = createContextualUndoHistory<string>(2);
-    history.record('document:a', 'a1');
-    history.record('document:b', 'b1');
-    expect(history.takeUndo('document:a')).toBe('a1');
-    expect(history.read('document:b').past).toEqual(['b1']);
-    history.clear('document:b');
-    expect(history.takeUndo('document:b')).toBeNull();
-    history.record('review:c', 'c1');
-    history.clearAll();
-    expect(history.takeUndo('review:c')).toBeNull();
+  it('supports a fresh lifecycle baseline without retaining abandoned actions', () => {
+    const recorded = recordUndoAction(createUndoHistoryState<string>(), 'a1', 2);
+    expect(takeUndoAction(recorded).action).toBe('a1');
+    const cleared = createUndoHistoryState<string>();
+    expect(takeUndoAction(cleared).action).toBeNull();
+    expect(takeRedoAction(cleared, 2).action).toBeNull();
   });
 
   it('explicitly excludes external and agent-authored mutations', () => {

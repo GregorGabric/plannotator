@@ -17,26 +17,27 @@ export function undoStroke(state: AnnotatorState): AnnotatorState {
   return {
     ...state,
     strokes: state.strokes.slice(0, -1),
-    futureStrokes: [...state.futureStrokes, stroke],
+    futureStrokes: [...(state.futureStrokes ?? []), stroke],
     currentStroke: null,
   };
 }
 
 /** Restore the latest stroke removed by undo. */
 export function redoStroke(state: AnnotatorState): AnnotatorState {
-  const stroke = state.futureStrokes.at(-1);
+  const futureStrokes = state.futureStrokes ?? [];
+  const stroke = futureStrokes.at(-1);
   if (!stroke) return state;
   return {
     ...state,
     strokes: [...state.strokes, stroke],
-    futureStrokes: state.futureStrokes.slice(0, -1),
+    futureStrokes: futureStrokes.slice(0, -1),
     currentStroke: null,
   };
 }
 
 /** Clear the canvas and invalidate both stroke branches. */
 export function clearStrokeHistory(state: AnnotatorState): AnnotatorState {
-  if (state.strokes.length === 0 && state.futureStrokes.length === 0 && state.currentStroke === null) return state;
+  if (state.strokes.length === 0 && (state.futureStrokes?.length ?? 0) === 0 && state.currentStroke === null) return state;
   return {
     ...state,
     strokes: [],

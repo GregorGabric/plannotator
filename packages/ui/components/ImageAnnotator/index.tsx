@@ -151,15 +151,15 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
 
   useImageAnnotatorShortcuts({
     handlers: {
-      penTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'pen' })) },
-      arrowTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'arrow' })) },
-      circleTool: { when: () => isOpen && !saving, handle: () => setState((current) => ({ ...current, tool: 'circle' })) },
+      penTool: { when: (event) => isOpen && !saving && !keyboardTargetIsInput(event), handle: () => setState((current) => ({ ...current, tool: 'pen' })) },
+      arrowTool: { when: (event) => isOpen && !saving && !keyboardTargetIsInput(event), handle: () => setState((current) => ({ ...current, tool: 'arrow' })) },
+      circleTool: { when: (event) => isOpen && !saving && !keyboardTargetIsInput(event), handle: () => setState((current) => ({ ...current, tool: 'circle' })) },
       undo: {
         when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && state.strokes.length > 0,
         handle: handleUndo,
       },
       redo: {
-        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && state.futureStrokes.length > 0,
+        when: (event) => isOpen && !saving && !keyboardTargetIsInput(event) && (state.futureStrokes?.length ?? 0) > 0,
         handle: handleRedo,
       },
       save: {
@@ -191,7 +191,7 @@ export const ImageAnnotator: React.FC<ImageAnnotatorProps> = ({
           color={state.color}
           strokeSize={state.strokeSize}
           canUndo={state.strokes.length > 0}
-          canRedo={state.futureStrokes.length > 0}
+          canRedo={(state.futureStrokes?.length ?? 0) > 0}
           onToolChange={(tool) => setState(s => ({ ...s, tool }))}
           onColorChange={(color) => setState(s => ({ ...s, color }))}
           onStrokeSizeChange={(strokeSize) => setState(s => ({ ...s, strokeSize }))}

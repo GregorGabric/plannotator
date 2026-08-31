@@ -13,16 +13,6 @@ export interface UndoHistoryStep<TAction> {
   readonly action: TAction | null;
 }
 
-/** Pure per-context bounded history store. */
-export interface ContextualUndoHistory<TAction> {
-  read: (context: string) => UndoHistoryState<TAction>;
-  record: (context: string, action: TAction) => void;
-  takeUndo: (context: string) => TAction | null;
-  takeRedo: (context: string) => TAction | null;
-  clear: (context: string) => void;
-  clearAll: () => void;
-}
-
 /** Create an empty undo/redo state. */
 export function createUndoHistoryState<TAction>(): UndoHistoryState<TAction> {
   return { past: [], future: [] };
@@ -67,35 +57,6 @@ export function takeRedoAction<TAction>(
     state: {
       past: [...state.past, action].slice(-boundedCapacity),
       future: state.future.slice(0, -1),
-    },
-  };
-}
-
-/** Create isolated bounded stacks for independently navigable surfaces. */
-export function createContextualUndoHistory<TAction>(capacity = 50): ContextualUndoHistory<TAction> {
-  const states = new Map<string, UndoHistoryState<TAction>>();
-  const read = (context: string): UndoHistoryState<TAction> =>
-    states.get(context) ?? createUndoHistoryState<TAction>();
-  return {
-    read,
-    record(context, action) {
-      states.set(context, recordUndoAction(read(context), action, capacity));
-    },
-    takeUndo(context) {
-      const step = takeUndoAction(read(context));
-      if (step.action !== null) states.set(context, step.state);
-      return step.action;
-    },
-    takeRedo(context) {
-      const step = takeRedoAction(read(context), capacity);
-      if (step.action !== null) states.set(context, step.state);
-      return step.action;
-    },
-    clear(context) {
-      states.delete(context);
-    },
-    clearAll() {
-      states.clear();
     },
   };
 }
@@ -182,4 +143,24 @@ export function hasActiveHistoryOverlay(root: ParentNode): boolean {
 /** External or agent-authored annotations never enter human undo history. */
 export function isHumanHistoryMutation(item: { readonly source?: string }): boolean {
   return !item.source;
+}
+
+/** Minimal imperative highlight surface used by annotation-history replay. */
+export interface HistoryHighlightTarget<TItem extends { readonly id: string }> {
+  removeHighlight: (id: string) => void;
+  applySharedAnnotations: (items: TItem[]) => void;
+}
+
+/**
+ * Synchronize one replayed annotation without tombstoning retained highlights.
+ * Removal is reserved for actions whose result no longer contains the item.
+ */
+export function syncHistoryHighlight<TItem extends { readonly id: string }>(
+  target: HistoryHighlightTarget<TItem> | null,
+  item: TItem,
+  visible: boolean,
+): void {
+  if (!target) return;
+  if (visible) target.applySharedAnnotations([item]);
+  else target.removeHighlight(item.id);
 }

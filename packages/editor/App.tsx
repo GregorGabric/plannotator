@@ -140,6 +140,7 @@ import {
   hasActiveHistoryOverlay,
   isHumanHistoryMutation,
   isNativeHistoryOwner,
+  syncHistoryHighlight,
   type CollectionMutation,
   type HistoryDirection,
 } from '@plannotator/ui/utils/undoHistory';
@@ -760,11 +761,8 @@ const App: React.FC = () => {
         && ((action.mutation.kind === 'add' && direction === 'redo')
           || (action.mutation.kind === 'delete' && direction === 'undo')
           || action.mutation.kind === 'edit');
-      if (shouldPaint) {
-        viewerRef.current?.removeHighlight(annotation.id);
-        viewerRef.current?.applySharedAnnotations([annotation]);
-      } else if (annotationOwnsHighlight(annotation)) {
-        viewerRef.current?.removeHighlight(annotation.id);
+      if (annotationOwnsHighlight(annotation)) {
+        syncHistoryHighlight(viewerRef.current, annotation, shouldPaint);
       }
     }
     setSelectedAnnotationId(selection.annotationId);
@@ -776,10 +774,10 @@ const App: React.FC = () => {
     apply: applyDocumentHistory,
   });
   useEffect(() => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
   }, [annotationHistory, historyContext]);
   useEffect(() => {
-    if (submitted) annotationHistory.clearAll();
+    if (submitted) annotationHistory.clear();
   }, [annotationHistory, submitted]);
   // Desktop uses the main document element as its native scroll viewport.
   // Compact coarse-pointer browsers use the page scroller so Mobile Safari
@@ -1206,7 +1204,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleBeforeDocumentNavigation = useCallback(() => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
     snapshotActiveEditableDocument();
   }, [annotationHistory, snapshotActiveEditableDocument]);
 
@@ -1339,7 +1337,7 @@ const App: React.FC = () => {
   });
   const documentReadOnly = archive.archiveMode;
   useEffect(() => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
   }, [annotationHistory, archive.archiveMode]);
   // A Refresh lands the bytes and, for the root document, the version diff
   // the server recomputed against them (previousPlan/versionInfo still name
@@ -1347,7 +1345,7 @@ const App: React.FC = () => {
   // changes" toggle available whenever a diff came back; a refresh of a
   // linked doc keeps the root's version fields untouched, as before.
   const applyRefreshedHtml = useCallback((refreshed: HtmlRefreshedDocument) => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
     setRawHtml(refreshed.rawHtml);
     setShareHtml('');
     setIsPlanDiffActive(false);
@@ -1466,11 +1464,24 @@ const App: React.FC = () => {
     [annotateMode, canHandleDocumentChromeShortcut],
   );
 
-  const canHandleAnnotationHistoryShortcut = useCallback((event: KeyboardEvent) => {
-    if (event.defaultPrevented || documentReadOnly || submitted || isSubmitting || isExiting) return false;
-    if (isEditingMarkdown || pendingPasteImage || isNativeHistoryOwner(event)) return false;
+  const canHandleAnnotationHistory = useCallback(() => {
+    if (documentReadOnly || submitted || isSubmitting || isExiting) return false;
+    if (isEditingMarkdown || pendingPasteImage) return false;
     return !hasActiveHistoryOverlay(document);
   }, [documentReadOnly, isEditingMarkdown, isExiting, isSubmitting, pendingPasteImage, submitted]);
+
+  const canHandleAnnotationHistoryShortcut = useCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
+    return canHandleAnnotationHistory();
+  }, [canHandleAnnotationHistory]);
+
+  const handleEmbeddedHistoryUndo = useCallback(() => {
+    if (canHandleAnnotationHistory() && annotationHistory.canUndo) annotationHistory.undo();
+  }, [annotationHistory, canHandleAnnotationHistory]);
+
+  const handleEmbeddedHistoryRedo = useCallback(() => {
+    if (canHandleAnnotationHistory() && annotationHistory.canRedo) annotationHistory.redo();
+  }, [annotationHistory, canHandleAnnotationHistory]);
 
   useHistoryShortcuts({
     handlers: {
@@ -1669,7 +1680,7 @@ const App: React.FC = () => {
     const msg = recentMessages.find((m) => m.messageId === messageId);
     if (!msg || messageId === selectedMessageId) return;
 
-    annotationHistory.clearAll();
+    annotationHistory.clear();
 
     const states = saveCurrentMessageState();
     const targetState = normalizeMessageState(
@@ -2241,7 +2252,7 @@ const App: React.FC = () => {
   // Apply shared annotations to DOM after they're loaded
   useEffect(() => {
     if (pendingSharedAnnotations && pendingSharedAnnotations.length > 0) {
-      annotationHistory.clearAll();
+      annotationHistory.clear();
       // Small delay to ensure DOM is rendered
       const timer = setTimeout(() => {
         // Clear existing highlights first (important when loading new share URL)
@@ -2282,7 +2293,7 @@ const App: React.FC = () => {
   // `list` defaults to current state; draft restore passes the restored set,
   // which isn't in state yet when the remap runs.
   const applyEditedDocument = useCallback((next: string, list?: Annotation[]): Annotation[] => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
     const sourceAnnotations = list ?? annotationsRef.current;
     // Match the display parse (blocks memo) — the active document's
     // frontmatter rule must apply here too or the remapped blockIds drift.
@@ -2462,7 +2473,7 @@ const App: React.FC = () => {
   }, [resolveSavedFileChangeSource]);
 
   const handleRestoreDraft = React.useCallback(async () => {
-    annotationHistory.clearAll();
+    annotationHistory.clear();
     const {
       annotations: restored,
       codeAnnotations: restoredCode,
@@ -3674,7 +3685,7 @@ const App: React.FC = () => {
         if (agentFeedbackDelivery && sendToAgentTerminal(agentFeedback)) {
           setAgentTerminalDelivery(agentFeedbackDelivery);
           dismissDraft();
-          annotationHistory.clearAll();
+          annotationHistory.clear();
           setIsSubmitting(false);
           return;
         }
@@ -4084,10 +4095,10 @@ const App: React.FC = () => {
   });
   restoreCheckboxOverridesRef.current = checkbox.restoreOverrides;
 
-  const handleDeleteAnnotation = (id: string, recordHistory = true) => {
+  const deleteAnnotation = (id: string, recordHistory: boolean) => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
-    if (ann?.source) annotationHistory.clearAll();
+    if (ann?.source) annotationHistory.clear();
     // External annotations (live in SSE hook) route to the SSE hook, not local state.
     // Check membership by ID — source alone is insufficient because share-imported
     // and draft-restored annotations also carry source but live in local state.
@@ -4120,6 +4131,10 @@ const App: React.FC = () => {
           beforeSelection,
           afterSelection: selectionRef.current,
         });
+      } else {
+        // Preserve the generic deletion fallback for a stale checkbox id so
+        // selection/highlight cleanup still runs even when its row is gone.
+        removeAnnotation(id);
       }
       return;
     }
@@ -4137,10 +4152,13 @@ const App: React.FC = () => {
     }
   };
 
-  const handleEditAnnotation = (id: string, updates: Partial<Annotation>, recordHistory = true) => {
+  const handleDeleteAnnotation = (id: string) => deleteAnnotation(id, true);
+  const deleteAnnotationWithoutHistory = (id: string) => deleteAnnotation(id, false);
+
+  const editAnnotation = (id: string, updates: Partial<Annotation>, recordHistory: boolean) => {
     if (documentReadOnly) return;
     const ann = allAnnotations.find(a => a.id === id);
-    if (ann?.source) annotationHistory.clearAll();
+    if (ann?.source) annotationHistory.clear();
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       updateExternalAnnotation(id, updates);
       return;
@@ -4158,6 +4176,9 @@ const App: React.FC = () => {
       });
     }
   };
+
+  const handleEditAnnotation = (id: string, updates: Partial<Annotation>) => editAnnotation(id, updates, true);
+  const editAnnotationWithoutHistory = (id: string, updates: Partial<Annotation>) => editAnnotation(id, updates, false);
 
   // WebMCP (browser-agent tools). The hook detects `document.modelContext`
   // once and does nothing in a browser without it; the banner state below
@@ -4202,16 +4223,16 @@ const App: React.FC = () => {
     viewerRef,
     scrollViewport,
     addAnnotation: (annotation) => {
-      annotationHistory.clearAll();
+      annotationHistory.clear();
       handleAddAnnotation(annotation);
     },
     editAnnotation: (id, patch) => {
-      annotationHistory.clearAll();
-      handleEditAnnotation(id, patch, false);
+      annotationHistory.clear();
+      editAnnotationWithoutHistory(id, patch);
     },
     deleteAnnotation: (id) => {
-      annotationHistory.clearAll();
-      handleDeleteAnnotation(id, false);
+      annotationHistory.clear();
+      deleteAnnotationWithoutHistory(id);
     },
     selectAnnotation: handleSelectAnnotation,
     showBanner: showAgentNudge,
@@ -4220,7 +4241,7 @@ const App: React.FC = () => {
 
   const handleIdentityChange = useCallback((oldIdentity: string, newIdentity: string) => {
     if (documentReadOnly) return;
-    annotationHistory.clearAll();
+    annotationHistory.clear();
     setAnnotations(prev => prev.map(ann =>
       ann.author === oldIdentity ? { ...ann, author: newIdentity } : ann
     ));
@@ -5938,6 +5959,8 @@ const App: React.FC = () => {
                     annotateModeActive={htmlAnnotateArmed}
                     onAnnotateModeExit={documentReadOnly ? undefined : handleHtmlAnnotateExit}
                     onAnnotateModeToggle={documentReadOnly ? undefined : handleHtmlAnnotateToggle}
+                    onHistoryUndo={documentReadOnly ? undefined : handleEmbeddedHistoryUndo}
+                    onHistoryRedo={documentReadOnly ? undefined : handleEmbeddedHistoryRedo}
                     vimModeEnabled={liveApp ? false : vimModeEnabled && htmlAnnotateArmed}
                     vimHudEnabled={!liveApp && vimModeEnabled && htmlAnnotateArmed && vimHudEnabled}
                     vimHudKeyPanelEnabled={vimHudKeyPanelEnabled}

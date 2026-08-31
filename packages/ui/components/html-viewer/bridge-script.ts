@@ -220,7 +220,7 @@ body[data-plannotator-vim-focus-owner]:focus {
  * generated `bridge-script.asset.js` separately (`bridgeScriptUrl`), where a
  * cached asset from a previous package version can outlive the parent code.
  */
-export const BRIDGE_PROTOCOL_VERSION = 1;
+export const BRIDGE_PROTOCOL_VERSION = 2;
 
 export const BRIDGE_SCRIPT = `(function() {
   var PREFIX = 'plannotator-bridge-';
@@ -376,6 +376,10 @@ export const BRIDGE_SCRIPT = `(function() {
   // marker buttons keep their own clicks. BOTH surface kinds start ARMED —
   // Esc (or the header pen) drops to Interact.
   var annotateModeActive = true;
+  // Disabled until an owning host explicitly advertises handlers. Published
+  // HtmlViewer consumers that do not opt in retain the embedded page's keys.
+  var historyUndoEnabled = false;
+  var historyRedoEnabled = false;
   function updatePinpointCursor() {
     if (!document.body) return;
     if (annotateModeActive && currentInputMethod === 'pinpoint') {
@@ -734,6 +738,11 @@ export const BRIDGE_SCRIPT = `(function() {
         }
         updatePinpointCursor();
       }
+    }
+
+    else if (type === PREFIX + 'set-history-shortcuts') {
+      historyUndoEnabled = e.data.undo === true;
+      historyRedoEnabled = e.data.redo === true;
     }
 
     else if (type === PREFIX + 'set-vim-mode') {
@@ -3151,6 +3160,24 @@ export const BRIDGE_SCRIPT = `(function() {
     if (e.key !== 'a' && e.key !== 'A') return;
     e.preventDefault();
     postToParent({ type: PREFIX + 'annotate-toggle' });
+  }, true);
+
+  // The parent owns annotation undo/redo, but key events do not escape an
+  // iframe. Forward only when the embedded page has no native editing owner;
+  // input controls and source editors keep the browser/editor undo stack.
+  document.addEventListener('keydown', function(e) {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    var key = (e.key || '').toLowerCase();
+    var undo = key === 'z' && !e.shiftKey;
+    var redo = (key === 'z' && e.shiftKey) || (key === 'y' && !e.shiftKey);
+    if (!undo && !redo) return;
+    if ((undo && !historyUndoEnabled) || (redo && !historyRedoEnabled)) return;
+    var path = typeof e.composedPath === 'function' ? e.composedPath() : [];
+    var target = path[0] || e.target;
+    if (target && target.nodeType === 3) target = target.parentElement;
+    if (target && target.closest && target.closest('input, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .cm-editor')) return;
+    e.preventDefault();
+    postToParent({ type: PREFIX + (redo ? 'history-redo' : 'history-undo') });
   }, true);
 
   // Author opt-in: a plain click on any element tagged [data-annotate] pops the

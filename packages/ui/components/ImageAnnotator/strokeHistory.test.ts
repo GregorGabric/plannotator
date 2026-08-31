@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { DEFAULT_STATE, type Stroke } from './types';
+import { DEFAULT_STATE, type AnnotatorState, type Stroke } from './types';
 import { clearStrokeHistory, recordStroke, redoStroke, undoStroke } from './strokeHistory';
 
 const stroke = (id: string): Stroke => ({
@@ -27,5 +27,19 @@ describe('image stroke history', () => {
     expect(cleared.strokes).toEqual([]);
     expect(cleared.futureStrokes).toEqual([]);
     expect(redoStroke(cleared)).toBe(cleared);
+  });
+
+  it('keeps older host state without futureStrokes compatible', () => {
+    const legacyState: AnnotatorState = {
+      strokes: [stroke('a')],
+      currentStroke: null,
+      tool: 'pen',
+      color: '#fff',
+      strokeSize: 3,
+    };
+    const undone = undoStroke(legacyState);
+    expect(undone.strokes).toEqual([]);
+    expect(undone.futureStrokes?.map(({ id }) => id)).toEqual(['a']);
+    expect(redoStroke(undone).strokes.map(({ id }) => id)).toEqual(['a']);
   });
 });
