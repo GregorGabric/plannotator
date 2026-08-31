@@ -4,7 +4,7 @@
  * The V2 plugin API is still pre-release: the published `next` and `latest`
  * dist-tags of `@opencode-ai/plugin` carry an older context shape than the
  * `beta` / `dev` nightlies. Nothing here may import the plugin package at
- * runtime or assume a domain exists — every capability is probed before use so
+ * runtime or assume a domain exists: every capability is probed before use so
  * the adapter degrades to today's behavior on an older host.
  */
 
@@ -18,16 +18,35 @@ export interface V2SessionDomain {
   context?: (input: { sessionID: string }) => Promise<unknown>;
 }
 
+/**
+ * The subset of the V2 command domain this plugin touches.
+ *
+ * `transform` exists on every V2 host and says nothing about capability: the
+ * pre-#44765 draft is `{ list, get, update, remove }`. Only the draft handed to
+ * the callback can answer that, which is why nothing here treats the presence
+ * of `transform` as support.
+ */
+export interface V2CommandDomain {
+  transform?: (apply: (draft: V2CommandDraft) => void) => Promise<unknown> | unknown;
+  list?: (input?: unknown) => Promise<unknown>;
+  reload?: () => Promise<unknown>;
+}
+
 export interface V2ContextLike {
   agent?: { list?: (input?: unknown) => Promise<unknown> };
   session?: V2SessionDomain;
-  command?: { transform?: (apply: (draft: V2CommandDraft) => void) => Promise<unknown> | unknown };
+  command?: V2CommandDomain;
   location?: { directory?: string };
 }
 
 export interface V2CommandInvocation {
   sessionID: string;
   prompt?: { text?: string };
+  /**
+   * The admission mode OpenCode chose for the invocation. Carried for
+   * completeness and deliberately NOT reused when feedback comes back: see
+   * `FEEDBACK_DELIVERY`.
+   */
   delivery?: unknown;
 }
 
@@ -37,8 +56,17 @@ export interface V2CommandDefinition {
   execute: (input: V2CommandInvocation) => Promise<void>;
 }
 
+/**
+ * Post-#44765 draft. `add` is optional in the type because an older host hands
+ * the callback a draft without it; every call site must probe before using it.
+ */
 export interface V2CommandDraft {
-  add: (definition: V2CommandDefinition) => void;
+  add?: (definition: V2CommandDefinition) => void;
+}
+
+export interface V2CommandListEntry {
+  name: string;
+  description?: string;
 }
 
 /** The V1-shaped client `cli-bridge` consumes. */
@@ -60,20 +88,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Read an agent list from either response shape.
+ * Unwrap a list response that may or may not be enveloped.
  *
- * `ctx.agent.list()` is typed as the HTTP client's `{ location, data }`
- * envelope, but the in-process plugin domain on newer hosts answers with a
- * bare array. Reading `response.data` unconditionally threw into the caller's
- * catch there and silently degraded the agent list to empty, which disables
- * agent-switch validation and subagent detection.
+ * The generated client types every `list` as `{ location, data }`, and that is
+ * what the documented success shape is. Reading `.data` unconditionally throws
+ * on anything else and the throw lands in a caller's catch, where it degrades
+ * silently rather than loudly, so both shapes are accepted here instead.
  */
+function readEntries(response: unknown): unknown[] {
+  if (Array.isArray(response)) return response;
+  if (isRecord(response) && Array.isArray(response.data)) return response.data;
+  return [];
+}
+
+/** Read `ctx.command.list()` into name/description pairs, envelope or not. */
+export function readListPayload(response: unknown): V2CommandListEntry[] {
+  const entries: V2CommandListEntry[] = [];
+  for (const entry of readEntries(response)) {
+    if (!isRecord(entry) || typeof entry.name !== "string") continue;
+    entries.push({
+      name: entry.name,
+      description: typeof entry.description === "string" ? entry.description : undefined,
+    });
+  }
+  return entries;
+}
+
+/** Read an agent list, envelope or bare array, without ever throwing. */
 export function normalizeAgentList(response: unknown): OpenCodeBridgeAgent[] {
-  const entries = Array.isArray(response)
-    ? response
-    : isRecord(response) && Array.isArray(response.data)
-      ? response.data
-      : [];
+  const entries = readEntries(response);
 
   const agents: OpenCodeBridgeAgent[] = [];
   for (const entry of entries) {
@@ -97,10 +140,10 @@ export function supportsSwitchAgent(ctx: V2ContextLike): boolean {
   return typeof ctx.session?.switchAgent === "function";
 }
 
-/** True when this host's plugin API can register native slash commands. */
-export function supportsNativeCommands(ctx: V2ContextLike): boolean {
-  return typeof ctx.command?.transform === "function";
-}
+// There is deliberately no `supportsNativeCommands(ctx)`. `ctx.command.transform`
+// exists on hosts whose draft predates PR #44765 and has no `add`, so any probe
+// from the context alone reports a false positive; the draft itself is the only
+// witness. See `native-commands.ts`.
 
 /**
  * Translate `ctx.session.context()` output into the message shape
@@ -134,10 +177,22 @@ function readSessionId(request: unknown): string | undefined {
 }
 
 /**
+ * How Plannotator feedback is admitted to the session.
+ *
+ * A command invocation carries its own delivery, but that value was chosen when
+ * the user pressed enter, and a review comes back minutes later: replaying a
+ * "steer" then would land the feedback in the middle of whatever turn is
+ * running now. "queue" is the safe choice for a late arrival. Upstream's own
+ * default is "steer" (`packages/core/src/session/prompt.ts`), so this is set
+ * explicitly rather than omitted.
+ */
+const FEEDBACK_DELIVERY = "queue";
+
+/**
  * Build the V1-shaped client `handleCliCommand` and `resolveValidatedTargetAgent`
  * expect, backed by the V2 context. Delivering feedback goes through
- * `ctx.session.prompt` — the direct path — rather than a synthetic-event
- * injection, which is unreliable on some V2 nightlies.
+ * `ctx.session.prompt`, the direct path, rather than a synthetic-event
+ * injection, which is unreliable on some V2 nightlies (upstream #44788).
  *
  * There is deliberately no `tui` domain: the V2 server-plugin context exposes
  * none, and every toast call site in `cli-bridge` is best-effort.
@@ -145,8 +200,10 @@ function readSessionId(request: unknown): string | undefined {
 export function createV2BridgeClient(input: {
   ctx: V2ContextLike;
   getAgents: () => Promise<OpenCodeBridgeAgent[]>;
-  delivery?: unknown;
+  /** Best-effort warning sink; defaults to stderr. */
+  warn?: (message: string) => void;
 }): V2BridgeClient {
+  const warn = input.warn ?? ((message: string) => console.error(message));
   const loggedUrls = new Set<string>();
   return {
     app: {
@@ -171,7 +228,13 @@ export function createV2BridgeClient(input: {
         const body = isRecord(request) && isRecord(request.body) ? request.body : {};
         const agent = typeof body.agent === "string" ? body.agent : undefined;
         if (agent && typeof input.ctx.session?.switchAgent === "function") {
-          await input.ctx.session.switchAgent({ sessionID, agent });
+          // A failed switch must never cost the reviewer their feedback: the
+          // same guarantee `switchV2SessionAgent` gives the approval path.
+          try {
+            await input.ctx.session.switchAgent({ sessionID, agent });
+          } catch (error) {
+            warn(`[Plannotator] Could not switch the OpenCode session to "${agent}": ${error instanceof Error ? error.message : String(error)}`);
+          }
         }
         const prompt = input.ctx.session?.prompt;
         if (typeof prompt !== "function") {
@@ -180,7 +243,7 @@ export function createV2BridgeClient(input: {
         return await prompt({
           sessionID,
           text: joinTextParts(Array.isArray(body.parts) ? body.parts : []),
-          ...(input.delivery === undefined ? {} : { delivery: input.delivery }),
+          delivery: FEEDBACK_DELIVERY,
         });
       },
     },

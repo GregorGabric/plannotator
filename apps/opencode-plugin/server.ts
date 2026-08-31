@@ -65,10 +65,11 @@ const serverPlugin = {
     const getAgents = async (): Promise<OpenCodeBridgeAgent[]> => {
       if (cachedAgents) return cachedAgents;
       try {
-        // Both response shapes are accepted: the HTTP client types this as a
-        // `{ location, data }` envelope, while the in-process plugin domain on
-        // newer hosts answers with a bare array. Reading `.data` blindly threw
-        // on those hosts and silently emptied the agent list.
+        // The documented success shape is the `{ location, data }` envelope.
+        // `normalizeAgentList` also accepts a bare array because reading
+        // `.data` off anything else throws into this catch, where the failure
+        // is invisible: an empty agent list silently disables subagent gating
+        // and agent-switch validation rather than reporting anything.
         cachedAgents = normalizeAgentList(await ctx.agent.list());
       } catch {
         cachedAgents = [];
@@ -82,12 +83,19 @@ const serverPlugin = {
     const v2 = ctx as unknown as V2ContextLike;
 
     // Native slash commands are registered before the submit_plan early return
-    // below so `workflow: "manual"` — which registers no tool — still gets them.
-    await registerNativeCommands({
-      ctx: v2,
-      getAgents,
-      getBridgeContext: () => getBridgeContext(getAgents),
-    });
+    // below, so `workflow: "manual"`, which registers no tool, still gets them.
+    // Wrapped because a transform rejection must never fail plugin setup: the
+    // whole Plannotator integration would go down for a slash command that has
+    // a working markdown fallback.
+    try {
+      await registerNativeCommands({
+        ctx: v2,
+        getAgents,
+        getBridgeContext: () => getBridgeContext(getAgents),
+      });
+    } catch (error) {
+      console.error(`[Plannotator] Could not register the OpenCode 2 slash commands: ${error instanceof Error ? error.message : String(error)}`);
+    }
 
     if (shouldModifyPrompts(workflowOptions)) {
       await ctx.session.hook("context", async (event) => {

@@ -1,43 +1,61 @@
 /**
  * Native slash commands for OpenCode 2.
  *
- * OpenCode's V2 plugin API gained command execution in anomalyco/opencode
- * PR #44765 (issue #2185): `ctx.command.transform(draft => draft.add({ name,
- * description, execute }))`, where `execute` fully owns the invocation and
- * nothing reaches the model unless it says so. That shape currently ships only
- * on the `beta` and `dev` dist-tags of `@opencode-ai/plugin`; `next` and
- * `latest` still carry the older context. So the capability is duck-typed at
- * runtime, never imported: on a host without it this module registers nothing
- * and the markdown command stubs stay the (model-mediated) fallback.
+ * OpenCode's V2 plugin API gained command EXECUTION in anomalyco/opencode
+ * PR #44765 (issue #2185): the command draft grew an `add({ name, description,
+ * execute })` method whose callback fully owns the invocation, so nothing
+ * reaches the model unless it says so. That shape currently ships only on the
+ * `beta` and `dev` dist-tags of `@opencode-ai/plugin`; `next` and `latest`
+ * still carry a draft of `{ list, get, update, remove }` with no `add`.
  *
- * Execution reuses the exact V1 machinery — `handleCliCommand` — over a
+ * `ctx.command.transform` therefore proves NOTHING: it exists on both. The only
+ * honest probe is the draft handed to the callback, which is what this module
+ * checks. On an older host it adds nothing and the markdown command stubs stay
+ * the (model-mediated) fallback.
+ *
+ * Execution reuses the exact V1 machinery, `handleCliCommand`, over a
  * translation client, so the two hosts cannot drift.
  */
 
 import { handleCliCommand, type OpenCodeBridgeAgent, type OpenCodeBridgeContext } from "./cli-bridge";
 import {
   createV2BridgeClient,
-  supportsNativeCommands,
+  readListPayload,
   type V2CommandDraft,
   type V2CommandInvocation,
   type V2ContextLike,
 } from "./v2-client";
 
+/**
+ * Descriptions are deliberately NOT copies of the markdown stubs' frontmatter.
+ * They are the provenance signal the reclaim below reads back out of
+ * `ctx.command.list()` to tell our definition from the config-loaded stub, and
+ * `native-commands.test.ts` pins that they stay distinct.
+ */
 export const NATIVE_COMMANDS: ReadonlyArray<{ name: string; description: string }> = [
   {
     name: "plannotator-review",
     description:
-      "Open interactive code review for current changes or a PR URL; pass --git or --gitbutler to force that provider",
+      "Open the Plannotator code review UI for current changes or a PR URL; pass --git or --gitbutler to force that provider",
   },
   {
     name: "plannotator-annotate",
-    description: "Open interactive annotation UI for a file, folder, or URL",
+    description: "Open the Plannotator annotation UI for a file, folder, or URL",
   },
   {
     name: "plannotator-last",
-    description: "Annotate the last assistant message",
+    description: "Annotate the last assistant message in Plannotator",
   },
 ];
+
+/**
+ * When the reclaim below re-checks ownership, in milliseconds after setup.
+ *
+ * Four bounded ticks, then it stops for good. Plugin activation and the config
+ * command scan both finish well inside this window; a host slower than that
+ * keeps the fallback, which still works.
+ */
+const RECLAIM_SCHEDULE_MS = [300, 1_200, 4_000, 10_000] as const;
 
 export interface CliCommandRequest {
   command: string;
@@ -58,6 +76,8 @@ export interface NativeCommandDeps {
    * of `cli-bridge` here would leak into every other suite.
    */
   runCommand?: (request: CliCommandRequest) => Promise<void>;
+  /** Test seam for the reclaim schedule; production uses real timers. */
+  wait?: (ms: number) => Promise<void>;
 }
 
 /** Resolve the invocation's working directory, session location first. */
@@ -79,14 +99,10 @@ export async function runNativeCommand(
 ): Promise<void> {
   const sessionID = invocation.sessionID;
   // The raw argument tail, exactly as OpenCode 1 forwards it. The CLI's own
-  // tolerant argument resolution takes it from here — nothing is parsed or
+  // tolerant argument resolution takes it from here: nothing is parsed or
   // rewritten on the way through.
   const rawArgs = typeof invocation.prompt?.text === "string" ? invocation.prompt.text : "";
-  const client = createV2BridgeClient({
-    ctx: deps.ctx,
-    getAgents: deps.getAgents,
-    delivery: invocation.delivery,
-  });
+  const client = createV2BridgeClient({ ctx: deps.ctx, getAgents: deps.getAgents });
 
   const run = deps.runCommand ?? ((request: CliCommandRequest) => handleCliCommand(request as never));
   await run({
@@ -99,37 +115,157 @@ export async function runNativeCommand(
   });
 }
 
+function defaultWait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    // Never hold the host process open for a background reconciliation.
+    (timer as { unref?: () => void }).unref?.();
+  });
+}
+
 /**
- * Register the three Plannotator commands when the host supports it.
+ * Do our definitions currently own all three names?
  *
- * Returns whether anything was registered, so callers (and tests) can pin the
- * "old host, zero new behavior" half of the contract.
+ * `ctx.command.list()` returns the MATERIALIZED command map, so a description
+ * that is not ours means another transform (in practice OpenCode's own
+ * ConfigCommandPlugin, replaying the installed markdown stubs) added the name
+ * after us and won.
+ */
+async function ownsNativeCommands(ctx: V2ContextLike): Promise<boolean> {
+  const list = await ctx.command?.list?.();
+  const commands = readListPayload(list);
+  return NATIVE_COMMANDS.every((command) => commands.some((entry) =>
+    entry.name === command.name && entry.description === command.description));
+}
+
+/**
+ * Take the three names back from the config-loaded markdown stubs.
+ *
+ * Mechanism, verified against anomalyco/opencode `origin/v2`:
+ *  - Command definitions live in a name-keyed Map and `draft.add` is a
+ *    `Map.set` (`packages/core/src/command.ts`), so the LAST transform to add a
+ *    name wins.
+ *  - Transforms replay in registration order: `transforms = [...transforms,
+ *    transform]`, and `materialize` walks that array
+ *    (`packages/core/src/state.ts`).
+ *  - Activation order is `pre` -> packages -> `post`, and OpenCode's own
+ *    ConfigCommandPlugin, which scans `~/.config/opencode/{command,commands}/
+ *    **\/*.md`, sits in `post` (`packages/core/src/plugin/internal.ts:265-269`,
+ *    `packages/core/src/plugin/supervisor.ts`).
+ * So a setup-time transform ALWAYS replays before config's, and the stubs the
+ * installer writes shadow the native definitions on every normal install. The
+ * fix is to register the same transform once more after activation settles, so
+ * ours is last in the replay order; from then on it stays last, because config
+ * only ever calls `reload()` and never re-registers.
+ *
+ * The explicit `reload()` is required, not decorative: each plugin's effect
+ * runs inside `State.batch` (`packages/core/src/plugin.ts:52`), and a late
+ * transform registration only adds its reload to that already-flushed batch
+ * (`state.ts`: `if (batch) batch.add(reload)`), so nothing would materialize
+ * without it.
+ *
+ * Deliberately not driven by `ctx.event.subscribe()`: upstream #44788 reports
+ * that stream as unreliable on some V2 nightlies, and `command.list()` is a
+ * direct read of committed state with no bus involved.
+ *
+ * Failure mode: if this never gets to run, or the host has no `list`/`reload`,
+ * or a future OpenCode reorders activation, the markdown stubs keep winning and
+ * the three commands still work through their model-mediated fallback bodies.
+ * Degraded, never broken.
+ */
+export async function reclaimNativeCommands(input: {
+  ctx: V2ContextLike;
+  apply: () => Promise<void>;
+  isSupported: () => boolean;
+  wait?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const wait = input.wait ?? defaultWait;
+  const list = input.ctx.command?.list;
+  const reload = input.ctx.command?.reload;
+  if (typeof list !== "function" || typeof reload !== "function") return;
+
+  let reclaimed = false;
+  for (const delay of RECLAIM_SCHEDULE_MS) {
+    await wait(delay);
+    // The draft probe runs when the transform replays, which under boot
+    // batching is after registration resolved. By the first tick it has run.
+    if (!input.isSupported()) return;
+
+    let owned: boolean;
+    try {
+      owned = await ownsNativeCommands(input.ctx);
+    } catch {
+      return;
+    }
+    // Owning the names on an early tick can simply mean config has not loaded
+    // yet, so ownership alone is not an exit condition: only ownership that
+    // outlives a reclaim is.
+    if (owned) {
+      if (reclaimed) return;
+      continue;
+    }
+
+    try {
+      await input.apply();
+      await reload();
+      reclaimed = true;
+    } catch {
+      return;
+    }
+  }
+}
+
+/**
+ * Register the three Plannotator commands when the host's draft supports it.
+ *
+ * Returns whether the draft accepted them. Note the callback may not have run
+ * by the time `transform` resolves: during boot the host coalesces transforms
+ * into one batched reload, so the honest answer arrives a tick later. The
+ * reclaim loop re-reads the same flag rather than trusting this snapshot.
  */
 export async function registerNativeCommands(deps: NativeCommandDeps): Promise<boolean> {
   const transform = deps.ctx.command?.transform;
-  if (!supportsNativeCommands(deps.ctx) || typeof transform !== "function") return false;
+  if (typeof transform !== "function") return false;
 
-  await transform((draft: V2CommandDraft) => {
-    for (const command of NATIVE_COMMANDS) {
-      draft.add({
-        name: command.name,
-        description: command.description,
-        execute: async (invocation) => {
-          try {
-            await runNativeCommand(command.name, invocation, deps);
-          } catch (error) {
-            // handleCliCommand already logs and swallows everything except a
-            // prompt-delivery failure. Report that one and stop: rethrowing
-            // would surface an OpenCode command execution error for feedback
-            // the reviewer has already given.
-            console.error(
-              `[Plannotator] /${command.name} failed: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-        },
-      });
-    }
+  let supported = false;
+  const apply = async () => {
+    await transform((draft: V2CommandDraft) => {
+      // The ONLY honest capability probe: `transform` exists on hosts whose
+      // draft is `{ list, get, update, remove }`, where `add` is undefined and
+      // calling it would throw inside the batched reload flush, aborting it
+      // before commit and taking every command registration down with it.
+      if (typeof draft?.add !== "function") return;
+      supported = true;
+      for (const command of NATIVE_COMMANDS) {
+        draft.add({
+          name: command.name,
+          description: command.description,
+          execute: async (invocation) => {
+            try {
+              await runNativeCommand(command.name, invocation, deps);
+            } catch (error) {
+              // handleCliCommand already logs and swallows everything except a
+              // prompt-delivery failure. Report that one and stop: rethrowing
+              // would surface an OpenCode command execution error for feedback
+              // the reviewer has already given.
+              console.error(
+                `[Plannotator] /${command.name} failed: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          },
+        });
+      }
+    });
+  };
+
+  await apply();
+
+  void reclaimNativeCommands({
+    ctx: deps.ctx,
+    apply,
+    isSupported: () => supported,
+    wait: deps.wait,
   });
 
-  return true;
+  return supported;
 }

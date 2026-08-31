@@ -1,9 +1,21 @@
 import { describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { NATIVE_COMMANDS, registerNativeCommands, type CliCommandRequest } from "./native-commands";
-import { normalizeAgentList, toBridgeMessages } from "./v2-client";
+import {
+  NATIVE_COMMANDS,
+  reclaimNativeCommands,
+  registerNativeCommands,
+  type CliCommandRequest,
+} from "./native-commands";
+import { createV2BridgeClient, normalizeAgentList, readListPayload, toBridgeMessages } from "./v2-client";
 import { switchV2SessionAgent } from "./agent-switch";
+
+const STUB_DIR = path.join(import.meta.dir, "commands");
+
+/** The pre-#44765 draft: `transform` exists, `add` does not. */
+function legacyDraft() {
+  return { list: () => [], get: () => undefined, update: () => {}, remove: () => {} };
+}
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const runCommand = mock(async (_request: CliCommandRequest) => {});
@@ -14,10 +26,10 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   });
 
   const ctx: any = {
+    // No list/reload here on purpose: the reclaim loop then exits before its
+    // first wait, so these tests never schedule a timer.
     command: { transform },
-    session: {
-      get: async () => ({ location: { directory: "/project" } }),
-    },
+    session: { get: async () => ({ location: { directory: "/project" } }) },
     location: { directory: "/fallback" },
     ...overrides,
   };
@@ -36,15 +48,71 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/**
+ * A faithful stand-in for OpenCode's command state: transforms are appended and
+ * REPLAYED in registration order, and `add` is a `Map.set`, so the last
+ * transform to add a name wins (core/src/state.ts, core/src/command.ts).
+ */
+function makeCommandHost() {
+  const committed = new Map<string, { name: string; description?: string }>();
+  const transforms: Array<(draft: any) => void> = [];
+  const materialize = () => {
+    committed.clear();
+    for (const transform of transforms) transform({ add: (d: any) => committed.set(d.name, d) });
+  };
+  return {
+    committed,
+    domain: {
+      transform: async (apply: (draft: any) => void) => {
+        transforms.push(apply);
+        materialize();
+        return { dispose: async () => {} };
+      },
+      list: async () => ({
+        location: {},
+        data: [...committed.values()].map(({ name, description }) => ({ name, description })),
+      }),
+      reload: async () => { materialize(); },
+    },
+    /** Stand-in for OpenCode's ConfigCommandPlugin, which activates after us. */
+    addConfigStubs: () => {
+      transforms.push((draft: any) => {
+        for (const command of NATIVE_COMMANDS) {
+          draft.add({ name: command.name, description: "from the markdown stub", execute: async () => {} });
+        }
+      });
+      materialize();
+    },
+  };
+}
+
 describe("OpenCode 2 native command registration", () => {
-  test("registers nothing when the host has no command.transform", async () => {
-    // The whole feature-detection contract: on `next` / `latest` hosts the V2
-    // plugin API predates PR #44765 and must stay untouched.
+  test("registers nothing when the host has no command domain", async () => {
     const { deps } = makeDeps({ command: undefined });
     expect(await registerNativeCommands(deps)).toBe(false);
   });
 
-  test("registers exactly the three Plannotator commands when the API exists", async () => {
+  test("registers nothing on a pre-#44765 draft that has no add", async () => {
+    // The real old-host shape. `ctx.command.transform` EXISTS on `next` and
+    // `latest`; only the draft tells the truth. Calling a missing `add` here
+    // would throw inside the batched reload flush and abort it before commit,
+    // taking every command registration down with it.
+    let applied = false;
+    const { deps } = makeDeps({
+      command: {
+        transform: async (apply: (draft: any) => void) => {
+          applied = true;
+          apply(legacyDraft());
+          return { dispose: async () => {} };
+        },
+      },
+    });
+
+    expect(await registerNativeCommands(deps)).toBe(false);
+    expect(applied).toBe(true);
+  });
+
+  test("registers exactly the three Plannotator commands when the draft supports add", async () => {
     const { deps, added } = makeDeps();
     expect(await registerNativeCommands(deps)).toBe(true);
     // Command names are the user-visible slash commands and are deliberately
@@ -65,7 +133,7 @@ describe("OpenCode 2 native command registration", () => {
     await annotate.execute({
       sessionID: "session-9",
       prompt: { text: "notes.md --gate --json" },
-      delivery: "queue",
+      delivery: "steer",
     });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
@@ -114,11 +182,105 @@ describe("OpenCode 2 native command registration", () => {
   });
 });
 
-describe("V2 agent list shapes", () => {
-  // The new promise plugin domain answers with a bare array while the HTTP
-  // client types it as a `{ data }` envelope. Reading `.data` blindly threw and
-  // silently emptied the agent list, disabling subagent gating on new hosts.
-  test("reads both the bare array and the { data } envelope", () => {
+describe("reclaiming the command names from the config-loaded stubs", () => {
+  // OpenCode activates its own ConfigCommandPlugin AFTER package plugins, and
+  // it replays the installed markdown stubs into the same name-keyed map, so a
+  // setup-time registration is always overwritten on a normal install.
+  test("re-registers after the config stubs shadow the native definitions", async () => {
+    const host = makeCommandHost();
+    const { deps } = makeDeps({ command: host.domain });
+    const apply = () => registerNativeCommands(deps).then(() => {});
+
+    await apply();
+    expect(host.committed.get("plannotator-review")?.description).toBe(NATIVE_COMMANDS[0]!.description);
+
+    host.addConfigStubs();
+    expect(host.committed.get("plannotator-review")?.description).toBe("from the markdown stub");
+
+    await reclaimNativeCommands({
+      ctx: deps.ctx,
+      apply,
+      isSupported: () => true,
+      wait: async () => {},
+    });
+
+    for (const command of NATIVE_COMMANDS) {
+      expect(host.committed.get(command.name)?.description).toBe(command.description);
+    }
+  });
+
+  test("a reload after the reclaim keeps the native definitions", async () => {
+    // Config only ever calls reload() afterwards; replay order is stable, so
+    // winning once must mean winning permanently.
+    const host = makeCommandHost();
+    const { deps } = makeDeps({ command: host.domain });
+    const apply = () => registerNativeCommands(deps).then(() => {});
+
+    await apply();
+    host.addConfigStubs();
+    await reclaimNativeCommands({ ctx: deps.ctx, apply, isSupported: () => true, wait: async () => {} });
+    await host.domain.reload();
+
+    expect(host.committed.get("plannotator-review")?.description).toBe(NATIVE_COMMANDS[0]!.description);
+  });
+
+  test("stops re-registering once ownership outlives a reclaim", async () => {
+    const host = makeCommandHost();
+    const { deps } = makeDeps({ command: host.domain });
+    let applies = 0;
+    const apply = async () => { applies += 1; await registerNativeCommands(deps); };
+
+    await apply();
+    host.addConfigStubs();
+    applies = 0;
+    await reclaimNativeCommands({ ctx: deps.ctx, apply, isSupported: () => true, wait: async () => {} });
+
+    // One reclaim, then the next tick confirms ownership and the loop exits
+    // instead of piling on a transform per tick.
+    expect(applies).toBe(1);
+  });
+
+  test("does nothing on a host without list or reload, and never on an unsupported draft", async () => {
+    const apply = mock(async () => {});
+    await reclaimNativeCommands({
+      ctx: { command: { transform: async () => ({}) } },
+      apply,
+      isSupported: () => true,
+      wait: async () => {},
+    });
+
+    const host = makeCommandHost();
+    await reclaimNativeCommands({
+      ctx: { command: host.domain },
+      apply,
+      isSupported: () => false,
+      wait: async () => {},
+    });
+
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  test("a throwing list read ends the reclaim instead of looping", async () => {
+    const apply = mock(async () => {});
+    await reclaimNativeCommands({
+      ctx: {
+        command: {
+          transform: async () => ({}),
+          list: async () => { throw new Error("no service"); },
+          reload: async () => {},
+        },
+      },
+      apply,
+      isSupported: () => true,
+      wait: async () => {},
+    });
+
+    expect(apply).not.toHaveBeenCalled();
+  });
+});
+
+describe("V2 list shapes", () => {
+  test("reads an agent list as a bare array or a { data } envelope", () => {
     const entries = [{ id: "plan", mode: "primary", hidden: false }];
     expect(normalizeAgentList(entries)).toEqual([
       { name: "plan", description: undefined, mode: "primary", hidden: false },
@@ -130,6 +292,7 @@ describe("V2 agent list shapes", () => {
     expect(normalizeAgentList(undefined)).toEqual([]);
     expect(normalizeAgentList({ data: "nope" })).toEqual([]);
     expect(normalizeAgentList([{ mode: "primary" }])).toEqual([]);
+    expect(readListPayload({ data: [{ description: "nameless" }] })).toEqual([]);
   });
 });
 
@@ -196,6 +359,47 @@ describe("V2 agent switching", () => {
   });
 });
 
+describe("V2 feedback delivery", () => {
+  function makeBridge(switchAgent: (input: { sessionID: string; agent: string }) => Promise<unknown>) {
+    const prompt = mock(async (_input: unknown) => ({}));
+    const warnings: string[] = [];
+    const client = createV2BridgeClient({
+      ctx: { session: { prompt, switchAgent } },
+      getAgents: async () => [],
+      warn: (message) => warnings.push(message),
+    });
+    return { client, prompt, warnings };
+  }
+
+  test("a failing switchAgent still delivers the feedback", async () => {
+    // Same guarantee the approval path gives: the reviewer's words must not be
+    // lost because the session refused to change agent.
+    const { client, prompt, warnings } = makeBridge(async () => { throw new Error("busy"); });
+
+    await client.session.prompt({
+      path: { id: "session-1" },
+      body: { agent: "build", parts: [{ type: "text", text: "please fix" }] },
+    });
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0]![0]).toMatchObject({ sessionID: "session-1", text: "please fix" });
+    expect(warnings.some((line) => line.includes("busy"))).toBe(true);
+  });
+
+  test("feedback is queued, never steered into a running turn", async () => {
+    // The invocation's own delivery was chosen at admission; a review comes
+    // back minutes later, when a steer would land mid-turn.
+    const { client, prompt } = makeBridge(async () => {});
+
+    await client.session.prompt({
+      path: { id: "session-1" },
+      body: { parts: [{ type: "text", text: "LGTM" }] },
+    });
+
+    expect(prompt.mock.calls[0]![0]).toMatchObject({ delivery: "queue" });
+  });
+});
+
 describe("V2 session context translation", () => {
   // `/plannotator-last` reads assistant text out of the session. V2 messages
   // are flat (`{ id, type, content }`) where V1 nested them under info/parts;
@@ -215,18 +419,32 @@ describe("V2 session context translation", () => {
 });
 
 describe("shared command stubs", () => {
-  // OpenCode 1 evaluates a command template's shell interpolation BEFORE the V1
-  // plugin's command.execute.before hook can clear the parts, so a `!` backtick
-  // in these shared stubs would launch a second Plannotator session on every
-  // OC1 invocation. Permanently pinned.
-  const stubDir = path.join(import.meta.dir, "commands");
+  function readStub(name: string): { frontmatter: string; body: string } {
+    const source = readFileSync(path.join(STUB_DIR, `${name}.md`), "utf-8");
+    const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source);
+    if (!match) throw new Error(`${name}.md has no frontmatter`);
+    return { frontmatter: match[1]!, body: match[2]! };
+  }
 
   for (const command of NATIVE_COMMANDS) {
+    // OpenCode 1 evaluates a command template's shell interpolation BEFORE the
+    // V1 plugin's command.execute.before hook can clear the parts, so a `!`
+    // backtick in these shared stubs would launch a second Plannotator session
+    // on every OC1 invocation. Permanently pinned.
     test(`${command.name}.md carries no shell interpolation`, () => {
-      const body = readFileSync(path.join(stubDir, `${command.name}.md`), "utf-8");
+      const { body } = readStub(command.name);
       expect(body).not.toContain("!`");
       // The model-mediated fallback needs the argument tail to reach the CLI.
       expect(body).toContain("$ARGUMENTS");
+    });
+
+    // The reclaim tells our definition from the config-loaded stub by reading
+    // the description back out of ctx.command.list(). Identical descriptions
+    // would make that check always report ownership and silently disable it.
+    test(`${command.name} native description differs from the stub frontmatter`, () => {
+      const { frontmatter } = readStub(command.name);
+      expect(frontmatter).toContain("description:");
+      expect(frontmatter).not.toContain(command.description);
     });
   }
 });

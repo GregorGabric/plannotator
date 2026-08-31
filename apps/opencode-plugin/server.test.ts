@@ -22,9 +22,10 @@ function createContext(
   options: Record<string, unknown> = {},
   agents: Array<{ id: string; description?: string; mode: string; hidden: boolean }> = [],
   hostOverrides: {
-    // Pre-#44765 hosts expose no command domain; the adapter must then register
-    // no commands and behave exactly as it did before.
-    command?: { transform: (apply: (draft: { add: (definition: any) => void }) => void) => Promise<unknown> };
+    // Pre-#44765 hosts DO expose command.transform, but hand the callback a
+    // draft with no `add`. The adapter must then register nothing, throw
+    // nothing, and behave exactly as it did before.
+    command?: { transform: (apply: (draft: any) => void) => Promise<unknown> };
     agentListShape?: "envelope" | "array";
   } = {},
 ) {
@@ -214,7 +215,7 @@ describe("OpenCode V2 server plugin", () => {
     const withCommands = createContext({}, [], {
       command: {
         transform: async (apply) => {
-          apply({ add: (definition) => registered.push(definition.name) });
+          apply({ add: (definition: { name: string }) => registered.push(definition.name) });
           return { dispose: async () => {} };
         },
       },
@@ -233,6 +234,42 @@ describe("OpenCode V2 server plugin", () => {
     expect(withoutCommands.getToolDefinition()?.name).toBe("submit_plan");
   });
 
+  test("a pre-#44765 command draft registers nothing and does not fail setup", async () => {
+    // The real `next` / `latest` shape: transform exists, the draft is
+    // { list, get, update, remove }. Touching `add` here would throw inside the
+    // host's batched reload flush and abort it before commit.
+    let applied = false;
+    const testContext = createContext({}, [], {
+      command: {
+        transform: async (apply) => {
+          applied = true;
+          apply({ list: () => [], get: () => undefined, update: () => {}, remove: () => {} });
+          return { dispose: async () => {} };
+        },
+      },
+    });
+
+    await serverPlugin.setup(testContext.context as never);
+    expect(applied).toBe(true);
+    expect(testContext.getToolDefinition()?.name).toBe("submit_plan");
+  });
+
+  test("a rejecting command transform never fails plugin setup", async () => {
+    // A slash command has a working markdown fallback; the whole Plannotator
+    // integration going down for it would not.
+    const testContext = createContext({}, [], {
+      command: { transform: async () => { throw new Error("command domain unavailable"); } },
+    });
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      await serverPlugin.setup(testContext.context as never);
+    } finally {
+      console.error = originalError;
+    }
+    expect(testContext.getToolDefinition()?.name).toBe("submit_plan");
+  });
+
   test("registers slash commands even when submit_plan is disabled", async () => {
     // `workflow: "manual"` returns early before the tool registration, which is
     // exactly the mode that depends on the slash commands existing.
@@ -240,7 +277,7 @@ describe("OpenCode V2 server plugin", () => {
     const testContext = createContext({ workflow: "manual" }, [], {
       command: {
         transform: async (apply) => {
-          apply({ add: (definition) => registered.push(definition.name) });
+          apply({ add: (definition: { name: string }) => registered.push(definition.name) });
           return { dispose: async () => {} };
         },
       },
