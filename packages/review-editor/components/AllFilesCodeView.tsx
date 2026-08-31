@@ -1214,7 +1214,6 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
     onSelectionAnnotation: onAddEditorCommentForFile ? setSelectionAnnotationRequest : undefined,
     refreshItem,
   });
-
   // Surface a mid-session comment inside the editor as a marker as soon as it
   // lands in the annotations prop. Stable callback; no-op outside a session.
   const refreshEditSessionMarkers = editSession.refreshMarkers;
@@ -2526,7 +2525,10 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   );
 
   return (
-    <div className="relative h-full">
+    <div
+      className="relative h-full"
+      data-history-owner={editSession.editingItemId ? 'edit-session' : undefined}
+    >
       {/* EditProvider only mounts when the experimental flag is on; its
           factory declines attaches until the lazy editor chunk has loaded
           (the chunk loads on first Edit click, never before). */}

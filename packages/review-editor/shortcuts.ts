@@ -3,6 +3,7 @@ import {
   createShortcutRegistry,
   createShortcutScopeHook,
   defineShortcutScope,
+  historyShortcuts,
   reviewAiShortcuts,
   reviewAllFilesDiffShortcuts,
   reviewAnnotationToolbarShortcuts,
@@ -109,6 +110,7 @@ export const useReviewEditorDoubleTap = createDoubleTapShortcutsHook(reviewEdito
 
 export const reviewSettingsShortcutRegistry = createShortcutRegistry([
   reviewEditorShortcuts,
+  historyShortcuts,
   reviewFileTreeShortcuts,
   reviewAllFilesDiffShortcuts,
   reviewAnnotationToolbarShortcuts,

@@ -135,6 +135,8 @@ jobs:
           packages/ui/components/AnnotationPanel.props.test.tsx
           packages/ui/components/Viewer.consumer.test.tsx
           packages/ui/components/Viewer.codeBlockHighlightSwap.test.tsx
+          packages/ui/components/ImageAnnotator/ImageAnnotator.shortcuts.test.tsx
+          packages/ui/utils/undoHistory.dom.test.ts
           packages/ui/utils/codeBlockMark.test.ts
           packages/ui/components/InlineMarkdown.seam.test.tsx
           packages/ui/components/ImageThumbnail.seam.test.tsx

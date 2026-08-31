@@ -55,6 +55,16 @@ import {
 } from './hooks/useReviewSearch';
 import { useEditorAnnotations } from '@plannotator/ui/hooks/useEditorAnnotations';
 import { useExternalAnnotations } from '@plannotator/ui/hooks/useExternalAnnotations';
+import { useUndoHistory } from '@plannotator/ui/hooks/useUndoHistory';
+import { useHistoryShortcuts } from '@plannotator/ui/shortcuts';
+import {
+  applyCollectionMutations,
+  hasActiveHistoryOverlay,
+  isHumanHistoryMutation,
+  isNativeHistoryOwner,
+  type CollectionMutation,
+  type HistoryDirection,
+} from '@plannotator/ui/utils/undoHistory';
 import { useAgentJobs, jobMatchesReviewContext } from '@plannotator/ui/hooks/useAgentJobs';
 import { exportEditorAnnotations } from '@plannotator/ui/utils/parser';
 import { buildReviewAgentInstructions } from '@plannotator/ui/utils/reviewAgentInstructions';
@@ -221,6 +231,28 @@ function orderFilesBySections(files: DiffFile[], sections?: SinceBaseSections | 
 /** Hint shown following the cursor while hovering a sidebar/panel resize handle. */
 const RESIZE_HANDLE_TOOLTIP = 'Click to close · Drag to resize';
 
+type ReviewHistoryAction =
+  | {
+      kind: 'code';
+      mutations: readonly CollectionMutation<CodeAnnotation>[];
+      beforeSelection: string | null;
+      afterSelection: string | null;
+    }
+  | {
+      kind: 'description';
+      mutations: readonly CollectionMutation<Annotation>[];
+      beforeSelection: string | null;
+      afterSelection: string | null;
+    }
+  | {
+      kind: 'comment';
+      mutations: readonly CollectionMutation<CommentAnnotation>[];
+      beforeSelection: string | null;
+      afterSelection: string | null;
+    };
+
+const reviewItemId = (item: { id: string }): string => item.id;
+
 interface CompactReviewOverlayProps {
   title: string;
   onClose: () => void;
@@ -300,13 +332,25 @@ const ReviewApp: React.FC = () => {
   const [files, setFiles] = useState<DiffFile[]>([]);
   const [activeFileIndex, setActiveFileIndex] = useState(0);
   const [annotations, setAnnotations] = useState<CodeAnnotation[]>([]);
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const selectedAnnotationIdRef = useRef(selectedAnnotationId);
+  selectedAnnotationIdRef.current = selectedAnnotationId;
   // PR description prose annotations (comment-only; separate from the diff store).
   const [descriptionAnnotations, setDescriptionAnnotations] = useState<Annotation[]>([]);
+  const descriptionAnnotationsRef = useRef(descriptionAnnotations);
+  descriptionAnnotationsRef.current = descriptionAnnotations;
   const [selectedDescriptionAnnotationId, setSelectedDescriptionAnnotationId] = useState<string | null>(null);
+  const selectedDescriptionAnnotationIdRef = useRef(selectedDescriptionAnnotationId);
+  selectedDescriptionAnnotationIdRef.current = selectedDescriptionAnnotationId;
   // PR comment annotations (notes attached to a whole comment/review/thread).
   const [commentAnnotations, setCommentAnnotations] = useState<CommentAnnotation[]>([]);
+  const commentAnnotationsRef = useRef(commentAnnotations);
+  commentAnnotationsRef.current = commentAnnotations;
   const [selectedCommentAnnotationId, setSelectedCommentAnnotationId] = useState<string | null>(null);
+  const selectedCommentAnnotationIdRef = useRef(selectedCommentAnnotationId);
+  selectedCommentAnnotationIdRef.current = selectedCommentAnnotationId;
   // Sidebar → source-comment navigation signal; token bumps per click so
   // re-selecting the same comment re-scrolls. Consumed by PRCommentsTab.
   const [commentScrollTarget, setCommentScrollTarget] = useState<{ commentId: string; token: number } | null>(null);
@@ -550,6 +594,47 @@ const ReviewApp: React.FC = () => {
   }, [repoInfo]);
 
   const { prMetadata, prStackInfo, prStackTree, prDiffScope, prDiffScopeOptions, prPatchIncomplete, prPatchUpgradeAvailable, updatePRSession } = usePRSession();
+  const reviewHistoryContext = snapshotId ?? prMetadata?.url ?? diffData?.gitRef ?? 'loading';
+  const applyReviewHistory = useCallback((action: ReviewHistoryAction, direction: HistoryDirection) => {
+    switch (action.kind) {
+      case 'code':
+        setAnnotations((current) => {
+          const next = applyCollectionMutations(current, action.mutations, direction, reviewItemId);
+          annotationsRef.current = next;
+          return next;
+        });
+        selectedAnnotationIdRef.current = direction === 'undo' ? action.beforeSelection : action.afterSelection;
+        setSelectedAnnotationId(selectedAnnotationIdRef.current);
+        return;
+      case 'description':
+        setDescriptionAnnotations((current) => {
+          const next = applyCollectionMutations(current, action.mutations, direction, reviewItemId);
+          descriptionAnnotationsRef.current = next;
+          return next;
+        });
+        selectedDescriptionAnnotationIdRef.current = direction === 'undo' ? action.beforeSelection : action.afterSelection;
+        setSelectedDescriptionAnnotationId(selectedDescriptionAnnotationIdRef.current);
+        return;
+      case 'comment':
+        setCommentAnnotations((current) => {
+          const next = applyCollectionMutations(current, action.mutations, direction, reviewItemId);
+          commentAnnotationsRef.current = next;
+          return next;
+        });
+        selectedCommentAnnotationIdRef.current = direction === 'undo' ? action.beforeSelection : action.afterSelection;
+        setSelectedCommentAnnotationId(selectedCommentAnnotationIdRef.current);
+    }
+  }, []);
+  const reviewHistory = useUndoHistory<ReviewHistoryAction>({
+    context: reviewHistoryContext,
+    apply: applyReviewHistory,
+  });
+  useEffect(() => {
+    reviewHistory.clear();
+  }, [diffData?.rawPatch, reviewHistory]);
+  useEffect(() => {
+    if (submitted) reviewHistory.clear();
+  }, [reviewHistory, submitted]);
 
   // The Commits view (linear history rail) exists for plain local git
   // sessions only — PR/workspace/jj/p4 keep their existing panels. Unlike
@@ -821,12 +906,13 @@ const ReviewApp: React.FC = () => {
   });
 
   const handleRestoreDraft = useCallback(() => {
+    reviewHistory.clear();
     const restored = restoreDraft();
     if (restored.annotations.length > 0) setAnnotations(restored.annotations);
     if (restored.descriptionAnnotations.length > 0) setDescriptionAnnotations(restored.descriptionAnnotations);
     if (restored.commentAnnotations.length > 0) setCommentAnnotations(restored.commentAnnotations);
     if (restored.viewedFiles.length > 0) setViewedFiles(new Set(restored.viewedFiles));
-  }, [restoreDraft]);
+  }, [restoreDraft, reviewHistory]);
 
   // Agent Instructions — copy a clipboard payload teaching external agents
   // (Claude Code, Codex, etc.) how to POST review comments into this session
@@ -1841,6 +1927,19 @@ const ReviewApp: React.FC = () => {
     if (range === null) setLineAnnotationComposeRequest(null);
   }, []);
 
+  const addCodeAnnotationsWithHistory = useCallback((items: readonly CodeAnnotation[]) => {
+    if (items.length === 0) return;
+    const startIndex = annotationsRef.current.length;
+    annotationsRef.current = [...annotationsRef.current, ...items];
+    setAnnotations(annotationsRef.current);
+    reviewHistory.record({
+      kind: 'code',
+      mutations: items.map((item, offset) => ({ kind: 'add', item, index: startIndex + offset })),
+      beforeSelection: selectedAnnotationIdRef.current,
+      afterSelection: selectedAnnotationIdRef.current,
+    });
+  }, [reviewHistory]);
+
   const handleAddAnnotationForFile = useCallback((
     filePath: string,
     type: CodeAnnotationType,
@@ -1875,9 +1974,9 @@ const ReviewApp: React.FC = () => {
       conventionalLabel,
       decorations,
     };
-    setAnnotations(prev => [...prev, withPRContext(newAnnotation)]);
+    addCodeAnnotationsWithHistory([withPRContext(newAnnotation)]);
     clearPendingSelection();
-  }, [pendingSelection, identity, withPRContext, clearPendingSelection]);
+  }, [pendingSelection, identity, withPRContext, clearPendingSelection, addCodeAnnotationsWithHistory]);
 
   const handleAddCallFlowAnnotation = useCallback((
     targets: readonly CallFlowAnnotationTarget[],
@@ -1905,9 +2004,9 @@ const ReviewApp: React.FC = () => {
       createdAt: Date.now(),
       author: identity,
     };
-    setAnnotations((previous) => [...previous, withPRContext(annotation)]);
+    addCodeAnnotationsWithHistory([withPRContext(annotation)]);
     return true;
-  }, [files, identity, withPRContext]);
+  }, [files, identity, withPRContext, addCodeAnnotationsWithHistory]);
 
   // Sink for the experimental edit-to-suggestion flow: a completed edit
   // session delivers one hunk per contiguous changed region, each becoming a
@@ -1918,9 +2017,8 @@ const ReviewApp: React.FC = () => {
   const handleAddSuggestionsForFile = useCallback((filePath: string, hunks: SuggestionHunk[]) => {
     if (hunks.length === 0) return;
     const now = Date.now();
-    setAnnotations(prev => [
-      ...prev,
-      ...hunks.map((hunk) => withPRContext({
+    addCodeAnnotationsWithHistory(
+      hunks.map((hunk) => withPRContext({
         id: generateId(),
         type: 'comment' as CodeAnnotationType,
         scope: 'line' as const,
@@ -1936,8 +2034,8 @@ const ReviewApp: React.FC = () => {
         createdAt: now,
         author: identity,
       })),
-    ]);
-  }, [identity, withPRContext]);
+    );
+  }, [identity, withPRContext, addCodeAnnotationsWithHistory]);
 
   // Sink for the edit session's "Make annotation" selection action: a plain
   // line-scoped comment whose anchor was mapped from the edited buffer to
@@ -1963,8 +2061,8 @@ const ReviewApp: React.FC = () => {
       createdAt: Date.now(),
       author: identity,
     };
-    setAnnotations(prev => [...prev, withPRContext(newAnnotation)]);
-  }, [identity, withPRContext]);
+    addCodeAnnotationsWithHistory([withPRContext(newAnnotation)]);
+  }, [identity, withPRContext, addCodeAnnotationsWithHistory]);
 
   const handleAddAnnotation = useCallback((
     type: CodeAnnotationType,
@@ -1997,8 +2095,8 @@ const ReviewApp: React.FC = () => {
       author: identity,
     };
 
-    setAnnotations(prev => [...prev, withPRContext(newAnnotation)]);
-  }, [files, activeFileIndex, identity, withPRContext]);
+    addCodeAnnotationsWithHistory([withPRContext(newAnnotation)]);
+  }, [files, activeFileIndex, identity, withPRContext, addCodeAnnotationsWithHistory]);
 
   const handleAddFileCommentForFile = useCallback((filePath: string, text: string) => {
     const trimmed = text.trim();
@@ -2017,8 +2115,8 @@ const ReviewApp: React.FC = () => {
       author: identity,
     };
 
-    setAnnotations(prev => [...prev, withPRContext(newAnnotation)]);
-  }, [identity, withPRContext]);
+    addCodeAnnotationsWithHistory([withPRContext(newAnnotation)]);
+  }, [identity, withPRContext, addCodeAnnotationsWithHistory]);
 
   // Edit annotation
   const handleEditAnnotation = useCallback((
@@ -2030,6 +2128,7 @@ const ReviewApp: React.FC = () => {
     decorations?: ConventionalDecoration[],
   ) => {
     const ann = allAnnotationsRef.current.find(a => a.id === id);
+    if (ann?.source) reviewHistory.clear();
     const updates: Partial<CodeAnnotation> = {
       ...(text !== undefined && { text }),
       ...(suggestedCode !== undefined && { suggestedCode }),
@@ -2042,10 +2141,20 @@ const ReviewApp: React.FC = () => {
       updateExternalAnnotation(id, updates);
       return;
     }
-    setAnnotations(prev => prev.map(a =>
-      a.id === id ? { ...a, ...updates } : a
-    ));
-  }, [updateExternalAnnotation, externalAnnotations]);
+    const before = annotationsRef.current.find((annotation) => annotation.id === id);
+    if (!before) return;
+    const after = { ...before, ...updates };
+    annotationsRef.current = annotationsRef.current.map((annotation) => annotation.id === id ? after : annotation);
+    setAnnotations(annotationsRef.current);
+    if (isHumanHistoryMutation(before)) {
+      reviewHistory.record({
+        kind: 'code',
+        mutations: [{ kind: 'edit', before, after }],
+        beforeSelection: selectedAnnotationIdRef.current,
+        afterSelection: selectedAnnotationIdRef.current,
+      });
+    }
+  }, [updateExternalAnnotation, externalAnnotations, reviewHistory]);
 
   // selectedAnnotationId is cleared via a functional update (not a captured
   // value): this handler is captured by Pierre slot portals (inline annotation
@@ -2054,21 +2163,42 @@ const ReviewApp: React.FC = () => {
   // deleting the currently-selected annotation.
   const handleDeleteAnnotation = useCallback((id: string) => {
     const ann = allAnnotationsRef.current.find(a => a.id === id);
+    if (ann?.source) reviewHistory.clear();
     if (ann?.source && externalAnnotations.some(e => e.id === id)) {
       deleteExternalAnnotation(id);
-      setSelectedAnnotationId(prev => (prev === id ? null : prev));
+      if (selectedAnnotationIdRef.current === id) {
+        selectedAnnotationIdRef.current = null;
+        setSelectedAnnotationId(null);
+      }
       return;
     }
-    setAnnotations(prev => prev.filter(a => a.id !== id));
-    setSelectedAnnotationId(prev => (prev === id ? null : prev));
-  }, [deleteExternalAnnotation, externalAnnotations]);
+    const index = annotationsRef.current.findIndex((annotation) => annotation.id === id);
+    const local = annotationsRef.current[index];
+    if (!local) return;
+    const beforeSelection = selectedAnnotationIdRef.current;
+    annotationsRef.current = annotationsRef.current.filter((annotation) => annotation.id !== id);
+    setAnnotations(annotationsRef.current);
+    const afterSelection = beforeSelection === id ? null : beforeSelection;
+    selectedAnnotationIdRef.current = afterSelection;
+    setSelectedAnnotationId(afterSelection);
+    if (isHumanHistoryMutation(local)) {
+      reviewHistory.record({
+        kind: 'code',
+        mutations: [{ kind: 'delete', item: local, index }],
+        beforeSelection,
+        afterSelection,
+      });
+    }
+  }, [deleteExternalAnnotation, externalAnnotations, reviewHistory]);
 
   // Handle identity change - update author on existing annotations
   const handleIdentityChange = useCallback((oldIdentity: string, newIdentity: string) => {
-    setAnnotations(prev => prev.map(ann =>
+    reviewHistory.clear();
+    annotationsRef.current = annotationsRef.current.map(ann =>
       ann.author === oldIdentity ? { ...ann, author: newIdentity } : ann
-    ));
-  }, []);
+    );
+    setAnnotations(annotationsRef.current);
+  }, [reviewHistory]);
 
   // Switch file in the dedicated center diff panel.
   const handleFilePreview = useCallback((index: number) => {
@@ -2734,7 +2864,11 @@ const ReviewApp: React.FC = () => {
     // An inline selection supersedes any pending sidebar/findings navigate target,
     // so a later remount (Refresh / base switch) doesn't re-scroll back to it.
     setScrollTargetAnnotation(null);
-    setSelectedAnnotationId(prev => (!id || prev === id ? null : id));
+    setSelectedAnnotationId(prev => {
+      const next = !id || prev === id ? null : id;
+      selectedAnnotationIdRef.current = next;
+      return next;
+    });
   }, []);
 
   // --- PR description annotations (comment-only prose store) ---
@@ -2742,13 +2876,28 @@ const ReviewApp: React.FC = () => {
   // data. The wrapper reconciles marks (apply new / remove deleted) off this store.
   const handleAddDescriptionAnnotation = useCallback((ann: Annotation) => {
     // Stamp the active PR so the note stays bound to it across an in-place switch.
-    setDescriptionAnnotations(prev => [...prev, { ...ann, prUrl: prMetadata?.url }]);
+    const annotation = { ...ann, prUrl: prMetadata?.url };
+    const index = descriptionAnnotationsRef.current.length;
+    const beforeSelection = selectedDescriptionAnnotationIdRef.current;
+    descriptionAnnotationsRef.current = [...descriptionAnnotationsRef.current, annotation];
+    setDescriptionAnnotations(descriptionAnnotationsRef.current);
+    selectedDescriptionAnnotationIdRef.current = ann.id;
     setSelectedDescriptionAnnotationId(ann.id);
     if (ann.artifact) setSelectedCommentAnnotationId(null);
-  }, [prMetadata?.url]);
+    reviewHistory.record({
+      kind: 'description',
+      mutations: [{ kind: 'add', item: annotation, index }],
+      beforeSelection,
+      afterSelection: ann.id,
+    });
+  }, [prMetadata?.url, reviewHistory]);
 
   const handleSelectDescriptionAnnotation = useCallback((id: string | null) => {
-    setSelectedDescriptionAnnotationId(prev => (!id || prev === id ? null : id));
+    setSelectedDescriptionAnnotationId(prev => {
+      const next = !id || prev === id ? null : id;
+      selectedDescriptionAnnotationIdRef.current = next;
+      return next;
+    });
     if (!id) return;
     const ann = descriptionAnnotations.find(a => a.id === id);
     if (ann?.artifact) {
@@ -2758,9 +2907,22 @@ const ReviewApp: React.FC = () => {
   }, [descriptionAnnotations, openPRArtifactsPanel]);
 
   const handleDeleteDescriptionAnnotation = useCallback((id: string) => {
-    setDescriptionAnnotations(prev => prev.filter(a => a.id !== id));
-    setSelectedDescriptionAnnotationId(prev => (prev === id ? null : prev));
-  }, []);
+    const index = descriptionAnnotationsRef.current.findIndex((annotation) => annotation.id === id);
+    const annotation = descriptionAnnotationsRef.current[index];
+    if (!annotation) return;
+    const beforeSelection = selectedDescriptionAnnotationIdRef.current;
+    descriptionAnnotationsRef.current = descriptionAnnotationsRef.current.filter((item) => item.id !== id);
+    setDescriptionAnnotations(descriptionAnnotationsRef.current);
+    const afterSelection = beforeSelection === id ? null : beforeSelection;
+    selectedDescriptionAnnotationIdRef.current = afterSelection;
+    setSelectedDescriptionAnnotationId(afterSelection);
+    reviewHistory.record({
+      kind: 'description',
+      mutations: [{ kind: 'delete', item: annotation, index }],
+      beforeSelection,
+      afterSelection,
+    });
+  }, [reviewHistory]);
 
   // Ask AI about a description selection — file-less scope ask (same mechanism
   // the HTML viewer uses). The popover passes the label + selected text.
@@ -2783,13 +2945,27 @@ const ReviewApp: React.FC = () => {
       prUrl: prMetadata?.url, // bind to the active PR (survives an in-place switch)
       artifact: options?.artifact,
     };
-    setCommentAnnotations(prev => [...prev, ann]);
+    const index = commentAnnotationsRef.current.length;
+    const beforeSelection = selectedCommentAnnotationIdRef.current;
+    commentAnnotationsRef.current = [...commentAnnotationsRef.current, ann];
+    setCommentAnnotations(commentAnnotationsRef.current);
+    selectedCommentAnnotationIdRef.current = ann.id;
     setSelectedCommentAnnotationId(ann.id);
     if (ann.artifact) setSelectedDescriptionAnnotationId(null);
-  }, [prMetadata?.url]);
+    reviewHistory.record({
+      kind: 'comment',
+      mutations: [{ kind: 'add', item: ann, index }],
+      beforeSelection,
+      afterSelection: ann.id,
+    });
+  }, [prMetadata?.url, reviewHistory]);
 
   const handleSelectCommentAnnotation = useCallback((id: string | null) => {
-    setSelectedCommentAnnotationId(prev => (!id || prev === id ? null : id));
+    setSelectedCommentAnnotationId(prev => {
+      const next = !id || prev === id ? null : id;
+      selectedCommentAnnotationIdRef.current = next;
+      return next;
+    });
     if (!id) return;
     // Reveal the source comment: open the PR Overview panel and signal
     // PRCommentsTab to select + scroll to it.
@@ -2804,9 +2980,22 @@ const ReviewApp: React.FC = () => {
   }, [commentAnnotations, openPROverviewPanel, openPRArtifactsPanel]);
 
   const handleDeleteCommentAnnotation = useCallback((id: string) => {
-    setCommentAnnotations(prev => prev.filter(a => a.id !== id));
-    setSelectedCommentAnnotationId(prev => (prev === id ? null : prev));
-  }, []);
+    const index = commentAnnotationsRef.current.findIndex((annotation) => annotation.id === id);
+    const annotation = commentAnnotationsRef.current[index];
+    if (!annotation) return;
+    const beforeSelection = selectedCommentAnnotationIdRef.current;
+    commentAnnotationsRef.current = commentAnnotationsRef.current.filter((item) => item.id !== id);
+    setCommentAnnotations(commentAnnotationsRef.current);
+    const afterSelection = beforeSelection === id ? null : beforeSelection;
+    selectedCommentAnnotationIdRef.current = afterSelection;
+    setSelectedCommentAnnotationId(afterSelection);
+    reviewHistory.record({
+      kind: 'comment',
+      mutations: [{ kind: 'delete', item: annotation, index }],
+      beforeSelection,
+      afterSelection,
+    });
+  }, [reviewHistory]);
 
   const handleAskAIForComment = useCallback<CommentAskAIHandler>((question, context) => {
     askAI({
@@ -3391,6 +3580,48 @@ const ReviewApp: React.FC = () => {
       window.removeEventListener('keyup', handleKeyUp);
     };
   }, [prMetadata, showDestSpotlight, dismissDestSpotlight]);
+
+  const canHandleReviewHistoryShortcut = useCallback((event: KeyboardEvent): boolean => {
+    if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
+    if (submitted || isSendingFeedback || isApproving || isExiting || isPlatformActioning || isLoadingDiff) return false;
+    if (guideOpen || openSettingsMenu || showDestinationMenu || platformCommentDialog || showExportModal || showWorktreeDialog || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return false;
+    if (showLookAndFeel || showGuideIntro || showReviewSetup || editModeIntroVisible || tourDialogJobId) return false;
+    return !hasActiveHistoryOverlay(document);
+  }, [
+    guideOpen,
+    isApproving,
+    isExiting,
+    isLoadingDiff,
+    isPlatformActioning,
+    isSendingFeedback,
+    editModeIntroVisible,
+    openSettingsMenu,
+    platformCommentDialog,
+    showApproveWarning,
+    showDestinationMenu,
+    showExitWarning,
+    showExportModal,
+    showNoAnnotationsDialog,
+    showWorktreeDialog,
+    showGuideIntro,
+    showLookAndFeel,
+    showReviewSetup,
+    submitted,
+    tourDialogJobId,
+  ]);
+
+  useHistoryShortcuts({
+    handlers: {
+      undo: {
+        when: (event) => canHandleReviewHistoryShortcut(event) && reviewHistory.canUndo,
+        handle: () => { reviewHistory.undo(); },
+      },
+      redo: {
+        when: (event) => canHandleReviewHistoryShortcut(event) && reviewHistory.canRedo,
+        handle: () => { reviewHistory.redo(); },
+      },
+    },
+  });
 
   // Cmd/Ctrl+Enter keyboard shortcut to approve or send feedback
   useEffect(() => {
