@@ -222,7 +222,15 @@ async function waitForPlugin(url: string): Promise<unknown> {
       throw new Error(`OpenCode plugin API returned ${httpResponse.status}: ${lastOutput}`);
     }
     const response = JSON.parse(lastOutput) as {
-      data?: Array<{ id?: string; state?: { status?: string; error?: string } } | string>;
+      data?: Array<
+        | {
+          id?: string;
+          status?: string;
+          error?: string;
+          state?: { status?: string; error?: string };
+        }
+        | string
+      >;
     };
     const entry = response.data?.find((plugin) =>
       typeof plugin === "string" ? plugin === "plannotator" : plugin.id === "plannotator"
@@ -231,9 +239,13 @@ async function waitForPlugin(url: string): Promise<unknown> {
       // A plugin whose setup threw still LISTS here. Without this check the
       // smoke passed on a plugin that took the whole command registration down
       // with it, which is the exact failure a wrong capability probe produces.
-      const state = typeof entry === "string" ? undefined : entry.state;
-      if (state?.status === "failed") {
-        throw new Error(`Plannotator activated as failed in OpenCode 2: ${state.error ?? "no error reported"}`);
+      // Plugin.Info carries status/error at the TOP level; `state` is read as a
+      // fallback only, so this keeps working whichever shape the host serves.
+      const info = typeof entry === "string" ? undefined : entry;
+      const status = info?.status ?? info?.state?.status;
+      if (status === "failed") {
+        const error = info?.error ?? info?.state?.error ?? "no error reported";
+        throw new Error(`Plannotator activated as failed in OpenCode 2: ${error}`);
       }
       console.error(`plannotator activated after ${elapsed()}`);
       return response;

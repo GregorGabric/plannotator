@@ -240,6 +240,31 @@ describe("reclaiming the command names from the config-loaded stubs", () => {
     expect(applies).toBe(1);
   });
 
+  test("keeps ticking while the draft probe has not run yet", async () => {
+    // The probe flag only flips when the transform REPLAYS, which under boot
+    // batching is at the flush after every plugin has loaded, and Plannotator
+    // loads before the post-group config plugins. An early tick that reads
+    // false must skip, not end the loop, or the reclaim is inert in exactly
+    // the shape production has.
+    const host = makeCommandHost();
+    const { deps } = makeDeps({ command: host.domain });
+    const apply = () => registerNativeCommands(deps).then(() => {});
+
+    await apply();
+    host.addConfigStubs();
+
+    let ticks = 0;
+    await reclaimNativeCommands({
+      ctx: deps.ctx,
+      apply,
+      // False on the first tick, true from the second: the host flushed.
+      isSupported: () => ticks > 1,
+      wait: async () => { ticks += 1; },
+    });
+
+    expect(host.committed.get("plannotator-review")?.description).toBe(NATIVE_COMMANDS[0]!.description);
+  });
+
   test("does nothing on a host without list or reload, and never on an unsupported draft", async () => {
     const apply = mock(async () => {});
     await reclaimNativeCommands({

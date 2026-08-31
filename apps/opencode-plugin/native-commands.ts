@@ -49,10 +49,12 @@ export const NATIVE_COMMANDS: ReadonlyArray<{ name: string; description: string 
 ];
 
 /**
- * When the reclaim below re-checks ownership, in milliseconds after setup.
+ * Delay BEFORE each ownership re-check, in milliseconds. The loop awaits these
+ * one after another, so the ticks land at roughly 0.3s, 1.5s, 5.5s and 15.5s
+ * after setup.
  *
  * Four bounded ticks, then it stops for good. Plugin activation and the config
- * command scan both finish well inside this window; a host slower than that
+ * command scan both finish well inside that window; a host slower than that
  * keeps the fallback, which still works.
  */
 const RECLAIM_SCHEDULE_MS = [300, 1_200, 4_000, 10_000] as const;
@@ -158,11 +160,12 @@ async function ownsNativeCommands(ctx: V2ContextLike): Promise<boolean> {
  * ours is last in the replay order; from then on it stays last, because config
  * only ever calls `reload()` and never re-registers.
  *
- * The explicit `reload()` is required, not decorative: each plugin's effect
- * runs inside `State.batch` (`packages/core/src/plugin.ts:52`), and a late
- * transform registration only adds its reload to that already-flushed batch
- * (`state.ts`: `if (batch) batch.add(reload)`), so nothing would materialize
- * without it.
+ * The explicit `reload()` is belt and braces, not a requirement: each plugin's
+ * effect runs inside `State.batch` (`packages/core/src/plugin.ts`), but the
+ * batch clears its active flag before flushing, so a registration arriving
+ * after that takes the direct path and materializes on its own. Calling
+ * `reload()` anyway costs one recompute and removes any dependence on that
+ * ordering detail holding in a future OpenCode.
  *
  * Deliberately not driven by `ctx.event.subscribe()`: upstream #44788 reports
  * that stream as unreliable on some V2 nightlies, and `command.list()` is a
@@ -187,9 +190,12 @@ export async function reclaimNativeCommands(input: {
   let reclaimed = false;
   for (const delay of RECLAIM_SCHEDULE_MS) {
     await wait(delay);
-    // The draft probe runs when the transform replays, which under boot
-    // batching is after registration resolved. By the first tick it has run.
-    if (!input.isSupported()) return;
+    // The draft probe only runs when the transform REPLAYS, which under boot
+    // batching is at the flush after every plugin has loaded. Plannotator loads
+    // before the post-group config plugins, so an early tick can legitimately
+    // see this false: skip the tick, never end the loop, or the reclaim would
+    // be inert in exactly the shape production has.
+    if (!input.isSupported()) continue;
 
     let owned: boolean;
     try {
