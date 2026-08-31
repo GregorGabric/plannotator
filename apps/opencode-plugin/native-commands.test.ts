@@ -1,13 +1,21 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   NATIVE_COMMANDS,
   reclaimNativeCommands,
   registerNativeCommands,
+  runNativeCommand,
   type CliCommandRequest,
 } from "./native-commands";
-import { createV2BridgeClient, normalizeAgentList, readListPayload, toBridgeMessages } from "./v2-client";
+import {
+  createV2BridgeClient,
+  formatSessionUrlNotice,
+  normalizeAgentList,
+  readListPayload,
+  toBridgeMessages,
+} from "./v2-client";
+import { createCliStderrForwarder } from "./cli-bridge";
 import { switchV2SessionAgent } from "./agent-switch";
 
 const STUB_DIR = path.join(import.meta.dir, "commands");
@@ -472,4 +480,160 @@ describe("shared command stubs", () => {
       expect(frontmatter).not.toContain(command.description);
     });
   }
+});
+
+describe("V2 session URL delivery", () => {
+  const SESSION_URL = "http://127.0.0.1:19432";
+
+  // cli-bridge logs every forwarded line, and the V2 client's app.log is
+  // console.error, so without this each test here prints a URL into the suite
+  // output. Restored per test so a real failure elsewhere still reports.
+  const originalConsoleError = console.error;
+  beforeEach(() => {
+    console.error = () => {};
+  });
+  afterEach(() => {
+    console.error = originalConsoleError;
+  });
+
+  function makeSyntheticCtx() {
+    const synthetic = mock(async (_input: unknown) => ({}));
+    return { synthetic, ctx: { session: { synthetic } } as any };
+  }
+
+  function pushUrlLine(client: unknown, toastedUrls = new Set<string>()) {
+    const forwarder = createCliStderrForwarder(client as never, toastedUrls);
+    forwarder.push(`${SESSION_URL}\n`);
+    return { forwarder, toastedUrls };
+  }
+
+  // Regression: OpenCode 2's server-plugin context has no `tui` domain, so the
+  // toast call optional-chained to a no-op and the URL only reached this
+  // client's app.log, which is console.error — a stream OpenCode discards under
+  // both default launch modes. A remote review (no auto-opened browser) then
+  // showed the user nothing at all and read as a hang.
+  test("a session URL reaches the session as a synthetic notice", async () => {
+    const { synthetic, ctx } = makeSyntheticCtx();
+    const client = createV2BridgeClient({ ctx, getAgents: async () => [], sessionID: "session-1" });
+
+    pushUrlLine(client);
+    await Promise.resolve();
+
+    expect(synthetic).toHaveBeenCalledTimes(1);
+    const call = synthetic.mock.calls[0]![0] as { sessionID: string; text: string };
+    expect(call.sessionID).toBe("session-1");
+    expect(call.text).toContain(SESSION_URL);
+  });
+
+  // Regression: upstream's `reduceSessionRows` DROPS a synthetic message whose
+  // description is empty (packages/tui/src/routes/session/rows.ts, pinned by
+  // its own "hides synthetic messages without descriptions" test), and the TUI
+  // renders the DESCRIPTION rather than the text. Posting text alone would put
+  // the URL back out of sight, which is the exact bug this fixes.
+  test("the notice carries the URL in its description, which is what the TUI renders", async () => {
+    const { synthetic, ctx } = makeSyntheticCtx();
+    const client = createV2BridgeClient({ ctx, getAgents: async () => [], sessionID: "session-1" });
+
+    pushUrlLine(client);
+    await Promise.resolve();
+
+    const call = synthetic.mock.calls[0]![0] as { description?: string };
+    expect(call.description).toBe(formatSessionUrlNotice(SESSION_URL));
+    expect(call.description?.trim()).not.toBe("");
+  });
+
+  // Regression: without `resume: false` upstream calls `execution.wake`
+  // (packages/core/src/session/session.ts), so merely showing a URL would start
+  // a model turn the reviewer never asked for and burn tokens on every command.
+  test("the notice never wakes a model turn", async () => {
+    const { synthetic, ctx } = makeSyntheticCtx();
+    const client = createV2BridgeClient({ ctx, getAgents: async () => [], sessionID: "session-1" });
+
+    pushUrlLine(client);
+    await Promise.resolve();
+
+    expect(synthetic.mock.calls[0]![0]).toMatchObject({ resume: false });
+  });
+
+  // Regression: `session.synthetic` is absent on older V2 hosts, and a session
+  // id is absent wherever the bridge is built outside an invocation. Probing
+  // either one wrongly would throw inside the CLI's stderr pump and take the
+  // whole command down; the contract is to degrade to the log instead.
+  test("an older host without session.synthetic degrades instead of throwing", () => {
+    const withoutSynthetic = createV2BridgeClient({
+      ctx: { session: {} },
+      getAgents: async () => [],
+      sessionID: "session-1",
+    });
+    const withoutSession = createV2BridgeClient({
+      ctx: makeSyntheticCtx().ctx,
+      getAgents: async () => [],
+    });
+
+    expect(withoutSynthetic.notifyUrl).toBeUndefined();
+    expect(withoutSession.notifyUrl).toBeUndefined();
+    expect(() => pushUrlLine(withoutSynthetic)).not.toThrow();
+  });
+
+  // Regression: a rejected synthetic must not surface as an unhandled
+  // rejection, and must not consume the URL's one delivery slot — the ready-file
+  // poller shares `toastedUrls` with the stderr forwarder and has to keep its
+  // chance to deliver the same URL.
+  test("a rejecting synthetic is caught and leaves the URL retryable", async () => {
+    const synthetic = mock(async () => {
+      throw new Error("session gone");
+    });
+    const client = createV2BridgeClient({
+      ctx: { session: { synthetic } } as any,
+      getAgents: async () => [],
+      sessionID: "session-1",
+    });
+
+    const toastedUrls = new Set<string>();
+    expect(() => pushUrlLine(client, toastedUrls)).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(toastedUrls.has(SESSION_URL)).toBe(false);
+    // A second delivery path (the ready-file poller) still gets its attempt.
+    pushUrlLine(client, toastedUrls);
+    expect(synthetic).toHaveBeenCalledTimes(2);
+  });
+
+  // Regression: OpenCode 1 has a real toast and must keep it byte for byte. A
+  // V1 client carries no `notifyUrl`, so the new seam has to stay invisible.
+  test("OpenCode 1 clients still get the toast, not the notifier", () => {
+    const showToast = mock((_input: unknown) => ({}));
+    pushUrlLine({ tui: { showToast } });
+
+    expect(showToast).toHaveBeenCalledTimes(1);
+    expect(showToast.mock.calls[0]![0]).toMatchObject({
+      body: { title: "Plannotator", variant: "info" },
+    });
+  });
+
+  // Regression: the notifier is inert unless the invocation's session id is
+  // threaded into the client the native command path builds. Forgetting that
+  // one argument reproduces the original invisible-URL bug with no other
+  // symptom.
+  test("the native command path builds a client that can notify", async () => {
+    const { ctx } = makeSyntheticCtx();
+    ctx.session.get = async () => ({ location: { directory: "/project" } });
+    let seen: { notifyUrl?: unknown } | undefined;
+
+    await runNativeCommand(
+      "plannotator-review",
+      { sessionID: "session-1", prompt: { text: "" } },
+      {
+        ctx,
+        getAgents: async () => [],
+        getBridgeContext: async () => ({}),
+        runCommand: async (request) => {
+          seen = request.client as { notifyUrl?: unknown };
+        },
+      },
+    );
+
+    expect(typeof seen?.notifyUrl).toBe("function");
+  });
 });

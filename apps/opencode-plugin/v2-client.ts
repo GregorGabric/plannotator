@@ -16,6 +16,19 @@ export interface V2SessionDomain {
   prompt?: (input: { sessionID: string; text: string; delivery?: unknown }) => Promise<unknown>;
   switchAgent?: (input: { sessionID: string; agent: string }) => Promise<unknown>;
   context?: (input: { sessionID: string }) => Promise<unknown>;
+  /**
+   * Put a message in the session WITHOUT starting a model turn.
+   *
+   * Optional because it only exists on hosts whose plugin API carries it
+   * (`SessionDomain` in `packages/plugin/src/promise/session.ts`); every call
+   * site probes it first.
+   */
+  synthetic?: (input: {
+    sessionID: string;
+    text: string;
+    description?: string;
+    resume?: boolean;
+  }) => Promise<unknown>;
 }
 
 /**
@@ -71,6 +84,11 @@ export interface V2CommandListEntry {
 
 /** The V1-shaped client `cli-bridge` consumes. */
 export interface V2BridgeClient {
+  /**
+   * Present only when this host can show the session URL to the user. See
+   * `createSessionUrlNotifier` and `toastPlannotatorUrl` in `cli-bridge.ts`.
+   */
+  notifyUrl?: (input: { url: string; message: string }) => Promise<unknown>;
   app: {
     log: (entry: { level: "info" | "error"; message: string }) => void;
     agents: () => Promise<{ data: OpenCodeBridgeAgent[] }>;
@@ -189,23 +207,96 @@ function readSessionId(request: unknown): string | undefined {
 const FEEDBACK_DELIVERY = "queue";
 
 /**
+ * The one line a user is shown when a Plannotator session opens on OpenCode 2.
+ *
+ * Deliberately plain and self-contained: it is the whole notice, so it has to
+ * name the product and carry the URL on its own.
+ */
+export function formatSessionUrlNotice(url: string): string {
+  return `Plannotator session ready: ${url}`;
+}
+
+/**
+ * Deliver the session URL as a VISIBLE transcript notice on OpenCode 2.
+ *
+ * Why this exists: the V2 server-plugin context exposes no `tui` domain, so
+ * `toastPlannotatorUrl` optional-chains to a no-op, and this client's
+ * `app.log` is `console.error`, which OpenCode discards under both default
+ * launch modes (`packages/cli/src/services/standalone.ts` spawns the service
+ * with `stderr: "ignore"` unless `OPENCODE_PRINT_LOGS=1`). A remote session
+ * suppresses the browser and prints its URL into that discarded stream, so the
+ * user saw nothing at all and the command read as a hang.
+ *
+ * `session.synthetic` is the fix. Verified against anomalyco/opencode
+ * `origin/v2`:
+ *  - It is on the plugin's own `SessionDomain`
+ *    (`packages/plugin/src/promise/session.ts`).
+ *  - `resume: false` skips the wake, so nothing starts a model turn:
+ *    `if (input.resume !== false && !(yield* get(sessionID)).revert) yield*
+ *    execution.wake(sessionID)` (`packages/core/src/session/session.ts`).
+ *    Upstream's own Plan-mode reminders use exactly this shape
+ *    (`packages/core/src/plugin/plan.ts`).
+ *  - A synthetic message is rendered ONLY when it carries a non-empty
+ *    `description`: `reduceSessionRows` drops the row otherwise
+ *    (`packages/tui/src/routes/session/rows.ts`, pinned upstream by
+ *    "hides synthetic messages without descriptions"), and the live append
+ *    subscriptions gate on `description?.trim()` too. What the TUI prints is
+ *    the DESCRIPTION, not the text (`SessionNoticeMessageV2` in
+ *    `packages/tui/src/routes/session/index.tsx`), so the URL must be in both:
+ *    `description` to be seen, `text` so the next turn's history carries it.
+ *  - Setting no `metadata.source` keeps it on the plain "Notice" row rather
+ *    than the subagent/shell completion row.
+ *
+ * `delivery` is left at the host default, matching upstream's own synthetic
+ * notices; only feedback (`FEEDBACK_DELIVERY`) needs an explicit queue.
+ *
+ * This does not contradict the reason feedback avoids synthetic injection.
+ * Upstream #44788 is about a synthetic message not reliably reaching the MODEL
+ * prompt, which is fatal for feedback and irrelevant here: the only claim this
+ * makes is that the row is rendered, and the row is rendered from committed
+ * message state by `reduceSessionRows`, not from the model's context.
+ *
+ * Returns undefined on an older host with no `synthetic`, or with no session to
+ * post into, in which case the caller falls back to today's log-only behavior.
+ */
+export function createSessionUrlNotifier(
+  ctx: V2ContextLike,
+  sessionID: string | undefined,
+): ((input: { url: string; message: string }) => Promise<unknown>) | undefined {
+  const synthetic = ctx.session?.synthetic;
+  if (typeof synthetic !== "function" || !sessionID) return undefined;
+  return async ({ url }) => {
+    const notice = formatSessionUrlNotice(url);
+    return await synthetic({ sessionID, text: notice, description: notice, resume: false });
+  };
+}
+
+/**
  * Build the V1-shaped client `handleCliCommand` and `resolveValidatedTargetAgent`
  * expect, backed by the V2 context. Delivering feedback goes through
  * `ctx.session.prompt`, the direct path, rather than a synthetic-event
  * injection, which is unreliable on some V2 nightlies (upstream #44788).
  *
  * There is deliberately no `tui` domain: the V2 server-plugin context exposes
- * none, and every toast call site in `cli-bridge` is best-effort.
+ * none, and every toast call site in `cli-bridge` is best-effort. `notifyUrl`
+ * is the replacement seam for the one message that must actually be seen.
  */
 export function createV2BridgeClient(input: {
   ctx: V2ContextLike;
   getAgents: () => Promise<OpenCodeBridgeAgent[]>;
+  /**
+   * The session this invocation belongs to. Without it there is nowhere to post
+   * a transcript notice, and the URL falls back to the log.
+   */
+  sessionID?: string;
   /** Best-effort warning sink; defaults to stderr. */
   warn?: (message: string) => void;
 }): V2BridgeClient {
   const warn = input.warn ?? ((message: string) => console.error(message));
   const loggedUrls = new Set<string>();
+  const notifyUrl = createSessionUrlNotifier(input.ctx, input.sessionID);
   return {
+    ...(notifyUrl && { notifyUrl }),
     app: {
       agents: async () => ({ data: await input.getAgents() }),
       log: ({ message }) => {
