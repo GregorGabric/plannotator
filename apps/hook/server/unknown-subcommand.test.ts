@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   findClosestSubcommand,
@@ -49,6 +49,26 @@ describe("unknown subcommand", () => {
   });
 
   test("a typo'd subcommand exits instead of blocking on an open stdin", async () => {
+    // The spawned CLI imports ../dist/{index,review}.html at module load.
+    // Dev machines always have them built, but CI's test job does not build
+    // the apps, so drop empty placeholders for any missing artifact and
+    // remove exactly what this test created afterwards. The guard under test
+    // exits before either page is ever served, so content is irrelevant.
+    const distDir = resolve(import.meta.dir, "../dist");
+    const created: string[] = [];
+    let createdDir = false;
+    if (!existsSync(distDir)) {
+      mkdirSync(distDir, { recursive: true });
+      createdDir = true;
+    }
+    for (const name of ["index.html", "review.html"]) {
+      const file = resolve(distDir, name);
+      if (!existsSync(file)) {
+        writeFileSync(file, "<!doctype html>");
+        created.push(file);
+      }
+    }
+    try {
     const proc = Bun.spawn(
       [
         "bun",
@@ -73,5 +93,9 @@ describe("unknown subcommand", () => {
     expect(code).toBe(1);
     expect(stderr).toContain("Unknown command: annotatte");
     expect(stderr).toContain("plannotator annotate");
+    } finally {
+      for (const file of created) rmSync(file, { force: true });
+      if (createdDir) rmSync(distDir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
