@@ -41,7 +41,8 @@ import {
 } from "./integrations.ts";
 import { buildAdvertisedUrl, listenOnPort } from "./network.ts";
 
-import { loadConfig, saveConfig, detectGitUser, getServerConfig, resolveAIEnabled, resolveSharingEnabled } from "../generated/config.ts";
+import { loadConfig, saveConfig, detectGitUser, getServerConfig, resolveAIEnabled, resolveFeedbackHistory, resolveSharingEnabled } from "../generated/config.ts";
+import { appendFeedbackRecord, type FeedbackDecision } from "../generated/feedback-archive.ts";
 import { isFaviconStyle, type FaviconStyle } from "../generated/favicon.ts";
 import { readImprovementHook, getImprovementHookExpectedPath } from "../generated/improvement-hooks.ts";
 import { composeImproveContext } from "../generated/pfm-reminder.ts";
@@ -136,6 +137,33 @@ export async function startPlanReviewServer(options: {
 					project,
 				}
 			: null;
+
+	// Durable feedback archive (Node mirror of packages/server/index.ts).
+	// Appends the decision to feedback/{project}/index.jsonl at settlement
+	// time, independent of the client-side planSave setting, and names the
+	// history version file rather than copying the plan text. Plan policy on
+	// failure: log and proceed — an approval is never blocked on the archive.
+	const archivePlanDecision = (decision: FeedbackDecision, feedback?: string): void => {
+		if (options.mode === "archive") return;
+		if (!resolveFeedbackHistory(loadConfig())) return;
+		const version = versionInfo?.version ?? 0;
+		appendFeedbackRecord({
+			project,
+			origin: options.origin ?? "pi",
+			surface: "plan",
+			decision,
+			target: {
+				slug,
+				...(version > 0
+					? {
+							planVersion: version,
+							planVersionFile: getPlanVersionPath(project, slug, version) ?? undefined,
+						}
+					: {}),
+			},
+			feedback,
+		});
+	};
 
 	const reviewId = randomUUID();
 	let resolveDecision!: (result: PlanReviewDecision) => void;
@@ -414,6 +442,11 @@ export async function startPlanReviewServer(options: {
 					planSaveCustomPath,
 				);
 			}
+			// Archive before the draft delete (#678 ordering, generalized).
+			archivePlanDecision(
+				typeof feedback === "string" && feedback.trim() ? "approved-with-notes" : "approved",
+				feedback,
+			);
 			deleteDraft(draftKey, draftGeneration);
 			const effectivePermissionMode = requestedPermissionMode || options.permissionMode;
 			publishDecision({
@@ -456,6 +489,7 @@ export async function startPlanReviewServer(options: {
 					planSaveCustomPath,
 				);
 			}
+			archivePlanDecision("denied", feedback);
 			deleteDraft(draftKey, draftGeneration);
 			publishDecision({ approved: false, feedback, savedPath });
 			json(res, { ok: true, savedPath });
