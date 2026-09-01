@@ -113,7 +113,7 @@ import {
   type MarkerEngineId,
 } from "./marker-review";
 import { loadConfig, saveConfig, detectGitUser, getServerConfig, parseReviewAnalysisConfig, resolveAIEnabled, resolveCursorSandbox, resolveFeedbackHistory, resolveGuideHistory } from "./config";
-import { appendFeedbackRecord, deriveFeedbackProject, type FeedbackDecision, type FeedbackReviewTarget } from "@plannotator/shared/feedback-archive";
+import { appendFeedbackRecord, countChangedFiles, deriveFeedbackProject, type FeedbackDecision, type FeedbackReviewTarget } from "@plannotator/shared/feedback-archive";
 import { isFaviconStyle, type FaviconStyle } from "@plannotator/shared/favicon";
 import { type PRMetadata, type PRRef, type PRReviewFileComment, type PRStackTree, type PRListItem, fetchPR, fetchPRFileContent, fetchPRContext, submitPRReview, fetchPRViewedFiles, markPRFilesViewed, fetchPRStack, fetchPRList, getPRUser, parsePRUrl, prRefFromMetadata, isSameProject, getDisplayRepo, getMRLabel, getMRNumberLabel, prCommandRuntime } from "./pr";
 import {
@@ -197,6 +197,15 @@ export interface ReviewServerOptions {
    * once a pool checkout is ready.
    */
   prPatchIncomplete?: boolean;
+  /**
+   * Detected project name, used to key the durable feedback archive
+   * (`feedback/{project}/`). Mirrors the annotate server's `project` option.
+   * Callers should pass `detectProjectName()`; without it the server falls
+   * back to deriving a name from the review's working directory, which is
+   * wrong in PR mode (no `gitContext`, and `--local` points `agentCwd` at a
+   * `pool/pr-<n>` checkout, so records would bucket under `pr-123`).
+   */
+  project?: string;
   /** Working directory for agent processes (e.g., --local worktree). Independent of diff pipeline. */
   agentCwd?: string;
   /** Per-PR worktree pool. When set, pr-switch creates worktrees instead of checking out. */
@@ -846,10 +855,18 @@ export async function startReviewServer(
   // feedback/{project}/index.jsonl (plus a markdown sidecar when it carries
   // content) BEFORE the draft is deleted.
   //
-  // The review server has no detected project name, so it is derived from the
-  // review's own working directory — the repo root for every local provider.
+  // Project bucketing: prefer the caller's detected project name. The cwd
+  // fallback is only right for a plain local review — PR mode has no
+  // gitContext, and `--local` sets agentCwd to a `pool/pr-<n>` checkout, so
+  // deriving from cwd there would file every PR review under `pr-123`.
+  //
+  // Known limitation, deliberately not chased here: a caller that passes no
+  // project AND reviews a moved/renamed working directory buckets under the
+  // new directory name, exactly like the rest of the data dir does.
   const feedbackProject = (): string =>
-    deriveFeedbackProject(gitContext?.cwd ?? options.agentCwd ?? process.cwd());
+    options.project?.trim()
+      ? options.project
+      : deriveFeedbackProject(gitContext?.cwd ?? options.agentCwd ?? process.cwd());
 
   // Diff IDENTITY only: refs, view, snapshot id, and size metadata. The patch
   // bytes are deliberately not archived (guide history already showed what
@@ -860,7 +877,7 @@ export async function startReviewServer(
       base: currentBase,
       gitRef: currentGitRef,
       snapshotId: currentSnapshotId(),
-      changedFiles: extractChangedFiles(currentPatch).length,
+      changedFiles: countChangedFiles(currentPatch),
       patchBytes: currentPatch.length,
     };
     if (sessionVcsType) target.vcsType = sessionVcsType;

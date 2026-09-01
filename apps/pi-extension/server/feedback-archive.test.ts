@@ -16,7 +16,7 @@
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { startPlanReviewServer } from "./serverPlan.ts";
@@ -25,9 +25,17 @@ import { startAnnotateServer } from "./serverAnnotate.ts";
 import { getPlanVersionPath } from "../generated/storage.ts";
 import { detectProjectName } from "./project.ts";
 import { parseFeedbackIndex, type FeedbackRecord } from "../generated/feedback-archive.ts";
+import { getPlannotatorDataDir } from "../generated/data-dir.ts";
 
 const MINIMAL_HTML = "<html><body>Plannotator</body></html>";
 const PATCH = "diff --git a/src/parse.ts b/src/parse.ts\n@@ -1 +1 @@\n-a\n+b\n";
+
+// Annotate version history goes through generated/storage.ts, whose data dir is
+// fixed at import time, so these sessions snapshot into the REAL data dir no
+// matter what PLANNOTATOR_DATA_DIR says here. Distinctive, test-owned project
+// names keep that out of any real project's bucket and let afterAll remove it.
+const PI_FILE_ANNOTATE_PROJECT = "_pi_feedback_archive_test_file";
+const PI_STATELESS_ANNOTATE_PROJECT = "_pi_feedback_archive_test_stateless";
 
 const ENV_KEYS = [
 	"PLANNOTATOR_DATA_DIR",
@@ -84,6 +92,16 @@ afterEach(() => {
 		else process.env[key] = saved[key]!;
 	}
 	for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+	// Remove the annotate history these tests deposited in the real data dir.
+	// Runs with the env already restored, so this resolves the same directory
+	// generated/storage.ts wrote to.
+	const historyDir = join(getPlannotatorDataDir(), "history");
+	for (const project of [PI_FILE_ANNOTATE_PROJECT, PI_STATELESS_ANNOTATE_PROJECT]) {
+		rmSync(join(historyDir, project), { recursive: true, force: true });
+	}
 });
 
 describe("pi feedback archive: code review", () => {
@@ -146,6 +164,75 @@ describe("pi feedback archive: code review", () => {
 		}
 	});
 
+	test("a failed archive write keeps the draft and still answers the reviewer with 200", async () => {
+		// The one invariant the Pi handler copies by hand rather than inheriting
+		// from the shared module: archive first, and only delete the draft when
+		// the record actually landed.
+		const dataDir = useTempDataDir();
+		// The review project is derived from the review cwd; block exactly that
+		// archive directory by planting a FILE where the directory must go.
+		const repoDir = join(makeTempDir("plannotator-pi-feedback-repo-"), "widgets");
+		mkdirSync(repoDir, { recursive: true });
+		mkdirSync(feedbackDir(dataDir), { recursive: true });
+		writeFileSync(join(feedbackDir(dataDir), "widgets"), "blocked", "utf-8");
+
+		const server = await startReviewServer({
+			rawPatch: PATCH,
+			gitRef: "HEAD",
+			htmlContent: MINIMAL_HTML,
+			agentCwd: repoDir,
+		});
+		try {
+			await fetch(`${server.url}/api/draft`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ annotations: [{ id: "a1" }] }),
+			});
+
+			const response = await fetch(`${server.url}/api/feedback`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ feedback: "Do not lose this.", annotations: [{ id: "a1" }] }),
+			});
+			// The submit succeeds for the user...
+			expect(response.status).toBe(200);
+			// ...and the draft survives as the recovery copy.
+			const draft = await fetch(`${server.url}/api/draft`);
+			expect(draft.status).toBe(200);
+			expect(JSON.stringify(await draft.json())).toContain("a1");
+		} finally {
+			server.stop();
+		}
+	});
+
+	test("a PR-mode session buckets under the project, not the pool checkout", async () => {
+		// PR mode never sets gitContext and `--local` points agentCwd at
+		// <sessionDir>/pool/pr-<n>; the caller's detected project must win, or
+		// every PR review files under `pr-123`.
+		const dataDir = useTempDataDir();
+		const poolCwd = join(makeTempDir("plannotator-pi-feedback-pool-"), "pool", "pr-123");
+		mkdirSync(poolCwd, { recursive: true });
+		const server = await startReviewServer({
+			rawPatch: PATCH,
+			gitRef: "HEAD",
+			htmlContent: MINIMAL_HTML,
+			project: "plannotator",
+			agentCwd: poolCwd,
+		});
+		try {
+			const response = await fetch(`${server.url}/api/feedback`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ feedback: "Rebase before merging.", annotations: [] }),
+			});
+			expect(response.status).toBe(200);
+			const projects = readdirSync(feedbackDir(dataDir));
+			expect(projects).toEqual(["plannotator"]);
+		} finally {
+			server.stop();
+		}
+	});
+
 	test("PLANNOTATOR_FEEDBACK_HISTORY=0 writes nothing and keeps the legacy draft behavior", async () => {
 		const dataDir = useTempDataDir();
 		process.env.PLANNOTATOR_FEEDBACK_HISTORY = "0";
@@ -180,7 +267,7 @@ describe("pi feedback archive: annotate", () => {
 			markdown: "# Notes\n\nBody\n",
 			filePath: docPath,
 			htmlContent: MINIMAL_HTML,
-			project: "pifileproject",
+			project: PI_FILE_ANNOTATE_PROJECT,
 		});
 		try {
 			const response = await fetch(`${server.url}/api/feedback`, {
@@ -208,7 +295,7 @@ describe("pi feedback archive: annotate", () => {
 			markdown: "# Doc\n\nBody\n",
 			filePath: docPath,
 			htmlContent: MINIMAL_HTML,
-			project: "pistatelessproject",
+			project: PI_STATELESS_ANNOTATE_PROJECT,
 		});
 		try {
 			const response = await fetch(`${server.url}/api/feedback`, {

@@ -145,7 +145,7 @@ claude --plugin-dir ./apps/hook
 | `PLANNOTATOR_ORIGIN` | Explicit agent-origin override at the top of the detection chain. Valid values: `claude-code`, `amp`, `droid`, `opencode`, `codex`, `copilot-cli`, `gemini-cli`, `kiro-cli`, `pi`, `oh-my-pi`. Invalid values silently fall through to env-based detection. Unset by default. |
 | `PLANNOTATOR_JINA` | Set to `0` / `false` to disable Jina Reader for URL annotation, or `1` / `true` to enable. Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "jina": false }`) or per-invocation via `--no-jina`. |
 | `PLANNOTATOR_ANNOTATE_HISTORY` | Set to `0` / `false` to disable ALL annotate-session writes to the data dir: per-file version history (no copies of annotated files are written; the annotate version diff is unavailable) AND the durable submitted-feedback records (#678) that single-local-file annotate sessions otherwise write to `history/{project}/{slug}/submissions/` before deleting the draft on submit. Disabling it keeps annotate sessions fully stateless but also gives up that submit crash-recovery record. URL and annotate-last sessions never write either kind of data regardless of this flag. Folder sessions write no submitted-feedback records, but they do participate in per-file version history: the first time a session serves a file through /api/doc it snapshots that file (lazily, memoized per resolved path for the life of the server), which is what powers the per-file version diff when a folder file is reopened later; setting this flag to 0 disables those folder snapshots too. Setting it to 0 additionally suppresses **feedback archive** records for every annotate surface (single file, folder, URL, live app, annotate-last), so "fully stateless annotate session" stays literally true regardless of `PLANNOTATOR_FEEDBACK_HISTORY`. Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "annotateHistory": false }`); the env var takes precedence. |
-| `PLANNOTATOR_FEEDBACK_HISTORY` | Set to `0` / `false` to stop archiving submitted feedback under `~/.plannotator/feedback/` (or `PLANNOTATOR_DATA_DIR`). Default: enabled, which appends one record per submission at decision-settlement time on all three surfaces and in both runtimes: plan approve/deny, code review Send Feedback / Approve (LGTM) / Close, and every annotate submit / approve / close. **Note that this writes the user's own feedback text, the document and code excerpts it quotes, and per-annotation metadata to disk, and nothing prunes the directory** (same policy as `plans/`, `history/`, and `guides/`); delete `~/.plannotator/feedback/` or a project subdirectory to forget, or set this to 0 to never write. Code-review records carry diff IDENTITY only (vcsType, diffType, base, gitRef, snapshotId, cwd, PR metadata, changed-file count, patch byte count), never the patch bytes; plan records carry the decision text plus a reference to the `history/{project}/{slug}/NNN.md` version the decision was made on, never a second copy of the plan. Externally sourced annotations (linters, review agents, WebMCP browser agents) are included but keep their `source` / `author` tags, so `source == null` selects the reviewer's own comments; agent job outputs (guides, tours) are not archived. This knob governs only the new archive: the `planSave` decision snapshots in `plans/` and the #678 annotate submission records under `history/` are unaffected. Annotate surfaces honor `PLANNOTATOR_ANNOTATE_HISTORY` as well. Can also be set via `~/.plannotator/config.json` (`{ "feedbackHistory": false }`); the env var takes precedence. |
+| `PLANNOTATOR_FEEDBACK_HISTORY` | Set to `0` / `false` to stop archiving submitted feedback under `~/.plannotator/feedback/` (or `PLANNOTATOR_DATA_DIR`). Default: enabled, which appends one record per submission at decision-settlement time on all three surfaces and in both runtimes: plan approve/deny, code review Send Feedback / Approve (LGTM) / Close, and every annotate submit / approve / close. A review posted straight to GitHub or GitLab with `POST /api/pr-action` is delivered to the platform and is not archived locally yet. **Note that this writes the user's own feedback text, the document and code excerpts it quotes, and per-annotation metadata to disk, and nothing prunes the directory** (same policy as `plans/`, `history/`, and `guides/`); delete `~/.plannotator/feedback/` or a project subdirectory to forget, or set this to 0 to never write. Code-review records carry diff IDENTITY only (vcsType, diffType, base, gitRef, snapshotId, cwd, PR metadata, changed-file count, patch byte count), never the patch bytes; plan records carry the decision text plus a reference to the `history/{project}/{slug}/NNN.md` version the decision was made on, never a second copy of the plan. Externally sourced annotations (linters, review agents, WebMCP browser agents) are included but keep their `source` / `author` tags, so `source == null` selects the reviewer's own comments; agent job outputs (guides, tours) are not archived. This knob governs only the new archive: the `planSave` decision snapshots in `plans/` and the #678 annotate submission records under `history/` are unaffected. Annotate surfaces honor `PLANNOTATOR_ANNOTATE_HISTORY` as well. Can also be set via `~/.plannotator/config.json` (`{ "feedbackHistory": false }`); the env var takes precedence. |
 | `PLANNOTATOR_GUIDE_VIEWER_URL` | Base URL of the portable Guided Review viewer that exported guides pin (default `https://guides.show/v1/`). Must be `https:` (or `http:` on localhost for local viewer builds — `bun run --cwd apps/guides-show serve:local`); anything else is ignored. Read by the export endpoints of both servers and by `plannotator guide export` (which also accepts `--viewer-url`). |
 | `PLANNOTATOR_GUIDE_SHARE_URL` | Base URL of the guide host that Guided Review share links are created on: the review UI's "Create share link", `plannotator guide share`, and `plannotator guide unshare` upload to and delete from it (default `https://guides.show`; the origin of your own deployment of its Cloudflare Worker otherwise, see the `apps/guides-show` README). Must be `http(s)`; credentials, query and fragment are dropped and a trailing slash is trimmed; an invalid value warns once on stderr and falls back to the default so a share setting can never break a server launch or CLI run. An empty-but-set env var counts as unset. Can also be set via `~/.plannotator/config.json` (`{ "guideShareUrl": "https://guides.example.com" }`); the env var takes precedence; there is no per-invocation flag. Resolved by `resolveGuideShareUrl` in `packages/shared/config.ts`. Whether sharing is allowed at all is `PLANNOTATOR_SHARE` (`disabled` turns guide share links off entirely). Removal always goes to the host a saved guide's record names, never merely the currently configured URL, so changing this after sharing does not strand a link. |
 | `PLANNOTATOR_GUIDE_HISTORY` | Set to `0` / `false` to disable persisting successful Guided Reviews (no guide copies are written to the data dir; the "Previous guides" list is then never populated, though already-saved guides remain readable and listed). **Note that a persisted guide includes a full copy of the diff it was generated against** — `history/.../guides/{id}.patch` beside the `{id}.json` envelope, uncapped, as large as the diff — because that patch is what a later portable export or share link renders (the diff is captured when the guide job launches, never re-read from the working tree). Deleting a guide removes both files; nothing prunes the directory otherwise. Turning this flag off skips the patch copy too, at the cost of exports and share links for guides from that session once the server exits. Default: enabled. Can also be set via `~/.plannotator/config.json` (`{ "guideHistory": false }`); the env var takes precedence. |
@@ -511,9 +511,12 @@ History saves independently of the `planSave` user setting (which controls decis
 
 ## Feedback Archive
 
-Every submitted review is durably archived at decision-settlement time, so a
-submission survives an agent-side timeout, a closed terminal, or a `planSave`
-setting the user turned off. Layout, per project (same `{project}` key as
+Every review submitted through a Plannotator decision is durably archived at
+decision-settlement time, so a submission survives an agent-side timeout, a
+closed terminal, or a `planSave` setting the user turned off. One deliberate
+exception: a review posted straight to GitHub or GitLab with `POST
+/api/pr-action` is delivered to the platform and is **not** archived locally
+yet (a named follow-up). Layout, per project (same `{project}` key as
 `history/`):
 
 ```
@@ -550,6 +553,37 @@ removes it. Controls and the privacy/retention note are in the
 `PLANNOTATOR_FEEDBACK_HISTORY` row of the environment table above. The read
 path in v1 is the files on disk (`jq` over `index.jsonl`, `grep` over
 `records/`); there is no CLI reader or UI surface yet.
+
+Details that surprise people:
+
+- **Index durability is O_APPEND, which network filesystems do not guarantee.**
+  One record is always exactly one line, and concurrent servers sharing a data
+  dir rely on `O_APPEND` for those lines not to interleave. POSIX guarantees
+  that on local filesystems; NFS and SMB do not. A genuine interleave on a
+  network-mounted data dir damages **both** records that raced, not just the
+  later one. Readers skip unparsable lines, so everything else in the file
+  still reads.
+- **Folder-session records name the folder, not the open document.** A folder
+  annotate session submits one body of feedback for the session, so
+  `target.filePath` is the session's folder; the per-document path is not part
+  of the record.
+- **URL-session records store the full URL, query string included**, because
+  that is the page that was reviewed. A URL carrying a token in its query is
+  therefore written to disk; the opt-out is the control for that.
+- **`target.review.cwd` is provenance, not a durable handle.** A PR review
+  started with `--local` records a per-PR pool checkout that is cleaned up when
+  the session ends; `target.review.pr` plus `gitRef` are the identity that
+  survives.
+- **Project bucketing prefers the caller's `project` option** (the `project`
+  field on `ReviewServerOptions`, mirroring the annotate server), falling back
+  to deriving a name from the review cwd. The fallback is wrong in PR mode,
+  where there is no `gitContext` and `--local` points `agentCwd` at
+  `pool/pr-<n>`, so every CLI entry point passes `detectProjectName()`.
+- **The test suite turns the archive off** through the `tests/setup/feedback-archive-off.ts`
+  preload in `bunfig.toml`, because most server tests boot a real server
+  without redirecting `PLANNOTATOR_DATA_DIR` and would otherwise write into the
+  contributor's own data dir. Tests that need the archive opt back in inside
+  their own test bodies.
 
 ## Plan Diff
 

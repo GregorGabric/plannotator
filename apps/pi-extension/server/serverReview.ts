@@ -7,7 +7,7 @@ import { basename, resolve as resolvePath } from "node:path";
 import { SingleFlight } from "../generated/single-flight.ts";
 import { contentHash, deleteDraft } from "../generated/draft.ts";
 import { loadConfig, saveConfig, detectGitUser, getServerConfig, parseReviewAnalysisConfig, resolveAIEnabled, resolveSharingEnabled, resolveCursorSandbox, resolveFeedbackHistory, resolveGuideHistory, resolveGuideShareUrl } from "../generated/config.ts";
-import { appendFeedbackRecord, deriveFeedbackProject, type FeedbackDecision, type FeedbackReviewTarget } from "../generated/feedback-archive.ts";
+import { appendFeedbackRecord, countChangedFiles, deriveFeedbackProject, type FeedbackDecision, type FeedbackReviewTarget } from "../generated/feedback-archive.ts";
 import { isFaviconStyle, type FaviconStyle } from "../generated/favicon.ts";
 
 export type {
@@ -296,6 +296,15 @@ export async function startReviewServer(options: {
 	 * once a pool checkout is ready.
 	 */
 	prPatchIncomplete?: boolean;
+	/**
+	 * Detected project name, used to key the durable feedback archive
+	 * (`feedback/{project}/`). Mirrors the annotate server's `project` option.
+	 * Callers should pass `detectProjectName()`; without it the server falls
+	 * back to deriving a name from the review's working directory, which is
+	 * wrong in PR mode (no `gitContext`, and `--local` points `agentCwd` at a
+	 * `pool/pr-<n>` checkout, so records would bucket under `pr-123`).
+	 */
+	project?: string;
 	/** Working directory for agent processes (e.g., --local worktree). Independent of diff pipeline. */
 	agentCwd?: string;
 	/** Local parent directory containing multiple child VCS repositories. */
@@ -836,8 +845,18 @@ export async function startReviewServer(options: {
 	// nowhere. Every submission now appends one record to
 	// feedback/{project}/index.jsonl BEFORE the draft is deleted, carrying diff
 	// IDENTITY (refs, view, snapshot id, size) but never the patch bytes.
+	// Project bucketing: prefer the caller's detected project name. The cwd
+	// fallback is only right for a plain local review — PR mode has no
+	// gitContext, and `--local` sets agentCwd to a `pool/pr-<n>` checkout, so
+	// deriving from cwd there would file every PR review under `pr-123`.
+	//
+	// Known limitation, deliberately not chased here: a caller that passes no
+	// project AND reviews a moved/renamed working directory buckets under the
+	// new directory name, exactly like the rest of the data dir does.
 	const feedbackProject = (): string =>
-		deriveFeedbackProject(options.gitContext?.cwd ?? options.agentCwd ?? process.cwd());
+		options.project?.trim()
+			? options.project
+			: deriveFeedbackProject(options.gitContext?.cwd ?? options.agentCwd ?? process.cwd());
 
 	const feedbackReviewTarget = (): FeedbackReviewTarget => {
 		const target: FeedbackReviewTarget = {
@@ -845,7 +864,7 @@ export async function startReviewServer(options: {
 			base: currentBase,
 			gitRef: currentGitRef,
 			snapshotId: currentSnapshotId(),
-			changedFiles: extractChangedFiles(currentPatch).length,
+			changedFiles: countChangedFiles(currentPatch),
 			patchBytes: currentPatch.length,
 		};
 		if (sessionVcsType) target.vcsType = sessionVcsType;

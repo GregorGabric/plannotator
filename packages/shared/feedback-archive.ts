@@ -71,6 +71,13 @@ export interface FeedbackReviewTarget {
   base?: string;
   gitRef?: string;
   snapshotId?: string;
+  /**
+   * The review's working directory at submit time. Recorded as provenance,
+   * not as a durable handle: a PR review started with `--local` points at a
+   * per-PR pool checkout that is cleaned up when the session ends, so this
+   * path can be gone by the time anyone reads the record. `pr` plus `gitRef`
+   * are the identity that survives.
+   */
   cwd?: string;
   pr?: { provider: string; repo: string; number: number };
   changedFiles?: number;
@@ -85,9 +92,20 @@ export interface FeedbackTarget {
   /** Absolute path of `history/{project}/{slug}/NNN.md` — join the record to
    *  the exact plan text without duplicating it into the archive. */
   planVersionFile?: string;
-  /** Annotated file (single-file and folder annotate sessions). */
+  /**
+   * The annotate session's own target: the resolved file for a single-file
+   * session, and the session's FOLDER for a folder session (not the document
+   * that happened to be open when the reviewer submitted — a folder session
+   * submits one body of feedback for the whole session, and the per-document
+   * path is not part of it).
+   */
   filePath?: string;
-  /** Annotated URL (URL sessions) or the live app's target URL. */
+  /**
+   * Annotated URL (URL sessions) or the live app's target URL, stored in full
+   * including its query string, because that is the page that was reviewed.
+   * A URL carrying a token or other secret in its query is therefore written
+   * to disk; the archive opt-out is the control for that.
+   */
   url?: string;
   review?: FeedbackReviewTarget;
 }
@@ -348,8 +366,13 @@ export function appendFeedbackRecord(input: FeedbackArchiveInput): string | null
 
     const indexPath = join(projectDir, "index.jsonl");
     // JSON.stringify can never emit a raw newline, so one record is always one
-    // line: a torn append degrades to a single unparsable line, never a
-    // corrupted store, and readers skip it.
+    // line. Concurrent servers sharing a data dir rely on O_APPEND for those
+    // lines not to interleave, which POSIX guarantees on local filesystems but
+    // NFS and SMB do NOT: on a network-mounted data dir two simultaneous
+    // appends can interleave, and an interleave damages BOTH records involved,
+    // not just the later one. Readers skip unparsable lines (parseFeedbackIndex),
+    // so the blast radius is bounded at the two records that raced; every other
+    // line in the file stays readable.
     appendFileSync(indexPath, `${JSON.stringify(record)}\n`, "utf-8");
     return indexPath;
   } catch (error) {
@@ -380,6 +403,24 @@ export function parseFeedbackIndex(contents: string): FeedbackRecord[] {
     }
   }
   return records;
+}
+
+/**
+ * Count the files a patch touches, for the record's `changedFiles` metadata.
+ *
+ * Deliberately not `extractChangedFiles` (code-nav): that one UNIONS the a/
+ * and b/ sides because it exists to resolve any path a reader might mention,
+ * so a rename counts twice and the record would overstate the review's size.
+ * The `diff --git` header always names a real path on both sides (deletions
+ * do not put /dev/null there), so the b side alone is one entry per file.
+ */
+export function countChangedFiles(patch: string | null | undefined): number {
+  if (!patch) return 0;
+  const files = new Set<string>();
+  const re = /^diff --git a\/(.+?) b\/(.+)$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(patch)) !== null) files.add(match[2]);
+  return files.size;
 }
 
 /** Absolute path of a project's archive index (for callers that report it). */

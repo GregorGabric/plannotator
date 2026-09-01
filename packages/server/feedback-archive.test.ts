@@ -32,8 +32,17 @@ import { startAnnotateServer } from "./annotate";
 import { getPlanVersionPath } from "./storage";
 import { detectProjectName } from "./project";
 import { parseFeedbackIndex, type FeedbackRecord } from "@plannotator/shared/feedback-archive";
+import { getPlannotatorDataDir } from "@plannotator/shared/data-dir";
 
 const MINIMAL_HTML = "<html><body>Plannotator</body></html>";
+
+// Annotate version history goes through storage.ts, whose data dir is fixed at
+// import time, so these sessions snapshot into the REAL data dir no matter what
+// PLANNOTATOR_DATA_DIR says here. Distinctive, test-owned project names keep
+// that out of any real project's bucket and let afterAll remove it whole.
+const FILE_ANNOTATE_PROJECT = "_feedback_archive_test_file";
+const STATELESS_ANNOTATE_PROJECT = "_feedback_archive_test_stateless";
+const URL_ANNOTATE_PROJECT = "_feedback_archive_test_url";
 
 const saved: Record<string, string | undefined> = {};
 const ENV_KEYS = [
@@ -72,6 +81,13 @@ function readOnlyIndex(dataDir: string): FeedbackRecord[] {
   return parseFeedbackIndex(readFileSync(indexPath, "utf-8"));
 }
 
+/** The single project bucket the archive created in this test. */
+function archivedProject(dataDir: string): string {
+  const projects = readdirSync(feedbackDir(dataDir));
+  expect(projects.length).toBe(1);
+  return projects[0];
+}
+
 function sidecarBody(dataDir: string, record: FeedbackRecord): string {
   const projects = readdirSync(feedbackDir(dataDir));
   return readFileSync(join(feedbackDir(dataDir), projects[0], record.recordFile!), "utf-8");
@@ -93,6 +109,16 @@ afterEach(() => {
     else process.env[key] = saved[key]!;
   }
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  // Remove the annotate history these tests deposited in the real data dir.
+  // Runs with the env already restored, so this resolves the same directory
+  // storage.ts wrote to.
+  const historyDir = join(getPlannotatorDataDir(), "history");
+  for (const project of [FILE_ANNOTATE_PROJECT, STATELESS_ANNOTATE_PROJECT, URL_ANNOTATE_PROJECT]) {
+    rmSync(join(historyDir, project), { recursive: true, force: true });
+  }
 });
 
 describe("code review submissions are archived", () => {
@@ -177,6 +203,51 @@ describe("code review submissions are archived", () => {
       expect(records.length).toBe(1);
       expect(records[0].decision).toBe("dismissed");
       expect(records[0].recordFile).toBeUndefined();
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("a PR-mode session buckets under the project, not the pool checkout", async () => {
+    // Regression: PR mode never sets gitContext, and `--local` points agentCwd
+    // at <sessionDir>/pool/pr-<n>, so deriving the project from the cwd filed
+    // every PR review under `pr-123`. The caller's detected project wins.
+    const dataDir = useTempDataDir();
+    const poolCwd = join(makeTempDir("plannotator-feedback-pool-"), "pool", "pr-123");
+    mkdirSync(poolCwd, { recursive: true });
+    const server = await startReview({ project: "plannotator", agentCwd: poolCwd });
+    try {
+      const response = await fetch(`${server.url}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: "Rebase before merging.", annotations: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(archivedProject(dataDir)).toBe("plannotator");
+      // The pool path is still recorded as provenance on the record itself.
+      expect(readOnlyIndex(dataDir)[0].target?.review?.cwd).toBe(poolCwd);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("changedFiles counts a rename once", async () => {
+    // Regression: extractChangedFiles unions the a/ and b/ sides (it exists to
+    // resolve any path a reader mentions), so reusing it here reported a
+    // two-file review for a one-file rename.
+    const dataDir = useTempDataDir();
+    const server = await startReview({
+      rawPatch:
+        "diff --git a/src/old.ts b/src/new.ts\nsimilarity index 92%\nrename from src/old.ts\nrename to src/new.ts\n",
+    });
+    try {
+      const response = await fetch(`${server.url}/api/feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: "Rename looks right.", annotations: [] }),
+      });
+      expect(response.status).toBe(200);
+      expect(readOnlyIndex(dataDir)[0].target?.review?.changedFiles).toBe(1);
     } finally {
       server.stop();
     }
@@ -287,7 +358,7 @@ describe("annotate submissions are archived", () => {
       markdown: "# Fetched page\n\nBody\n",
       filePath: "https://example.com/some/page",
       htmlContent: MINIMAL_HTML,
-      project: "urlproject",
+      project: URL_ANNOTATE_PROJECT,
     });
     try {
       const response = await fetch(`${server.url}/api/feedback`, {
@@ -319,7 +390,7 @@ describe("annotate submissions are archived", () => {
       markdown: "# Doc\n\nBody\n",
       filePath: docPath,
       htmlContent: MINIMAL_HTML,
-      project: "statelessproject",
+      project: STATELESS_ANNOTATE_PROJECT,
     });
     try {
       const response = await fetch(`${server.url}/api/feedback`, {
@@ -344,7 +415,7 @@ describe("annotate submissions are archived", () => {
       markdown: "# Notes\n\nBody\n",
       filePath: docPath,
       htmlContent: MINIMAL_HTML,
-      project: "fileproject",
+      project: FILE_ANNOTATE_PROJECT,
     });
     try {
       const response = await fetch(`${server.url}/api/approve`, {

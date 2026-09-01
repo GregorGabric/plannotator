@@ -219,6 +219,14 @@ export async function startPlannotatorServer(
   //
   // Plan policy on failure (design §3.4): log and proceed. A plan approval is
   // never blocked on the archive, and the plan draft delete is unchanged.
+  //
+  // Data-dir asymmetry worth knowing: getPlanVersionPath resolves against the
+  // data directory storage.ts captured at import time, while the archive
+  // resolves it per call. They agree in every real run (the env var is fixed
+  // before the process starts); they can disagree only if PLANNOTATOR_DATA_DIR
+  // is changed mid-process, in which case planVersionFile names the original
+  // location. That is the honest answer anyway — it is where the version file
+  // actually was written — so this is documented rather than "fixed".
   const archivePlanDecision = (decision: FeedbackDecision, feedback?: string): void => {
     if (mode === "archive") return;
     if (!resolveFeedbackHistory(loadConfig())) return;

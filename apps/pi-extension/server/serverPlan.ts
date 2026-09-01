@@ -143,6 +143,12 @@ export async function startPlanReviewServer(options: {
 	// time, independent of the client-side planSave setting, and names the
 	// history version file rather than copying the plan text. Plan policy on
 	// failure: log and proceed — an approval is never blocked on the archive.
+	//
+	// Data-dir asymmetry worth knowing: getPlanVersionPath resolves against the
+	// data directory generated/storage.ts captured at import time, while the
+	// archive resolves it per call. They agree in every real run and can only
+	// disagree if PLANNOTATOR_DATA_DIR changes mid-process, in which case
+	// planVersionFile names where the version file was actually written.
 	const archivePlanDecision = (decision: FeedbackDecision, feedback?: string): void => {
 		if (options.mode === "archive") return;
 		if (!resolveFeedbackHistory(loadConfig())) return;
