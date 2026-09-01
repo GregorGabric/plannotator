@@ -36,7 +36,7 @@ async function openAppearanceTab(isCompactTouchLayout: boolean): Promise<void> {
   await act(async () => appearanceTab.click());
 
   const editorDisplay = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
-    .find((button) => button.textContent?.trim() === 'Editor display');
+    .find((button) => button.textContent?.trim() === 'Editor');
   if (!editorDisplay) throw new Error('editor display subsection did not render');
   await act(async () => editorDisplay.click());
 }

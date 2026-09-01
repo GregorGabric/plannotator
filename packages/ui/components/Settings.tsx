@@ -1304,7 +1304,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                         value="editor"
                         className="flex-1 justify-center text-sm data-active:bg-background data-active:shadow-sm"
                       >
-                        Editor display
+                        Editor
                       </TabsTrigger>
                     </TabsList>
                   </div>
@@ -1587,7 +1587,7 @@ export const Settings: React.FC<SettingsProps> = ({ taterMode, onTaterModeChange
                 {activeTab === 'theme' && mode === 'review' && (
                   <>
                     <TabsContent value="theme"><ThemeTab /></TabsContent>
-                    <TabsContent value="editor">
+                    <TabsContent value="editor" className="space-y-4">
                       <ReviewDisplayTab isCompactTouchLayout={isCompactTouchLayout} />
                     </TabsContent>
                   </>
