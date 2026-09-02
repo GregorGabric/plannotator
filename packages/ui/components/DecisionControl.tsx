@@ -278,6 +278,12 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
     if (options?.focusCaret) caretRef.current?.focus();
   }, []);
 
+  // Outside-dismissal (outside pointerdown, iframe focus, or an Escape whose
+  // focus has already left the control) closes the WHOLE popover, composer
+  // included: the user's attention has left the control, so restoring the
+  // intermediate menu rung would fight where they are — and the draft is kept
+  // in `drafts` either way. The three-rung Esc ladder applies only while
+  // focus is inside the popover (handlePopoverKeyDown / the note field).
   const dismiss = useCallback(() => closePopover(), [closePopover]);
 
   useDismissablePopover({

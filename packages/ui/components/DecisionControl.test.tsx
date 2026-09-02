@@ -236,6 +236,54 @@ describe('DecisionControl', () => {
     expect(dialog()).toBeNull();
   });
 
+  // Guards the Escape leak: when focus has dropped OUTSIDE the popover (Tab
+  // past the last item, click on popover padding), the document-level Escape
+  // must dismiss AND consume — the host apps' window-level Escape ladders
+  // must never also act on the same keypress. A closed control must not
+  // consume anything.
+  test.skipIf(!hasDom)('outside-focus Escape dismisses fail-closed; closed control does not consume', async () => {
+    const handlers = makeHandlers();
+    await mountControl(REVIEW_FEEDBACK, handlers);
+
+    const windowEscapes: KeyboardEvent[] = [];
+    const windowSpy = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') windowEscapes.push(event);
+    };
+    window.addEventListener('keydown', windowSpy);
+    try {
+      // Menu open, focus outside: Escape closes and never reaches window.
+      await openMenu();
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      const consumed = await pressKey(document.body, { key: 'Escape' });
+      expect(popover()).toBeNull();
+      expect(consumed.defaultPrevented).toBe(true);
+      expect(windowEscapes.length).toBe(0);
+
+      // Composer open, focus outside: consume-and-close-ALL (an outside
+      // Escape is an outside-dismissal gesture, like an outside click) — and
+      // the draft survives the full close.
+      await openMenu();
+      await clickItem('Send with a note…');
+      await typeNote('kept across dismissal');
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      await pressKey(document.body, { key: 'Escape' });
+      expect(popover()).toBeNull();
+      expect(windowEscapes.length).toBe(0);
+      await openMenu();
+      await clickItem('Send with a note…');
+      expect(noteInput().value).toBe('kept across dismissal');
+      await pressKey(noteInput(), { key: 'Escape' }); // back to menu
+      await pressKey(document.activeElement!, { key: 'Escape' }); // close
+
+      // Closed: the control holds no listener, the ladder gets the event.
+      const passedThrough = await pressKey(document.body, { key: 'Escape' });
+      expect(passedThrough.defaultPrevented).toBe(false);
+      expect(windowEscapes.length).toBe(1);
+    } finally {
+      window.removeEventListener('keydown', windowSpy);
+    }
+  });
+
   // Guards the HTML/live-app hang-over-the-page defect: iframe clicks never
   // reach the parent document, so iframe focus must dismiss — but only when
   // the host says the surface is framed.

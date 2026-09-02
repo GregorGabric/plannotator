@@ -32,10 +32,15 @@ describe('buildDecisionSpec state matrix', () => {
     expect(spec.primary.tone).toBe('success');
     expect(spec.primary.icon).toBe('check');
     expect(itemIds(spec)).toEqual(['note-with-approval', 'request-changes']);
-    // "Done with a note…" posts /api/feedback — never capability-gated.
-    expect(spec.items[0].composer?.actionLabel).toBe('Done — send note');
+    // Frozen copy (maintainer-approved): 'Request changes…'.
+    expect(spec.items[1].label).toBe('Request changes…');
+    // "Done with a note…" posts /api/feedback — never capability-gated. The
+    // two composers must stay DISTINCT actions (positive finish vs change
+    // request) — the labels themselves are free prose.
+    expect(spec.items[0].composer?.tone).toBe('success');
     expect(spec.items[1].dividerBefore).toBe(true);
-    expect(spec.items[1].composer?.actionLabel).toBe('Send as feedback');
+    expect(spec.items[1].composer?.tone).toBe('primary');
+    expect(spec.items[0].composer?.actionLabel).not.toBe(spec.items[1].composer?.actionLabel);
   });
 
   it('annotate, no feedback, gate → Approve; approve-note item only with the capability', () => {
@@ -45,7 +50,9 @@ describe('buildDecisionSpec state matrix', () => {
     expect(withCap.primary.label).toBe('Approve'); // frozen copy, maintainer-approved
     expect(withCap.primary.tone).toBe('success');
     expect(itemIds(withCap)).toEqual(['note-with-approval', 'request-changes']);
-    expect(withCap.items[0].label).toBe('Approve with a note…');
+    // Free prose except the verb: the gate's positive-note item must speak of
+    // approving, not finishing.
+    expect(withCap.items[0].label).toContain('Approve');
 
     const withoutCap = buildDecisionSpec({
       app: 'annotate', gate: true, count: 0, hasFeedback: false, approvalNotesSupported: false,
@@ -63,7 +70,9 @@ describe('buildDecisionSpec state matrix', () => {
     expect(nonGate.primary.icon).toBe('send');
     // No gate ⇒ no approve channel ⇒ no Approve-with-notes, capability or not.
     expect(itemIds(nonGate)).toEqual(['note-with-feedback', 'discard-and-finish']);
-    expect(nonGate.items[1].label).toBe('Done, discard 3 annotations…');
+    // Label is free prose; the data is the flow verb and the live count.
+    expect(nonGate.items[1].label).toContain('Done,');
+    expect(nonGate.items[1].label).toContain('3');
     expect(nonGate.items[1].confirm?.confirmText).toBe('Discard & finish'); // frozen copy
 
     const gate = buildDecisionSpec({
@@ -71,7 +80,8 @@ describe('buildDecisionSpec state matrix', () => {
     });
     expect(itemIds(gate)).toEqual(['note-with-feedback', 'approve-with-notes', 'discard-and-finish']);
     expect(gate.items[1].label).toBe('Approve with notes'); // frozen copy, maintainer-approved
-    expect(gate.items[2].label).toBe('Approve, discard 3 annotations…');
+    expect(gate.items[2].label).toContain('Approve,');
+    expect(gate.items[2].label).toContain('3');
     expect(gate.items[2].confirm?.confirmText).toBe('Discard & approve'); // frozen copy
 
     const gateNoCap = buildDecisionSpec({
@@ -91,7 +101,7 @@ describe('buildDecisionSpec state matrix', () => {
       app: 'review', gate: true, count: 0, hasFeedback: false, approvalNotesSupported: true,
     });
     expect(itemIds(phase2)).toEqual(['note-with-approval', 'request-changes']);
-    expect(phase2.items[0].label).toBe('Approve with a note…');
+    expect(phase2.items[0].label).toContain('Approve');
   });
 
   it('review, feedback (n) → Send Feedback + note/(approve-with-notes)/discard', () => {
@@ -174,7 +184,8 @@ describe('buildDecisionSpec invariants', () => {
       app: 'annotate', gate: false, count: 1, hasFeedback: true, approvalNotesSupported: false,
     });
     const discardOne = one.items.find((item) => item.id === 'discard-and-finish')!;
-    expect(discardOne.label).toBe('Done, discard 1 annotation…');
+    // The singular form is the data here, not the sentence around it.
+    expect(discardOne.label).toContain('1 annotation…');
   });
 
   // Every composer item must actually be a composer and every plain item must

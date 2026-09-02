@@ -33,7 +33,13 @@ export function useDismissablePopover({
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onDismiss();
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // Fail closed: an Escape that dismisses the popover is consumed here
+      // (document bubbles before window), so the host apps' window-level
+      // Escape ladders never also act on it — one Escape, one rung.
+      event.preventDefault();
+      event.stopPropagation();
+      onDismiss();
     };
 
     let blurTimer: ReturnType<typeof setTimeout> | undefined;
