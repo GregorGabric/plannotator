@@ -1,5 +1,9 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { CodeAnnotation, type CodeAnnotationScope, type EditorAnnotation, type Annotation, type CommentAnnotation } from '@plannotator/ui/types';
+import { Button } from '@plannotator/ui/components/ui/button';
+import { DecisionNoteField } from '@plannotator/ui/components/DecisionControl';
+import { useDismissablePopover } from '@plannotator/ui/hooks/useDismissablePopover';
+import { submitHint } from '@plannotator/ui/utils/platform';
 import { CommentMeta } from './CommentMeta';
 import { EditorAnnotationCard } from '@plannotator/ui/components/EditorAnnotationCard';
 import { CommentActions } from './CommentActions';
@@ -34,6 +38,11 @@ interface ReviewSidebarProps {
   /** Sidebar row click → select AND scroll the diff to the comment. */
   onNavigateToAnnotation: (id: string | null) => void;
   onDeleteAnnotation: (id: string) => void;
+  /** "+ General comment": commit a durable scope:'general' review-level
+   *  comment to the session (spec §3.3). When present, the affordance renders
+   *  in the General section header AND in the all-empty state — the state it
+   *  is most useful in. */
+  onAddGeneralComment?: (text: string) => void;
   feedbackMarkdown?: string;
   width?: number;
   editorAnnotations?: EditorAnnotation[];
@@ -109,6 +118,78 @@ const SuggestionPreview: React.FC<{ code: string; originalCode?: string; languag
   );
 };
 
+/**
+ * "+ General comment" — the human producer for a durable review-level comment
+ * (the sole producer before this was Call Flow). The SAME button renders in
+ * both placements (General section header, all-empty state); the composer is
+ * the shared `DecisionNoteField` in a small anchored popover — the third
+ * consumer of the note field, which is why it is a separate export from
+ * `DecisionControl`. The draft survives a dismissal (outside click / Escape);
+ * only a commit clears it. An empty commit never fires the callback — it
+ * refocuses the field, the same contract as the decision composers.
+ */
+const GeneralCommentComposer: React.FC<{
+  onAdd: (text: string) => void;
+  /** Popover alignment relative to the button: section header anchors right,
+   *  the centered empty-state button anchors center. */
+  align: 'right' | 'center';
+  touchTarget?: boolean;
+}> = ({ onAdd, align, touchTarget }) => {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  useDismissablePopover({ enabled: open, ref, onDismiss: () => setOpen(false) });
+
+  const submit = () => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      ref.current?.querySelector<HTMLTextAreaElement>('[data-decision-note-input]')?.focus();
+      return;
+    }
+    onAdd(trimmed);
+    setText('');
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative" data-review-general-composer={open ? 'open' : 'closed'}>
+      <button
+        type="button"
+        data-pn-touch-target={touchTarget || undefined}
+        data-add-general-comment
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        title="Add a review-level comment"
+        className="inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      >
+        + General comment
+      </button>
+      {open && (
+        <div
+          className={`absolute top-full z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover p-2 shadow-xl ${
+            align === 'right' ? 'right-0' : 'left-1/2 -translate-x-1/2'
+          }`}
+        >
+          <DecisionNoteField
+            text={text}
+            onTextChange={setText}
+            onSubmit={submit}
+            onCancel={() => setOpen(false)}
+            placeholder="Add a general comment..."
+          />
+          <div className="mt-2 flex items-center justify-between gap-2">
+            <span className="text-[10px] leading-snug text-muted-foreground">{submitHint}</span>
+            <Button size="xs" data-general-comment-add onClick={submit} title="Add the comment to this review">
+              Add comment
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const SCOPE_ORDER = { general: 0, file: 1, line: 2 } as const;
 
 function getAnnotationScope(annotation: CodeAnnotation): CodeAnnotationScope {
@@ -140,6 +221,7 @@ export const ReviewSidebar: React.FC<ReviewSidebarProps> = /* React.memo */({
   onSelectAnnotation,
   onNavigateToAnnotation,
   onDeleteAnnotation,
+  onAddGeneralComment,
   feedbackMarkdown,
   width,
   editorAnnotations,
@@ -464,17 +546,38 @@ export const ReviewSidebar: React.FC<ReviewSidebarProps> = /* React.memo */({
                   <p className="text-xs text-muted-foreground">
                     {presentation === 'overlay' ? 'Tap a line to add an annotation' : 'Click on lines to add annotations'}
                   </p>
+                  {onAddGeneralComment && (
+                    <div className="mt-3">
+                      <GeneralCommentComposer
+                        onAdd={onAddGeneralComment}
+                        align="center"
+                        touchTarget={presentation === 'overlay'}
+                      />
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="p-2 space-y-4">
-                  {generalAnnotations.length > 0 && (
+                  {(generalAnnotations.length > 0 || onAddGeneralComment) && (
                     <div>
-                      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm px-2 py-1 text-xs font-medium text-muted-foreground">
-                        General
+                      {/* z above the file/PR sticky headers (z-10/z-20) so the
+                          anchored composer popover is never painted under a
+                          later section's header. */}
+                      <div className="sticky top-0 z-[25] bg-background/95 backdrop-blur-sm px-2 py-1 flex items-center justify-between gap-2">
+                        <span className="text-xs font-medium text-muted-foreground">General</span>
+                        {onAddGeneralComment && (
+                          <GeneralCommentComposer
+                            onAdd={onAddGeneralComment}
+                            align="right"
+                            touchTarget={presentation === 'overlay'}
+                          />
+                        )}
                       </div>
-                      <div className="space-y-1">
-                        {generalAnnotations.map((annotation) => renderAnnotationCard(annotation))}
-                      </div>
+                      {generalAnnotations.length > 0 && (
+                        <div className="space-y-1">
+                          {generalAnnotations.map((annotation) => renderAnnotationCard(annotation))}
+                        </div>
+                      )}
                     </div>
                   )}
                   {isMultiPR && prGroups ? (

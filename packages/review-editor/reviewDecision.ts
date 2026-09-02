@@ -1,4 +1,5 @@
 import type { DecisionActionId, DecisionMenuItem, DecisionPrimary } from '@plannotator/ui/utils/decisionSpec';
+import type { CodeAnnotation } from '@plannotator/ui/types';
 import type { CompactReviewAction } from './components/ReviewHeaderMenu';
 
 /**
@@ -86,4 +87,38 @@ export function compactPrimaryIdForReviewDecision(
   primary: Pick<DecisionPrimary, 'icon'>,
 ): Extract<CompactReviewAction['id'], 'feedback' | 'approve'> {
   return primary.icon === 'send' ? 'feedback' : 'approve';
+}
+
+/**
+ * The one shape for a human review-level comment: `scope: 'general'` with the
+ * ''/0/0 sentinels that keep it out of every file group. Shared by BOTH human
+ * producers — the header composer's submit note (`commitReviewNote`) and the
+ * sidebar's durable "+ General comment" — so the transport shape the
+ * review-note payload tests pin cannot fork between them.
+ *
+ * Deliberately carries no PR context (`prUrl`/`diffScope`): an unstamped
+ * annotation passes every PR scope (`utils/annotationScope.ts`), which is
+ * what lets a review-level comment survive an in-place PR switch (spec §3.3).
+ * `crypto.randomUUID()` rather than `Date.now()` because two commits in the
+ * same millisecond would collide and the deferred-submit effect keys on the
+ * id (spec §9).
+ *
+ * Returns null for a whitespace-only note: the composers never commit an
+ * empty comment.
+ */
+export function createGeneralReviewComment(text: string, author?: string): CodeAnnotation | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return {
+    id: `review-note-${crypto.randomUUID()}`,
+    type: 'comment',
+    scope: 'general',
+    filePath: '',
+    lineStart: 0,
+    lineEnd: 0,
+    side: 'new',
+    text: trimmed,
+    createdAt: Date.now(),
+    ...(author ? { author } : {}),
+  };
 }

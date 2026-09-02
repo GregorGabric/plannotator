@@ -18,6 +18,7 @@ import { DecisionControl, DecisionNoteDialog, type DecisionHandler } from '@plan
 import {
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
+  createGeneralReviewComment,
   resolveReviewDecisionAction,
   REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from './reviewDecision';
@@ -3631,29 +3632,28 @@ const ReviewApp: React.FC = () => {
 
   // Note → scope:'general' CodeAnnotation at submit time: it rides the
   // existing export (## General) and the /api/feedback annotations array with
-  // no server change on either runtime (#1449 transport). Sentinel
-  // filePath ''/0/0 keeps it out of every file group; deliberately NOT
-  // recorded in review history (it lives for one submit) and NOT stamped with
-  // PR context, so it survives an in-place PR switch.
+  // no server change on either runtime (#1449 transport). Shape (sentinels,
+  // no PR context) lives in createGeneralReviewComment; deliberately NOT
+  // recorded in review history — it lives for one submit.
   const commitReviewNote = useCallback((text: string): string | null => {
-    const trimmed = text.trim();
-    if (!trimmed) return null;
-    const note: CodeAnnotation = {
-      id: `review-note-${crypto.randomUUID()}`,
-      type: 'comment',
-      scope: 'general',
-      filePath: '',
-      lineStart: 0,
-      lineEnd: 0,
-      side: 'new',
-      text: trimmed,
-      createdAt: Date.now(),
-      ...(identity ? { author: identity } : {}),
-    };
+    const note = createGeneralReviewComment(text, identity);
+    if (!note) return null;
     annotationsRef.current = [...annotationsRef.current, note];
     setAnnotations(annotationsRef.current);
     return note.id;
   }, [identity]);
+
+  // Sidebar "+ General comment" — the durable human producer for a
+  // scope:'general' review-level comment (spec §3.3). Unlike the submit note
+  // above, it goes through history (undoable, draft-persisted, deletable via
+  // the sidebar's existing delete); like it, it is deliberately NOT
+  // withPRContext-stamped, so it survives an in-place PR switch (see the
+  // factory's doc in reviewDecision.ts).
+  const handleAddGeneralComment = useCallback((text: string) => {
+    const note = createGeneralReviewComment(text, identity);
+    if (!note) return;
+    addCodeAnnotationsWithHistory([note]);
+  }, [identity, addCodeAnnotationsWithHistory]);
 
   // The commit above is a state write, so feedbackMarkdown/handleSendFeedback
   // (which close over `allAnnotations`) only see the note on the NEXT render.
@@ -5060,6 +5060,7 @@ const ReviewApp: React.FC = () => {
                 onSelectAnnotation={handleSelectAnnotation}
                 onNavigateToAnnotation={handleNavigateToAnnotation}
                 onDeleteAnnotation={handleDeleteAnnotation}
+                onAddGeneralComment={handleAddGeneralComment}
                 feedbackMarkdown={feedbackMarkdown}
                 width={isCompactTouchLayout ? undefined : panelResize.width}
                 editorAnnotations={visibleEditorAnnotations}
