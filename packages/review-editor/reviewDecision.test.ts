@@ -13,17 +13,18 @@ import {
   type DecisionSpecInput,
 } from "@plannotator/ui/utils/decisionSpec";
 import {
+  buildReviewApprovalBody,
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
   createGeneralReviewComment,
+  readApprovalNotesAdvert,
   resolveReviewDecisionAction,
-  REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from "./reviewDecision";
 import { annotationMatchesPrScope } from "./utils/annotationScope";
 
-/** Every input combination the review app can hand the spec builder. The
- *  advert is swept both ways even though PR3 hardcodes it false, so the PR5
- *  flip cannot surface an unrouted id. */
+/** Every input combination the review app can hand the spec builder — the
+ *  advert swept both ways, so neither advert state can surface an unrouted
+ *  id. */
 function reviewInputs(): DecisionSpecInput[] {
   const inputs: DecisionSpecInput[] = [];
   for (const approvalNotesSupported of [false, true])
@@ -61,42 +62,100 @@ describe("review decision handler exhaustiveness", () => {
 
   // Guards the single-transport matrix (spec §3.2/§6.1): request-changes and
   // note-with-feedback differ only by state, never by route; the confirm item
-  // is the discard flow; the approve-carrying ids stay on the
-  // capability-gated PR5 path — routing one to the plain-note flow would
-  // misdeliver an approval as a change request.
+  // is the discard flow; both approve-carrying ids land on the PR5 delivery
+  // path — routing one to the plain-note flow would misdeliver an approval as
+  // a change request — and fork only on WHAT rides the approval.
   test("the routes fork only on approved, never on which menu state emitted them", () => {
     expect(resolveReviewDecisionAction("note-with-feedback"))
       .toEqual(resolveReviewDecisionAction("request-changes"));
     expect(resolveReviewDecisionAction("request-changes").kind).toBe("note");
     expect(resolveReviewDecisionAction("discard-and-finish").kind).toBe("discard");
     expect(resolveReviewDecisionAction("note-with-approval"))
-      .toEqual(resolveReviewDecisionAction("approve-with-notes"));
+      .toEqual({ kind: "approve-with-notes", withAnnotations: false });
+    expect(resolveReviewDecisionAction("approve-with-notes"))
+      .toEqual({ kind: "approve-with-notes", withAnnotations: true });
   });
 
-  // The PR5 contract (spec §6.4): the advert must never outrun delivery. The
-  // App's advert input is REVIEW_APPROVAL_NOTES_SUPPORTED; every id a spec
-  // built with it can emit must map to an IMPLEMENTED route. Today that holds
-  // because the advert is false. PR5 flips the advert (constant → server
-  // advert read) and this test then fails until the `approve-with-notes`
-  // route stops being a marked refusal (`implemented: false`) — i.e. until
-  // delivery is actually wired. Extend it to a delivery assertion in PR5;
-  // deleting the constant without updating this test breaks it at import,
-  // which is the point.
-  test("the advert never emits an id whose route is an unimplemented refusal", () => {
+  // The PR5 contract (spec §6.4), extended from PR3's tripwire exactly as its
+  // comment instructed: the advert may only emit approve-carrying ids whose
+  // route DELIVERS the content. The refusal marker is gone, so the assertion
+  // is now about the wire body: under a true advert every approve-carrying
+  // item builds an approval payload that carries the reviewer's content —
+  // the composer note as the feedback, or the live annotations + their
+  // export — never an empty body and never the removed LGTM placeholder.
+  test("under a true advert, every approve-carrying item's payload delivers the content", () => {
+    const EXPORT = "# Code Review Feedback\n\n## General\n\n- overall note\n";
+    const NOTE_ANNOTATION = createGeneralReviewComment("overall note")!;
     for (const count of [0, 2]) {
       const spec = buildDecisionSpec({
         app: "review",
         gate: true,
         count,
         hasFeedback: count > 0,
-        approvalNotesSupported: REVIEW_APPROVAL_NOTES_SUPPORTED,
+        approvalNotesSupported: true,
       });
-      for (const item of spec.items) {
+      const approveCarrying = spec.items.filter(
+        (item) => resolveReviewDecisionAction(item.id).kind === "approve-with-notes",
+      );
+      // A true advert must actually light an approve-carrying item in both
+      // states — otherwise delivery shipped but the menu never offers it.
+      expect(approveCarrying.length).toBeGreaterThan(0);
+      for (const item of approveCarrying) {
         const route = resolveReviewDecisionAction(item.id);
-        const implemented = "implemented" in route ? route.implemented : true;
-        expect(implemented).toBe(true);
+        if (route.kind !== "approve-with-notes") throw new Error("unreachable");
+        const body = buildReviewApprovalBody({
+          draftGeneration: 1,
+          note: item.composer ? "ship it, but rename the flag" : undefined,
+          withAnnotations: route.withAnnotations,
+          feedbackMarkdown: EXPORT,
+          annotations: [NOTE_ANNOTATION],
+        });
+        expect(body.approved).toBe(true);
+        if (route.withAnnotations) {
+          // "Approve with notes": the annotations ride for archive
+          // provenance, and their export is the feedback the consumer prints
+          // after the approved prompt.
+          expect(body.feedback).toBe(EXPORT);
+          expect(body.annotations).toEqual([NOTE_ANNOTATION]);
+        } else {
+          // "Approve with a note…": the note IS the feedback.
+          expect(body.feedback).toBe("ship it, but rename the flag");
+          expect(body.annotations).toEqual([]);
+        }
       }
     }
+  });
+
+  // Compatibility matrix (spec §6.4): old server / new client — a payload
+  // without the field reads false, so no approve-carrying item renders (the
+  // PR3 behavior); and the new bare approval sends `feedback: ''` instead of
+  // the removed LGTM placeholder, which is what makes the archive's `lgtm`
+  // decision reachable and stops bare approvals writing sidecars.
+  test("absent advert reads false, and a bare approval carries no placeholder", () => {
+    expect(readApprovalNotesAdvert(undefined)).toBe(false);
+    // Only a literal true is capable — a truthy string or number is not.
+    expect(readApprovalNotesAdvert("true")).toBe(false);
+    expect(readApprovalNotesAdvert(1)).toBe(false);
+    expect(readApprovalNotesAdvert(true)).toBe(true);
+
+    const spec = buildDecisionSpec({
+      app: "review",
+      gate: true,
+      count: 2,
+      hasFeedback: true,
+      approvalNotesSupported: readApprovalNotesAdvert(undefined),
+    });
+    for (const item of spec.items) {
+      expect(resolveReviewDecisionAction(item.id).kind).not.toBe("approve-with-notes");
+    }
+
+    const bare = buildReviewApprovalBody({
+      draftGeneration: 3,
+      withAnnotations: false,
+      feedbackMarkdown: "# Code Review Feedback\n",
+      annotations: [createGeneralReviewComment("x")!],
+    });
+    expect(bare).toEqual({ draftGeneration: 3, approved: true, feedback: "", annotations: [] });
   });
 
   // Guards the compact surface: row ids double as React keys, so a collision

@@ -3,10 +3,11 @@
  * payloads + E16-review, through the real posted /api/feedback body.
  *
  * Regressions each test guards:
- *  - Empty-state `Approve` must post the byte-identical legacy LGTM body
- *    (`approved: true`, the placeholder feedback, `annotations: []`): every
- *    consumer branches on the `approved` flag and PR5's placeholder removal
- *    is deliberately NOT in this PR (spec §6.4).
+ *  - Empty-state `Approve` must post the bare approval body (`approved: true`,
+ *    `feedback: ''`, `annotations: []`): the LGTM placeholder was removed with
+ *    PR5's delivery (spec §6.4) — consumers now print approve-time feedback,
+ *    so any filler here would be appended to every approval, and the empty
+ *    body is what makes the archive's `lgtm` decision reachable.
  *  - `Send Feedback` must post the live annotations with `approved: false` —
  *    the state where the old header offered a data-destroying Approve.
  *  - `Request changes…` must deliver the note as a `scope:'general'`
@@ -14,13 +15,15 @@
  *    AND inside the exported `## General` section, one render after the
  *    commit — a same-tick submit posts the pre-note payload and silently
  *    drops it (#1449 transport).
- *  - The discard confirm must post the plain LGTM (empty annotations), and
+ *  - The discard confirm must post the bare approval (empty annotations), and
  *    nothing before the confirm.
  *  - Mod+Enter always equals the visible primary.
  *  - Approve-carrying menu items must be absent while the server does not
- *    advertise approval-note delivery (four runtimes still discard feedback
- *    on approve — spec §2.2's "never render an item that silently drops
- *    content").
+ *    advertise approval-note delivery — an OLD server's payload has no
+ *    `approvalNotesSupported`, which must read as false (spec §2.2's "never
+ *    render an item that silently drops content") — and under a capable
+ *    server's advert `Approve with notes` must deliver the live annotations
+ *    on the approval body.
  *  - Compact/touch must offer a visible positive decision row at zero and it
  *    must post (E16-review: touch has no Mod+Enter).
  */
@@ -129,6 +132,10 @@ let submissions: SubmittedBody[] = [];
 /** How many upcoming /api/feedback POSTs answer 500. Each failed attempt is
  *  still recorded in `submissions` so its captured body can be asserted. */
 let failFeedbackPosts = 0;
+/** When true, /api/diff carries `approvalNotesSupported: true` — the capable
+ *  server. Default false mimics an OLD server whose payload has no such
+ *  field at all, pinning that absent reads as not-capable. */
+let advertiseApprovalNotes = false;
 
 const PATCH = [
   "diff --git a/src/parse.ts b/src/parse.ts",
@@ -170,6 +177,9 @@ function makeFetch(): typeof fetch {
         diffType: "uncommitted",
         base: null,
         hideWhitespace: false,
+        // Absent (not false) in the old-server shape: the pre-advert payload
+        // simply had no such field.
+        ...(advertiseApprovalNotes ? { approvalNotesSupported: true } : {}),
       });
     }
     if (url.pathname === "/api/diff/fresh") return Response.json({ fresh: true });
@@ -273,11 +283,6 @@ async function pressNoteKey(key: string, init: KeyboardEventInit = {}): Promise<
   await settle();
 }
 
-// Frozen copy (maintainer-approved, spec §6.4): today's approve placeholder.
-// PR5 removes it together with the consumer changes; until then this exact
-// string is what every runtime receives on approve.
-const LGTM_PLACEHOLDER = "LGTM - no changes requested.";
-
 afterEach(async () => {
   if (root) await act(async () => root?.unmount());
   root = null;
@@ -288,6 +293,7 @@ afterEach(async () => {
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   submissions = [];
   failFeedbackPosts = 0;
+  advertiseApprovalNotes = false;
   seededExternalAnnotations = [];
   memory.clear();
   resetStorageBackend();
@@ -299,7 +305,7 @@ afterAll(() => {
 });
 
 describe.if(hasDom)("review decision control (agent mode)", () => {
-  test("empty-state Approve posts the legacy LGTM body", async () => {
+  test("empty-state Approve posts the bare approval body (no LGTM placeholder)", async () => {
     await mountReview();
 
     expect(primaryButton()!.title).toContain("Approve");
@@ -310,7 +316,10 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     const body = submissions[0]!;
     expect(body.endpoint).toBe("feedback");
     expect(body.approved).toBe(true);
-    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    // Empty since PR5: consumers print approve-time feedback, so the old
+    // placeholder would be appended to every approval; '' is also what lets
+    // the archive record a bare approval as `lgtm` with no sidecar.
+    expect(body.feedback).toBe("");
     expect(body.annotations).toEqual([]);
   });
 
@@ -355,7 +364,7 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(body.feedback).toContain("rebase on main before merging");
   });
 
-  test("discard confirm posts the plain LGTM, and nothing before the confirm", async () => {
+  test("discard confirm posts the bare approval, and nothing before the confirm", async () => {
     seededExternalAnnotations = [EXTERNAL_FINDING];
     await mountReview();
     await settle();
@@ -378,7 +387,8 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(submissions).toHaveLength(1);
     const body = submissions[0]!;
     expect(body.approved).toBe(true);
-    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    // Discard means discard: bare approval, no placeholder, no annotations.
+    expect(body.feedback).toBe("");
     expect(body.annotations).toEqual([]);
   });
 
@@ -411,7 +421,7 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(submissions).toHaveLength(1);
     const body = submissions[0]!;
     expect(body.approved).toBe(true);
-    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(body.feedback).toBe("");
     expect(body.annotations).toEqual([]);
   });
 
@@ -468,10 +478,11 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(submissions[0]!.annotations).toEqual([]);
   });
 
-  // Spec §2.2's single mechanism: until PR5 lands the server advert AND the
-  // consumer delivery, an approve-carrying item would silently discard its
-  // note on four runtimes — so it must not render at all.
-  test("approve-with-notes items are absent while the advert is off", async () => {
+  // Spec §2.2's single mechanism + the compatibility matrix (spec §6.4):
+  // the mock /api/diff here carries NO approvalNotesSupported field — the
+  // old-server shape — which must read as not-capable, so an approve-carrying
+  // item can never render where its note would be silently discarded.
+  test("approve-with-notes items are absent when the server sends no advert (old server)", async () => {
     seededExternalAnnotations = [EXTERNAL_FINDING];
     await mountReview();
     await settle();
@@ -484,6 +495,32 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
       document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     });
     await settle();
+  });
+
+  // PR5 delivery, App-level (spec §6.4): under a capable server's advert the
+  // menu offers `Approve with notes`, and choosing it posts `approved: true`
+  // with the live annotations riding AND their export as the feedback — the
+  // string consumers print after the approved prompt. A regression to the old
+  // handleApprove (empty annotations, placeholder feedback) approves while
+  // silently discarding the reviewer's findings.
+  test("under the advert, Approve with notes delivers the live annotations on the approval", async () => {
+    advertiseApprovalNotes = true;
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    await openMenu();
+    const item = menuItem("Approve with notes");
+    if (!item) throw new Error("Approve with notes did not render under the advert");
+    await act(async () => item.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.approved).toBe(true);
+    expect((body.annotations ?? []).some((a) => a.id === "ext-1")).toBe(true);
+    expect(body.feedback).toContain("still drops null");
   });
 
   test("empty-state menu carries only Request changes… (no Approve with a note…)", async () => {
@@ -549,7 +586,7 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
 
   // Guards the exact regression this project exists to fix on the surface
   // that has no Mod+Enter (E16-review): compact at zero must offer a visible
-  // positive decision row, and it must post the legacy approve body.
+  // positive decision row, and it must post the bare approval body.
   test("compact touch offers a positive decision row at zero and it posts", async () => {
     // SAFETY: implements the MediaQueryList surface the shell hooks consume;
     // coarse-pointer matches put the app in its compact touch layout.
@@ -580,7 +617,7 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
 
     expect(submissions).toHaveLength(1);
     expect(submissions[0]!.approved).toBe(true);
-    expect(submissions[0]!.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(submissions[0]!.feedback).toBe("");
     expect(submissions[0]!.annotations).toEqual([]);
   });
 });

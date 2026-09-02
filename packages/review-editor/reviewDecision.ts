@@ -7,24 +7,27 @@ import type { CompactReviewAction } from './components/ReviewHeaderMenu';
  *
  * `buildDecisionSpec` decides WHAT the header offers; this module decides
  * WHERE each choice goes. Review is single-transport (spec §3.2/§6.1): every
- * decision POSTs `/api/feedback`, with `approved` as the only fork — notes
- * commit a `scope:'general'` CodeAnnotation and ride the change-request send,
- * the post-confirm discard is the same plain LGTM the Approve primary posts
- * (`handleApprove` already sends `annotations: []`). Kept pure (no React, no
+ * decision POSTs `/api/feedback`, with `approved` as the only fork —
+ * change-request notes commit a `scope:'general'` CodeAnnotation and ride the
+ * send, approvals post `buildReviewApprovalBody` (bare, with a note, or with
+ * the live annotations — PR5 delivery), and the post-confirm discard is the
+ * same bare approve the Approve primary posts. Kept pure (no React, no
  * App import) so the §8C handler-exhaustiveness test runs in the plain
  * `bun test` lane: every id the spec can emit must resolve here, and an id
  * added to `decisionSpec.ts` without a route fails the exhaustive switch.
  */
 /**
- * Whether the runtime delivers approve-carrying notes. Hardcoded false until
- * PR5 ships the two-runtime delivery + the `/api/diff`-family advert
- * (spec §6.4); flipping it without that server work would render
- * approve-carrying items whose notes four of the runtimes still discard.
- * PR5 replaces this constant with the server advert read AND must mark the
- * `approve-with-notes` route implemented in the same change —
- * `reviewDecision.test.ts` fails on an advert that outruns delivery.
+ * Reads the `approvalNotesSupported` capability advert off a diff payload
+ * (`/api/diff` and the switch/PR family — the server echoes it on all four).
+ * Anything but a literal `true` reads as false: an OLD server that never
+ * sends the field advertises "not capable" and the client renders no
+ * approve-carrying items — exactly the PR3 behavior. A NEW server against an
+ * old client changes nothing either (the field is simply ignored). Pinned by
+ * `reviewDecision.test.ts`.
  */
-export const REVIEW_APPROVAL_NOTES_SUPPORTED = false;
+export function readApprovalNotesAdvert(value: unknown): boolean {
+  return value === true;
+}
 
 export type ReviewDecisionRoute =
   /** The adaptive primary: Approve at zero, Send Feedback otherwise. */
@@ -32,14 +35,15 @@ export type ReviewDecisionRoute =
   /** Commit the note as a scope:'general' CodeAnnotation, then submit on the
    *  next render (the payload builders close over `allAnnotations`). */
   | { kind: 'note' }
-  /** Post-confirm discard: the plain LGTM approve (annotations dropped). */
+  /** Post-confirm discard: the bare approve (annotations dropped). */
   | { kind: 'discard' }
-  /** Approve with the live feedback riding along. Capability-gated: the spec
-   *  emits its ids only when `approvalNotesSupported`, which no review server
-   *  advertises until PR5 (spec §6.4). `implemented: false` marks the App
-   *  wiring as a refusal — the contract test pins that the advert never
-   *  emits an id whose route is unimplemented. */
-  | { kind: 'approve-with-notes'; implemented: false };
+  /** Approve with content riding along (PR5 delivery, spec §6.4). The spec
+   *  emits these ids only when the server advertises `approvalNotesSupported`
+   *  — i.e. when this session's decision consumer prints/sends approve-time
+   *  feedback instead of discarding it. `withAnnotations` distinguishes
+   *  "Approve with notes" (the live annotations + their export ride the
+   *  approval) from "Approve with a note…" (the composer note alone). */
+  | { kind: 'approve-with-notes'; withAnnotations: boolean };
 
 export function resolveReviewDecisionAction(id: DecisionActionId): ReviewDecisionRoute {
   switch (id) {
@@ -50,13 +54,58 @@ export function resolveReviewDecisionAction(id: DecisionActionId): ReviewDecisio
       // The two differ only by state (empty vs feedback), never by transport.
       return { kind: 'note' };
     case 'note-with-approval':
+      return { kind: 'approve-with-notes', withAnnotations: false };
     case 'approve-with-notes':
-      // Both approve-carrying items land on the same PR5 delivery path; until
-      // the advert flips, neither id is ever emitted.
-      return { kind: 'approve-with-notes', implemented: false };
+      return { kind: 'approve-with-notes', withAnnotations: true };
     case 'discard-and-finish':
       return { kind: 'discard' };
   }
+}
+
+export interface ReviewApprovalBodyInput {
+  draftGeneration: number;
+  /** Composer note ("Approve with a note…"); whitespace-only means none. */
+  note?: string;
+  /** "Approve with notes": the live annotations ride the approval. */
+  withAnnotations: boolean;
+  /** The same export Send Feedback posts — what the agent reads as guidance. */
+  feedbackMarkdown: string;
+  annotations: CodeAnnotation[];
+}
+
+/**
+ * The `/api/feedback` body for every approval (PR5 delivery, spec §6.4).
+ *
+ * The pre-PR5 client sent the placeholder `'LGTM - no changes requested.'` on
+ * every approval; with consumers now printing approve-time feedback, that
+ * placeholder would be appended to every bare approval, so it is gone:
+ * a bare approval sends `feedback: ''`, which is also what finally makes the
+ * archive's `lgtm` decision reachable and stops bare approvals writing a
+ * sidecar (spec §6.2 fact 1). "Approve with a note…" sends the note as the
+ * feedback; "Approve with notes" sends the live annotation export as the
+ * feedback with the annotations riding for archive provenance.
+ */
+export function buildReviewApprovalBody(input: ReviewApprovalBodyInput): {
+  draftGeneration: number;
+  approved: true;
+  feedback: string;
+  annotations: unknown[];
+} {
+  const note = input.note?.trim() ?? '';
+  if (input.withAnnotations) {
+    return {
+      draftGeneration: input.draftGeneration,
+      approved: true,
+      feedback: input.feedbackMarkdown,
+      annotations: input.annotations,
+    };
+  }
+  return {
+    draftGeneration: input.draftGeneration,
+    approved: true,
+    feedback: note,
+    annotations: [],
+  };
 }
 
 /**

@@ -16,11 +16,12 @@ import { FeedbackButton, ApproveButton, ExitButton } from '@plannotator/ui/compo
 import { buildDecisionSpec, type DecisionActionId, type DecisionMenuItem } from '@plannotator/ui/utils/decisionSpec';
 import { DecisionControl, DecisionNoteDialog, type DecisionHandler } from '@plannotator/ui/components/DecisionControl';
 import {
+  buildReviewApprovalBody,
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
   createGeneralReviewComment,
+  readApprovalNotesAdvert,
   resolveReviewDecisionAction,
-  REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from './reviewDecision';
 import { useUpdateCheck } from '@plannotator/ui/hooks/useUpdateCheck';
 import { storage } from '@plannotator/ui/utils/storage';
@@ -620,6 +621,11 @@ const ReviewApp: React.FC = () => {
   const [compactDecisionComposer, setCompactDecisionComposer] = useState<DecisionMenuItem['id'] | null>(null);
   const [compactDecisionConfirm, setCompactDecisionConfirm] = useState<DecisionMenuItem['id'] | null>(null);
   const [sharingEnabled, setSharingEnabled] = useState(true);
+  // Server capability advert (spec §6.4): does this session's decision
+  // consumer deliver approve-time feedback? Defaults false so an old server
+  // that never sends the field renders no approve-carrying items (PR3
+  // behavior); read off every diff payload that carries it.
+  const [approvalNotesSupported, setApprovalNotesSupported] = useState(false);
   const [repoInfo, setRepoInfo] = useState<{ display: string; branch?: string } | null>(null);
 
   useEffect(() => {
@@ -1825,6 +1831,7 @@ const ReviewApp: React.FC = () => {
         diffOptions?: DiffOption[];
         agentCwd?: string | null;
         sharingEnabled?: boolean;
+        approvalNotesSupported?: boolean;
         repoInfo?: { display: string; branch?: string };
         prMetadata?: PRMetadata;
         prStackInfo?: PRStackInfo | null;
@@ -1883,6 +1890,7 @@ const ReviewApp: React.FC = () => {
         }
         if (data.agentCwd !== undefined) setAgentCwd(data.agentCwd);
         if (data.sharingEnabled !== undefined) setSharingEnabled(data.sharingEnabled);
+        setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
         if (data.repoInfo) setRepoInfo(data.repoInfo);
         updatePRSession({
           ...(data.prMetadata && { prMetadata: data.prMetadata }),
@@ -2588,6 +2596,7 @@ const ReviewApp: React.FC = () => {
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
         baseBehindRemote?: boolean;
+        approvalNotesSupported?: boolean;
         superseded?: boolean;
       };
 
@@ -2603,6 +2612,12 @@ const ReviewApp: React.FC = () => {
       // switches never get here either, keeping the memo for a later retry.
       if (!isCommitDiffType(data.diffType)) preCommitDiffRef.current = null;
       setSnapshotId(data.snapshotId);
+      // Session-constant in practice, but re-read from any payload that
+      // carries it so the client stays in lockstep with whatever it last
+      // applied (the server echoes the advert on the whole diff family).
+      if (data.approvalNotesSupported !== undefined) {
+        setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
+      }
 
       const nextFiles = orderFilesBySections(parseDiffToFiles(data.rawPatch), data.sections);
       // Rule 5 of auto-mark-viewed: a checkmark on content that has since
@@ -3561,19 +3576,26 @@ const ReviewApp: React.FC = () => {
     }
   }, [getDraftGeneration]);
 
-  // Approve without feedback (LGTM)
-  const handleApprove = useCallback(async () => {
+  // Approve — bare (LGTM), with a composer note, or with the live annotations
+  // riding along (PR5 delivery, spec §6.4). The old LGTM placeholder is gone:
+  // consumers now print approve-time feedback, so a bare approval must send
+  // `feedback: ''` (which also makes the archive's `lgtm` decision reachable
+  // and stops bare approvals writing a sidecar). Payload shape is the pure
+  // buildReviewApprovalBody, so the delivery contract is testable without
+  // mounting the App.
+  const handleApprove = useCallback(async (options?: { note?: string; withAnnotations?: boolean }) => {
     setIsApproving(true);
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(buildReviewApprovalBody({
           draftGeneration: getDraftGeneration(),
-          approved: true,
-          feedback: 'LGTM - no changes requested.', // unused — integrations branch on `approved` flag
-          annotations: [],
-        }),
+          note: options?.note,
+          withAnnotations: options?.withAnnotations === true,
+          feedbackMarkdown,
+          annotations: allAnnotations,
+        })),
       });
       if (res.ok) {
         setSubmitted('approved');
@@ -3586,7 +3608,7 @@ const ReviewApp: React.FC = () => {
       setTimeout(() => setCopyFeedback(null), 2000);
       setIsApproving(false);
     }
-  }, [getDraftGeneration]);
+  }, [getDraftGeneration, feedbackMarkdown, allAnnotations]);
 
   // --- The unified review decision control, agent mode (spec §3.2/§4) ------
   // One primary, one callback: the header's left segment, the global
@@ -3694,18 +3716,17 @@ const ReviewApp: React.FC = () => {
       }
       case 'discard':
         // The DecisionControl / compact ConfirmDialog has already confirmed;
-        // handleApprove posts the plain LGTM with `annotations: []`.
+        // the bare approve posts `feedback: '', annotations: []`.
         void handleApprove();
         return;
       case 'approve-with-notes':
-        // Unreachable until PR5 (spec §6.4): buildDecisionSpec emits these
-        // ids only when approvalNotesSupported, and routing them onto today's
-        // handleApprove would silently discard the reviewer's notes. Refuse
-        // loudly rather than approve; reviewDecision.test.ts pins that the
-        // advert never emits an id whose route is still unimplemented.
-        console.error(
-          '[plannotator] approve-with-notes route reached while the approval-notes advert is off — PR5 must implement delivery before flipping the advert',
-        );
+        // PR5 delivery (spec §6.4): reachable only when the server advertised
+        // approvalNotesSupported — the session's consumer prints/sends the
+        // approve-time feedback these carry. "Approve with notes" ships the
+        // live annotations + their export; "Approve with a note…" ships the
+        // composer note alone.
+        if (submitted || busyWithDecision) return;
+        void handleApprove({ note, withAnnotations: action.withAnnotations });
         return;
     }
   }, [busyWithDecision, commitReviewNote, handleApprove, submitPrimaryDecision, submitted]);
@@ -3715,9 +3736,10 @@ const ReviewApp: React.FC = () => {
     gate: true, // review's primary positive decision IS approval
     count: totalAnnotationCount,
     hasFeedback: totalAnnotationCount > 0,
-    // Hardcoded false until PR5 (see the constant's doc in reviewDecision.ts).
-    approvalNotesSupported: REVIEW_APPROVAL_NOTES_SUPPORTED,
-  }), [totalAnnotationCount]);
+    // The server advert (spec §6.4) — false until a capable server says so,
+    // so approve-carrying items never render where notes would be discarded.
+    approvalNotesSupported,
+  }), [totalAnnotationCount, approvalNotesSupported]);
 
   const reviewDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
     'primary': () => runReviewDecisionAction('primary'),
