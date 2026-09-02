@@ -1,0 +1,452 @@
+/**
+ * Review (agent-mode) decision-control wiring (DOM_TESTS=1) — spec §8D review
+ * payloads + E16-review, through the real posted /api/feedback body.
+ *
+ * Regressions each test guards:
+ *  - Empty-state `Approve` must post the byte-identical legacy LGTM body
+ *    (`approved: true`, the placeholder feedback, `annotations: []`): every
+ *    consumer branches on the `approved` flag and PR5's placeholder removal
+ *    is deliberately NOT in this PR (spec §6.4).
+ *  - `Send Feedback` must post the live annotations with `approved: false` —
+ *    the state where the old header offered a data-destroying Approve.
+ *  - `Request changes…` must deliver the note as a `scope:'general'`
+ *    CodeAnnotation with the ''/0/0 sentinels riding the annotations array
+ *    AND inside the exported `## General` section, one render after the
+ *    commit — a same-tick submit posts the pre-note payload and silently
+ *    drops it (#1449 transport).
+ *  - The discard confirm must post the plain LGTM (empty annotations), and
+ *    nothing before the confirm.
+ *  - Mod+Enter always equals the visible primary.
+ *  - Approve-carrying menu items must be absent while the server does not
+ *    advertise approval-note delivery (four runtimes still discard feedback
+ *    on approve — spec §2.2's "never render an item that silently drops
+ *    content").
+ *  - Compact/touch must offer a visible positive decision row at zero and it
+ *    must post (E16-review: touch has no Mod+Enter).
+ */
+import { afterAll, afterEach, describe, expect, mock, test } from "bun:test";
+import React, { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import {
+  resetStorageBackend,
+  setStorageBackend,
+  type StorageBackend,
+} from "@plannotator/ui/utils/storage";
+
+// Vite-only virtual module (`?worker&inline`) — bun cannot resolve it, so the
+// pool hooks are stubbed exactly like AllFilesCodeView.lifecycle.test.tsx does.
+mock.module("./workerPool", () => ({
+  useIsWorkerPoolReadyOrDisabled: () => true,
+  useWorkerPoolThemeSync: () => {},
+}));
+// Image assets only Vite can load; the values are never asserted.
+mock.module("@plannotator/ui/assets/workspaces.webp", () => ({ default: "workspaces.webp" }));
+mock.module("@plannotator/ui/assets/review-sections.png", () => ({ default: "review-sections.png" }));
+mock.module("@plannotator/ui/assets/review-tree.png", () => ({ default: "review-tree.png" }));
+
+const hasDom = typeof document !== "undefined";
+
+const appModule = hasDom ? await import("./App") : null;
+const App = appModule?.default as typeof import("./App")["default"];
+const originalFetch = globalThis.fetch;
+const originalEventSource = globalThis.EventSource;
+const originalMatchMedia = hasDom ? window.matchMedia : undefined;
+
+const memory = new Map<string, string>();
+const memoryBackend: StorageBackend = {
+  getItem: (key) => memory.get(key) ?? null,
+  setItem: (key, value) => void memory.set(key, value),
+  removeItem: (key) => void memory.delete(key),
+};
+
+/** Suppress the one-time dialog chain (guide intro → look-and-feel → review
+ *  setup → edit mode) so the header is interactable on first render. */
+function seedFirstRunSeen(): void {
+  memory.set("plannotator-plan-look-choice-resolved", "true");
+  memory.set("plannotator-guide-intro-seen", "2");
+  memory.set("plannotator-guide-hint-acked", "true");
+  memory.set("plannotator-review-setup-seen", "true");
+  memory.set("plannotator-edit-mode-announcement-seen", "3");
+  memory.set("plannotator-review-dest-spotlight-seen", "1");
+}
+
+/** External annotations delivered as the stream's opening snapshot, so a test
+ *  can seed the session with pre-existing findings without driving the diff
+ *  annotation flow. Read by the EventSource double at construction time. */
+let seededExternalAnnotations: unknown[] = [];
+
+class StubEventSource {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSED = 2;
+
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSED = 2;
+  readonly readyState = StubEventSource.OPEN;
+  readonly url: string;
+  readonly withCredentials = false;
+  onerror: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onopen: ((event: Event) => void) | null = null;
+
+  constructor(url: string | URL) {
+    this.url = String(url);
+    if (this.url.includes("external-annotations")) {
+      const payload = seededExternalAnnotations;
+      if (payload.length > 0) {
+        setTimeout(() => {
+          this.onmessage?.({
+            data: JSON.stringify({ type: "snapshot", annotations: payload }),
+          } as MessageEvent);
+        }, 0);
+      }
+    }
+  }
+
+  addEventListener(): void {}
+  close(): void {}
+  dispatchEvent(): boolean { return true; }
+  removeEventListener(): void {}
+}
+
+interface SubmittedBody {
+  endpoint: "feedback" | "exit";
+  approved?: boolean;
+  feedback?: string;
+  annotations?: Array<{
+    id?: string;
+    type?: string;
+    scope?: string;
+    filePath?: string;
+    lineStart?: number;
+    lineEnd?: number;
+    text?: string;
+  }>;
+}
+
+let submissions: SubmittedBody[] = [];
+
+const PATCH = [
+  "diff --git a/src/parse.ts b/src/parse.ts",
+  "index 0000001..0000002 100644",
+  "--- a/src/parse.ts",
+  "+++ b/src/parse.ts",
+  "@@ -1 +1 @@",
+  "-a",
+  "+b",
+  "",
+].join("\n");
+
+const EXTERNAL_FINDING = {
+  id: "ext-1",
+  type: "comment",
+  filePath: "src/parse.ts",
+  lineStart: 1,
+  lineEnd: 1,
+  side: "new",
+  text: "still drops null",
+  createdAt: 1,
+  source: "eslint",
+};
+
+function makeFetch(): typeof fetch {
+  // SAFETY: the app only ever calls fetch(input, init); the double implements
+  // that call signature and not `fetch.preconnect`.
+  const impl = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const rawUrl = input instanceof Request ? input.url : String(input);
+    if (rawUrl.startsWith("https://")) return new Response(null, { status: 404 });
+
+    const url = new URL(rawUrl, "http://localhost");
+    if (url.pathname === "/api/diff") {
+      return Response.json({
+        rawPatch: PATCH,
+        gitRef: "HEAD",
+        snapshotId: "snap-1",
+        origin: "claude-code",
+        diffType: "uncommitted",
+        base: null,
+        hideWhitespace: false,
+      });
+    }
+    if (url.pathname === "/api/diff/fresh") return Response.json({ fresh: true });
+    if (url.pathname === "/api/ai/capabilities") return Response.json({ available: false, providers: [] });
+    if (url.pathname === "/api/draft") return Response.json({ error: "Not found" }, { status: 404 });
+    if (url.pathname === "/api/feedback") {
+      submissions.push({
+        endpoint: "feedback",
+        ...(JSON.parse(String(init?.body ?? "{}")) as Omit<SubmittedBody, "endpoint">),
+      });
+      return Response.json({ ok: true });
+    }
+    if (url.pathname === "/api/exit") {
+      submissions.push({ endpoint: "exit" });
+      return Response.json({ ok: true });
+    }
+    return Response.json({});
+  };
+  return impl as unknown as typeof fetch;
+}
+
+let root: Root | null = null;
+let host: HTMLElement | null = null;
+
+function primaryButton(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-decision-primary]");
+}
+
+function caretButton(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>("[data-decision-caret]");
+}
+
+function noteInput(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>("[data-decision-note-input]");
+}
+
+function menuItem(labelPart: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'))
+    .find((el) => el.textContent?.includes(labelPart));
+}
+
+async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function mount(waitFor: () => unknown): Promise<void> {
+  setStorageBackend(memoryBackend);
+  seedFirstRunSeen();
+  globalThis.fetch = makeFetch();
+  // SAFETY: the App only uses EventSource's constructor, handlers, and close.
+  globalThis.EventSource = StubEventSource as unknown as typeof EventSource;
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  await act(async () => {
+    root?.render(<App />);
+  });
+  for (let attempt = 0; attempt < 40 && !waitFor(); attempt += 1) {
+    await settle();
+  }
+  if (!waitFor()) throw new Error("app did not finish mounting");
+}
+
+const mountReview = () => mount(() => caretButton());
+
+async function openMenu(): Promise<void> {
+  await act(async () => caretButton()!.click());
+  await settle();
+}
+
+async function openComposer(labelPart: string): Promise<void> {
+  await openMenu();
+  const item = menuItem(labelPart);
+  if (!item) throw new Error(`menu item containing "${labelPart}" not found`);
+  await act(async () => item.click());
+  await settle();
+}
+
+async function typeNote(text: string): Promise<void> {
+  const input = noteInput();
+  if (!input) throw new Error("note field is not open");
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    setter.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function pressNoteKey(key: string, init: KeyboardEventInit = {}): Promise<void> {
+  const input = noteInput();
+  if (!input) throw new Error("note field is not open");
+  await act(async () => {
+    input.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init }));
+  });
+  await settle();
+}
+
+// Frozen copy (maintainer-approved, spec §6.4): today's approve placeholder.
+// PR5 removes it together with the consumer changes; until then this exact
+// string is what every runtime receives on approve.
+const LGTM_PLACEHOLDER = "LGTM - no changes requested.";
+
+afterEach(async () => {
+  if (root) await act(async () => root?.unmount());
+  root = null;
+  host?.remove();
+  host = null;
+  globalThis.fetch = originalFetch;
+  globalThis.EventSource = originalEventSource;
+  if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
+  submissions = [];
+  seededExternalAnnotations = [];
+  memory.clear();
+  resetStorageBackend();
+  if (hasDom) document.body.replaceChildren();
+});
+
+afterAll(() => {
+  resetStorageBackend();
+});
+
+describe.if(hasDom)("review decision control (agent mode)", () => {
+  test("empty-state Approve posts the legacy LGTM body", async () => {
+    await mountReview();
+
+    expect(primaryButton()!.title).toContain("Approve");
+    await act(async () => primaryButton()!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.endpoint).toBe("feedback");
+    expect(body.approved).toBe(true);
+    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(body.annotations).toEqual([]);
+  });
+
+  test("with annotations the primary posts the real feedback body", async () => {
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    expect(primaryButton()!.title).toContain("Send");
+    await act(async () => primaryButton()!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.approved).toBe(false);
+    expect((body.annotations ?? []).some((a) => a.id === "ext-1")).toBe(true);
+    expect(body.feedback).toContain("still drops null");
+  });
+
+  test("Request changes… delivers the note as a scope:'general' sentinel annotation and in the export", async () => {
+    await mountReview();
+
+    await openComposer("Request changes");
+    await typeNote("rebase on main before merging");
+    await pressNoteKey("Enter", { metaKey: true });
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.approved).toBe(false);
+    const notes = (body.annotations ?? []).filter((a) => a.scope === "general");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({
+      scope: "general",
+      filePath: "",
+      lineStart: 0,
+      lineEnd: 0,
+      text: "rebase on main before merging",
+    });
+    // The export the agent reads carries the note under ## General.
+    expect(body.feedback).toContain("## General");
+    expect(body.feedback).toContain("rebase on main before merging");
+  });
+
+  test("discard confirm posts the plain LGTM, and nothing before the confirm", async () => {
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    await openMenu();
+    const discardItem = menuItem("discard 1 annotation");
+    if (!discardItem) throw new Error("discard menu item not found");
+    await act(async () => discardItem.click());
+    await settle();
+
+    // Frozen copy (maintainer-approved): 'Discard & approve' is the confirm.
+    const confirm = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((el) => el.textContent === "Discard & approve");
+    if (!confirm) throw new Error("discard confirm did not open");
+    expect(submissions).toHaveLength(0); // nothing sent before the confirm
+    await act(async () => confirm.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.approved).toBe(true);
+    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(body.annotations).toEqual([]);
+  });
+
+  test("Mod+Enter fires the visible primary", async () => {
+    await mountReview();
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.approved).toBe(true);
+    expect(submissions[0]!.annotations).toEqual([]);
+  });
+
+  // Spec §2.2's single mechanism: until PR5 lands the server advert AND the
+  // consumer delivery, an approve-carrying item would silently discard its
+  // note on four runtimes — so it must not render at all.
+  test("approve-with-notes items are absent while the advert is off", async () => {
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    await openMenu();
+    expect(menuItem("Approve with notes")).toBeUndefined();
+    expect(menuItem("discard 1 annotation")).toBeDefined(); // the menu itself is live
+    await act(async () => {
+      document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    await settle();
+  });
+
+  test("empty-state menu carries only Request changes… (no Approve with a note…)", async () => {
+    await mountReview();
+
+    await openMenu();
+    expect(menuItem("Approve with a note")).toBeUndefined();
+    expect(menuItem("Request changes")).toBeDefined();
+  });
+
+  // Guards the exact regression this project exists to fix on the surface
+  // that has no Mod+Enter (E16-review): compact at zero must offer a visible
+  // positive decision row, and it must post the legacy approve body.
+  test("compact touch offers a positive decision row at zero and it posts", async () => {
+    // SAFETY: implements the MediaQueryList surface the shell hooks consume;
+    // coarse-pointer matches put the app in its compact touch layout.
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("pointer: coarse"),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => true,
+    })) as unknown as typeof window.matchMedia;
+
+    await mount(() => document.querySelector('button[aria-label="Options"]'));
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!.click();
+    });
+    await settle();
+
+    // Frozen copy (maintainer-approved): the positive row is 'Approve'.
+    const positive = Array.from(document.querySelectorAll<HTMLButtonElement>("button"))
+      .find((el) => el.textContent?.trim() === "Approve");
+    expect(positive).toBeDefined();
+    await act(async () => positive!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.approved).toBe(true);
+    expect(submissions[0]!.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(submissions[0]!.annotations).toEqual([]);
+  });
+});
