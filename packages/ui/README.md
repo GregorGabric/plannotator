@@ -180,6 +180,11 @@ on the left and its existing Global comment / Copy actions on the right:
 />
 ```
 
+The trailing action cluster keeps full-width labels unless you also pass
+`actionsLabelMode` (`'full' | 'short' | 'icon'`); the header measures the real
+cluster either way, so omitting it costs earlier stacking on narrow columns,
+never breakage.
+
 The header reserves its real responsive height before document content. It
 keeps active labels in the wide layout, switches the compact toolstrip to
 icons in the tight layout, and stacks the two clusters when narrow or wrapped.
@@ -239,7 +244,7 @@ npm install @plannotator/ui @plannotator/core
 - `@plannotator/core` — pure utils + types, zero deps, browser-safe (CI enforces no `node:` imports). Published.
 - `@plannotator/ui` — React components/hooks + theme + `configure()`. Depends on an exact published `@plannotator/core` version. Published.
 - `@plannotator/shared`, `@plannotator/ai` — stay private to the monorepo; `shared` re-exports `core`'s modules via shims so Plannotator's internals are untouched.
-- Currently `@plannotator/ui` 0.36.1 depends exactly on `@plannotator/core` 0.25.1. `core` is bumped only when something under `packages/core` changes, so `ui` can advance alone. Keep the published core version exact in `packages/ui/package.json`; do not use a `workspace:` protocol there, because a directly published manifest must remain installable outside this monorepo. Bun still links the matching local workspace during development. When both packages change, publish `core` first, then build and publish the UI tarball. See HANDOFF.md "Publishing & versioning" for the verification command.
+- Currently `@plannotator/ui` 0.37.0 depends exactly on `@plannotator/core` 0.25.1. `core` is bumped only when something under `packages/core` changes, so `ui` can advance alone. Keep the published core version exact in `packages/ui/package.json`; do not use a `workspace:` protocol there, because a directly published manifest must remain installable outside this monorepo. Bun still links the matching local workspace during development. When both packages change, publish `core` first, then build and publish the UI tarball. See HANDOFF.md "Publishing & versioning" for the verification command.
 
 ## The one rule
 
