@@ -238,6 +238,18 @@ describe("OpenCode CLI bridge helpers", () => {
     expect(approved.agent).toBe("build");
     expect(approved.message).toBe(getReviewApprovedPrompt("opencode"));
 
+    // PR5 delivery (spec §6.4, consumer #3): an approval carrying feedback
+    // appends it after the prompt — this bridge previously discarded it even
+    // though the CLI's JSON record always included it.
+    const approvedWithNotes = buildReviewPromptFromBridgeOutcome({
+      decision: "approved",
+      approved: true,
+      feedback: "Approved — rename the flag in a follow-up.",
+    });
+    expect(approvedWithNotes.message).toBe(
+      `${getReviewApprovedPrompt("opencode")}\n\nApproved — rename the flag in a follow-up.`,
+    );
+
     const localFeedback = buildReviewPromptFromBridgeOutcome({
       decision: "annotated",
       approved: false,

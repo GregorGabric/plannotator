@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseAnnotateArgs, type ParsedAnnotateArgs } from "@plannotator/shared/annotate-args";
 import {
+  composeReviewApprovedMessage,
   getAnnotateApprovedWithNotesPrompt,
   getAnnotateFileFeedbackPrompt,
   getAnnotateMessageFeedbackPrompt,
@@ -575,8 +576,10 @@ export function buildReviewPromptFromBridgeOutcome(outcome: CliReviewOutcome): {
   const targetAgent = resolveTargetAgent(outcome.agentSwitch);
 
   if (outcome.approved || outcome.decision === "approved") {
+    // PR5 delivery (spec §6.4, consumer #3): the CLI's JSON record carries
+    // feedback on approve; append it after the prompt instead of discarding.
     return {
-      message: getReviewApprovedPrompt("opencode"),
+      message: composeReviewApprovedMessage(getReviewApprovedPrompt("opencode"), outcome.feedback),
       ...(targetAgent && { agent: targetAgent }),
     };
   }

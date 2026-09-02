@@ -125,12 +125,14 @@ import {
 import { rmSync, realpathSync, existsSync } from "fs";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
 import {
+  composeReviewApprovedMessage,
   getReviewApprovedPrompt,
   getReviewDeniedSuffix,
   getPlanDeniedPrompt,
   getPlanToolName,
   buildPlanFileRule,
 } from "@plannotator/shared/prompts";
+import { supportsReviewApprovalNotes } from "./review-output";
 import { registerSession, unregisterSession, listSessions } from "@plannotator/server/sessions";
 import { openBrowser } from "@plannotator/server/browser";
 import { inlineHtmlLocalAssets } from "@plannotator/server/html-assets";
@@ -1050,6 +1052,9 @@ if (args[0] === "sessions") {
     worktreePool,
     sharingEnabled,
     shareBaseUrl,
+    // The approved branch below prints result.feedback after the prompt, so
+    // this CLI's origins may see approve-carrying menu items (spec §6.4).
+    approvalNotesSupported: supportsReviewApprovalNotes(detectedOrigin),
     htmlContent: reviewHtmlContent,
     onCleanup: worktreeCleanup,
     onReady: async (url, isRemote, port) => {
@@ -1088,7 +1093,10 @@ if (args[0] === "sessions") {
   if (result.exit) {
     console.log("Review session closed without feedback.");
   } else if (result.approved) {
-    console.log(getReviewApprovedPrompt(detectedOrigin));
+    // PR5 delivery (spec §6.4): the approved prompt, then the reviewer's
+    // approve-time notes when the decision carries any. A bare approval
+    // prints the prompt alone, byte-identical to before.
+    console.log(composeReviewApprovedMessage(getReviewApprovedPrompt(detectedOrigin), result.feedback));
   } else {
     console.log(result.feedback);
     // Append the verification-only suffix whenever the reviewer sent annotations to
@@ -1822,6 +1830,10 @@ if (args[0] === "sessions") {
     agentCwd,
     sharingEnabled: bridgeSharingEnabled,
     shareBaseUrl: bridgeShareBaseUrl,
+    // This branch's JSON record already carries feedback on approve; the
+    // discarding consumer was the bridge's prompt builder, updated in the
+    // same change (buildReviewPromptFromBridgeOutcome, spec §6.3 #3).
+    approvalNotesSupported: supportsReviewApprovalNotes("opencode"),
     htmlContent: reviewHtmlContent,
     opencodeClient: makeOpenCodeBridgeClient(input.agents),
     onReady: (url, isRemote, port) => {

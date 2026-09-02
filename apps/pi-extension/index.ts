@@ -666,10 +666,17 @@ export default function plannotator(pi: ExtensionAPI): void {
 								return;
 							}
 							if (result.approved) {
-								const { getReviewApprovedPrompt } = await loadPlannotatorPrompts();
+								// PR5 delivery (spec §6.4, consumer #4): the approved prompt,
+								// then the reviewer's approve-time notes when the decision
+								// carries any; bare approvals send the prompt alone.
+								const { composeReviewApprovedMessage, getReviewApprovedPrompt } =
+									await loadPlannotatorPrompts();
 								sendUserMessageWithCurrentSessionFallback(
 									pi,
-									getReviewApprovedPrompt("pi", loadConfig()),
+									composeReviewApprovedMessage(
+										getReviewApprovedPrompt("pi", loadConfig()),
+										result.feedback,
+									),
 									{ deliverAs: "followUp" },
 									"Plannotator code review feedback could not be sent",
 									origin,
