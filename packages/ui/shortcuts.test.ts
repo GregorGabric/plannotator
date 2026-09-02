@@ -101,7 +101,7 @@ describe('shortcuts', () => {
 
     expect(getShortcut(planReviewSettingsShortcutRegistry, 'plan-review-editor-settings', 'submitPlan')?.description).toBe('Approve / Send feedback');
     expect(getShortcut(planReviewSettingsShortcutRegistry, 'plan-review-editor-settings', 'submitAnnotations')).toBeUndefined();
-    expect(getShortcut(annotateSettingsShortcutRegistry, 'annotate-editor-settings', 'submitAnnotations')?.description).toBe('Send annotations');
+    expect(getShortcut(annotateSettingsShortcutRegistry, 'annotate-editor-settings', 'submitAnnotations')?.description).toBe('Done / Send feedback — whichever the header shows');
     expect(getShortcut(annotateSettingsShortcutRegistry, 'annotate-editor-settings', 'submitPlan')).toBeUndefined();
     expect(getShortcut(annotateSettingsShortcutRegistry, 'annotate-sidebar', 'toggleContents')?.description).toBe('Toggle Contents sidebar');
 
@@ -393,15 +393,18 @@ describe('shortcuts', () => {
     expect(preventDefaultCalls).toBe(2);
   });
 
-  // The decision-control scope ships in PR1 unmounted; PR2/PR3 add it to the
-  // annotate and review settings registries. This guards that registration in
-  // advance: a duplicate scope id or non-normalized binding token would only
-  // surface as a throw at app startup otherwise.
-  it('decision-control scope composes cleanly into both adopting registries', () => {
+  // PR2 registered the decision-control scope in the annotate settings
+  // registry (the entries feed the help modal and the generated marketing
+  // shortcuts page — bindings must match shipped behavior); PR3 adds it to
+  // review. Guards both the live registration and the pending one: a
+  // duplicate scope id or non-normalized binding token would only surface as
+  // a throw at app startup otherwise.
+  it('decision-control scope is registered for annotate and composes cleanly for review', () => {
     expect(decisionControlShortcuts.id).toBe('decision-control');
-    for (const registry of [annotateSettingsShortcutRegistry, reviewSettingsShortcutRegistry]) {
-      expect(validateShortcutRegistry([...registry, decisionControlShortcuts])).toEqual([]);
-    }
+    expect([...annotateSettingsShortcutRegistry].some((scope) => scope.id === 'decision-control')).toBe(true);
+    expect(validateShortcutRegistry([...annotateSettingsShortcutRegistry])).toEqual([]);
+    expect([...reviewSettingsShortcutRegistry].some((scope) => scope.id === 'decision-control')).toBe(false);
+    expect(validateShortcutRegistry([...reviewSettingsShortcutRegistry, decisionControlShortcuts])).toEqual([]);
   });
 
   it('leaves annotation mode alone when Alt is held', () => {
