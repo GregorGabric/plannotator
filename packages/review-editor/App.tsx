@@ -3940,6 +3940,11 @@ const ReviewApp: React.FC = () => {
     // compact row are all no-ops — the spec records the mute; the menu's
     // Request changes… remains the live path.
     if (id === 'primary' && platformDecisionSpec.primary.muted) return;
+    // Structural defense for the muted approve items: the DOM disables them,
+    // but a handler invocation must be inert on its own too (compact rows and
+    // any future caller included) — resolve the mute from the live spec, not
+    // from whichever surface fired.
+    if (platformDecisionSpec.items.some((item) => item.id === id && item.muted)) return;
     const mode = resolvePlatformDecisionAction(id, totalAnnotationCount > 0);
     if (mode) openPlatformDialog(mode);
   }, [busyWithPlatformDecision, openPlatformDialog, platformDecisionSpec, submitted, totalAnnotationCount]);

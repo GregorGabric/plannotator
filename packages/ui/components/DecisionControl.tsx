@@ -1,7 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown, Loader2, Send } from 'lucide-react';
 import { Button } from './ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from './ui/dialog';
+import { Tooltip } from './Tooltip';
 import { ActionMenuDivider, ActionMenuItem } from './ActionMenu';
 import { ConfirmDialog, type ConfirmDialogProps } from './ConfirmDialog';
 import { useDismissablePopover } from '../hooks/useDismissablePopover';
@@ -421,27 +422,31 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
 
   const primaryVariant = toneButtonVariant(spec.primary.tone);
   const Confirm = confirmDialog ?? ConfirmDialog;
+  const mutedReasonId = useId();
 
-  return (
-    <div ref={rootRef} className="relative inline-flex">
-      {/* Left segment — the incumbent primary. It never opens the popover and,
-          deliberately, never fades or disables while the popover is open: the
-          popover holds only ALTERNATE decisions, so the primary keeps its
-          meaning and stays clickable (reverses the held branches' fade, which
-          existed because their panel duplicated the primary's own action). */}
+  // Left segment — the incumbent primary. It never opens the popover and,
+  // deliberately, never fades or disables while the popover is open: the
+  // popover holds only ALTERNATE decisions, so the primary keeps its
+  // meaning and stays clickable (reverses the held branches' fade, which
+  // existed because their panel duplicated the primary's own action).
+  const primaryButton = (
       <Button
         variant={primaryVariant}
         size="xs"
         onClick={() => {
           // Muted (platform self-approval, PR6 §3.4): the click is a no-op.
-          // Deliberately NOT `disabled` — a disabled button loses its native
-          // title tooltip, which carries the reason.
+          // Deliberately NOT `disabled` — a disabled button would also lose
+          // hover/focus, and the Tooltip below carries the reason.
           if (spec.primary.muted) return;
           handlers.primary?.();
         }}
         disabled={busy}
         aria-disabled={spec.primary.muted || undefined}
-        title={spec.primary.title}
+        // Muted: the reason renders as a real Tooltip (hover + keyboard
+        // focus) and as an aria-describedby description — a native title on
+        // top of that would double the tooltip.
+        title={spec.primary.muted ? undefined : spec.primary.title}
+        aria-describedby={spec.primary.muted ? mutedReasonId : undefined}
         data-decision-primary="true"
         iconLeft={
           isLoading
@@ -481,6 +486,27 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
           </span>
         )}
       </Button>
+  );
+
+  return (
+    <div ref={rootRef} className="relative inline-flex">
+      {spec.primary.muted ? (
+        <>
+          {/* The self-approval reason must be reachable by keyboard and AT,
+              not just mouse hover: the Tooltip opens on hover AND
+              focus-visible (Base UI wires floating-ui's useFocus on the
+              trigger), and the hidden span makes the same sentence the
+              button's persistent accessible description. */}
+          <Tooltip content={spec.primary.title} side="bottom" wide>
+            {primaryButton}
+          </Tooltip>
+          <span id={mutedReasonId} hidden>
+            {spec.primary.title}
+          </span>
+        </>
+      ) : (
+        primaryButton
+      )}
 
       {/* Right segment — the caret. */}
       <Button

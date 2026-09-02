@@ -258,8 +258,12 @@ contradiction. The legacy placeholder is filtered there so a stale built client 
 filler framed as guidance. The standalone dev server (`apps/review/server`) is the exception:
 it emits the raw decision JSON with the feedback unfiltered and does not route through the
 composer. Compact/touch rows are generated from the same spec, so a visible positive decision
-exists in every state; composer rows open `DecisionNoteDialog`. Platform (PR) mode keeps its own
-`Close / Post Comments / Approve` row and submission dialog for now.
+exists in every state; composer rows open `DecisionNoteDialog`. Platform (PR) mode renders the
+same ghost-X + `DecisionControl` shape from `buildDecisionSpec`'s platform arm, with **no
+composer items ever**: every menu action opens the existing `ReviewSubmissionDialog` (per-target
+state, retry, "leave PR open" toggle — whose general-comment textarea is the only note field on
+that side), and the self-approval mute is preserved — muted primary/items with the "You can't
+approve your own {PR/MR}" reason, `Request changes…` / `Post comments, then…` always live.
 
 Interaction-model changes worth knowing (F8 and siblings): the agent-mode `Approve` primary
 follows the `FeedbackButton` responsive pattern and is **icon-only below the `lg` breakpoint**,

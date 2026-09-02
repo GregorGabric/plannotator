@@ -765,8 +765,14 @@ describe.if(hasDom)("review decision control (platform mode)", () => {
 
     const primary = primaryButton()!;
     expect(primary.getAttribute("aria-disabled")).toBe("true");
-    // Frozen copy (maintainer-approved): the self-approval reason rides the tooltip.
-    expect(primary.title).toBe("You can't approve your own pull request on GitHub.");
+    // Frozen copy (maintainer-approved): the self-approval reason. The muted
+    // primary carries it as a persistent accessible description (the visual
+    // tooltip is the Tooltip component, not a native title).
+    const describedBy = primary.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)?.textContent)
+      .toBe("You can't approve your own pull request on GitHub.");
+    expect(primary.title).toBe(""); // no native title doubling the tooltip
 
     await act(async () => primary.click());
     await settle();
@@ -782,6 +788,9 @@ describe.if(hasDom)("review decision control (platform mode)", () => {
     const requestItem = menuItem("Request changes");
     if (!requestItem) throw new Error("Request changes… did not render");
     expect(requestItem.disabled).toBe(false);
+    // Roving focus skips the dead row: initial focus lands on the first
+    // NON-disabled row, so keyboard users are never stranded on the mute.
+    expect(document.activeElement).toBe(requestItem);
     await act(async () => requestItem.click());
     await settle();
     expect(submissionDialogOpen("Post Review Comments")).toBe(true);

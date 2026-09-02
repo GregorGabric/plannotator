@@ -14,7 +14,6 @@ interface FeedbackButtonProps {
   loadingLabel?: string;
   shortLoadingLabel?: string;
   title?: string;
-  muted?: boolean;
   labelBreakpoint?: ToolbarLabelBreakpoint;
 }
 
@@ -27,7 +26,6 @@ export const FeedbackButton: React.FC<FeedbackButtonProps> = ({
   loadingLabel = 'Sending...',
   shortLoadingLabel,
   title = 'Send Feedback',
-  muted = false,
   labelBreakpoint = 'md',
 }) => (
   <Button
@@ -37,7 +35,6 @@ export const FeedbackButton: React.FC<FeedbackButtonProps> = ({
     disabled={disabled}
     title={title}
     iconLeft={<Send className="size-3.5" />}
-    className={cn(muted && 'opacity-50 cursor-not-allowed')}
   >
     {shortLabel ? (
       <>
@@ -65,8 +62,10 @@ export interface ApproveButtonProps {
   mobileLabel?: string;
   mobileLoadingLabel?: string;
   title?: string;
+  /** Kept for plan mode (packages/editor AppHeader) — the softened "you have
+   *  annotations" treatment. The old platform-mode `muted` prop died with
+   *  PR6 (DecisionControl owns the self-approval mute now). */
   dimmed?: boolean;
-  muted?: boolean;
   labelBreakpoint?: ToolbarLabelBreakpoint;
 }
 
@@ -80,7 +79,6 @@ export const ApproveButton: React.FC<ApproveButtonProps> = ({
   mobileLoadingLabel = '...',
   title,
   dimmed = false,
-  muted = false,
   labelBreakpoint = 'md',
 }) => (
   <Button
@@ -91,9 +89,8 @@ export const ApproveButton: React.FC<ApproveButtonProps> = ({
     title={title}
     iconLeft={<Check className="size-3.5" />}
     className={cn(
-      muted && 'opacity-40 cursor-not-allowed bg-muted text-muted-foreground hover:bg-muted',
-      disabled && !muted && 'bg-muted text-muted-foreground hover:bg-muted',
-      dimmed && !muted && !disabled && 'bg-success/50 text-success-foreground/70 hover:bg-success hover:text-success-foreground',
+      disabled && 'bg-muted text-muted-foreground hover:bg-muted',
+      dimmed && !disabled && 'bg-success/50 text-success-foreground/70 hover:bg-success hover:text-success-foreground',
     )}
   >
     <span className={labelBreakpoint === 'lg' ? 'lg:hidden' : 'md:hidden'}>
