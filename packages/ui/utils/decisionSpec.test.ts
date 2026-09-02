@@ -236,3 +236,63 @@ describe('buildDecisionSpec invariants', () => {
     }
   });
 });
+
+describe('buildDecisionSpec platform arm (PR6, §3.4)', () => {
+  const platformInput = (count: number, selfAuthored: boolean): DecisionSpecInput => ({
+    app: 'review',
+    gate: true,
+    count,
+    hasFeedback: count > 0,
+    approvalNotesSupported: false,
+    platform: { label: 'GitHub', mrLabel: 'PR', selfAuthored },
+  });
+
+  // §3.4's hard rule: platform mode NEVER gets the note composer — the
+  // submission dialog's general-comment field is the only note field on that
+  // side, and a second composer would double-post via buildFileScopedBody —
+  // and never a confirm or discard item (the dialog owns the outcome).
+  it('never emits a composer, a confirm, or a discard item — any count, self-authored or not', () => {
+    for (const count of [0, 1, 3]) {
+      for (const selfAuthored of [false, true]) {
+        const spec = buildDecisionSpec(platformInput(count, selfAuthored));
+        for (const item of spec.items) {
+          expect(item.composer).toBeUndefined();
+          expect(item.confirm).toBeUndefined();
+        }
+        expect(itemIds(spec)).not.toContain('discard-and-finish');
+      }
+    }
+  });
+
+  // Self-approval is a mute, never a removal, and never a dead end: the
+  // approve rows stay visible (muted, reason in subtitle/title) while a live
+  // comment-tone path remains in every state.
+  it('self-authorship mutes exactly the approve paths and always leaves a live row', () => {
+    for (const count of [0, 3]) {
+      const muted = buildDecisionSpec(platformInput(count, true));
+      const open = buildDecisionSpec(platformInput(count, false));
+      expect(itemIds(muted)).toEqual(itemIds(open)); // nothing removed
+      for (const item of muted.items) {
+        expect(!!item.muted).toBe(item.tone === 'success');
+      }
+      expect(muted.items.some((item) => !item.muted)).toBe(true);
+      if (count === 0) {
+        // The empty-state primary IS the approve: muted, reason in the tooltip.
+        expect(muted.primary.muted).toBe(true);
+        expect(muted.primary.title).toContain("You can't approve your own");
+      } else {
+        // Posting comments to one's own PR is allowed — the primary never mutes.
+        expect(muted.primary.muted).toBeUndefined();
+      }
+      expect(open.primary.muted).toBeUndefined();
+    }
+  });
+
+  // The platform posts to the forge API natively, so the approve rows must
+  // not gate on the agent-transport advert (the §3.4 "irrelevant" ruling).
+  it('ignores approvalNotesSupported', () => {
+    const base = platformInput(3, false);
+    expect(buildDecisionSpec({ ...base, approvalNotesSupported: true }))
+      .toEqual(buildDecisionSpec(base));
+  });
+});

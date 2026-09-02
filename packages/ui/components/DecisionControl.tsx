@@ -339,7 +339,11 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
   // back from the composer, confirm cancel — focus its first row.
   useEffect(() => {
     if (popover !== 'menu') return;
-    popoverRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus();
+    // :not(:disabled) — a muted (platform self-approval) row cannot take
+    // focus, so land on the first live row instead.
+    popoverRef.current
+      ?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')
+      ?.focus();
   }, [popover]);
 
   const selectItem = useCallback((item: DecisionMenuItem) => {
@@ -399,7 +403,7 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
       const keys = ['ArrowDown', 'ArrowUp', 'Home', 'End'];
       if (!keys.includes(event.key)) return;
       const items = Array.from(
-        popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+        popoverRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [],
       );
       if (items.length === 0) return;
       event.preventDefault();
@@ -428,8 +432,15 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
       <Button
         variant={primaryVariant}
         size="xs"
-        onClick={() => handlers.primary?.()}
+        onClick={() => {
+          // Muted (platform self-approval, PR6 §3.4): the click is a no-op.
+          // Deliberately NOT `disabled` — a disabled button loses its native
+          // title tooltip, which carries the reason.
+          if (spec.primary.muted) return;
+          handlers.primary?.();
+        }}
         disabled={busy}
+        aria-disabled={spec.primary.muted || undefined}
         title={spec.primary.title}
         data-decision-primary="true"
         iconLeft={
@@ -437,7 +448,11 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
             ? <Loader2 className="size-3.5 animate-spin" />
             : ICONS[spec.primary.icon]
         }
-        className="rounded-r-none border-r-0"
+        className={cn(
+          'rounded-r-none border-r-0',
+          // Same mute treatment the old platform ApproveButton wore.
+          spec.primary.muted && 'opacity-40 cursor-not-allowed bg-muted text-muted-foreground hover:bg-muted',
+        )}
       >
         {spec.primary.shortLabel ? (
           <>
@@ -509,6 +524,10 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
                     icon={ICONS[item.icon]}
                     label={item.label}
                     subtitle={item.subtitle}
+                    // Muted (platform self-approval): the row disables with
+                    // the reason already in its subtitle; sibling rows stay
+                    // live so the menu is never a dead end.
+                    disabled={item.muted}
                     className={itemToneClass(item.tone)}
                     onClick={() => selectItem(item)}
                   />
