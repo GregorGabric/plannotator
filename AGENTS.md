@@ -301,6 +301,27 @@ User annotates content, provides feedback
 Send Annotations → feedback sent to agent session
 ```
 
+### Annotate header decision control
+
+Every annotate surface's header decision is one adaptive split control, `DecisionControl`
+(`packages/ui/components/DecisionControl.tsx`), rendered from the pure `buildDecisionSpec`
+state→spec mapping (`packages/ui/utils/decisionSpec.ts`) beside a ghost-X Close: `Done` (or
+`Approve` in gate mode) with nothing to send, `Send Feedback · n` otherwise, with the alternate
+decisions and the in-place note composer behind the caret. One `submitPrimaryDecision()` callback
+serves the header primary, the global `Mod+Enter` handler, and the compact primary row, so
+keyboard and header can never disagree. Transport routing is pure in
+`packages/editor/annotateDecision.ts`: `Done` and every note post `/api/feedback` (a note becomes
+a `GLOBAL_COMMENT` at submit time with a one-render deferred submit — zero server change), so
+`formatAnnotateOutcome` shapes and strict-gate exit codes are byte-identical to the old
+keyboard-only zero submit; only gate-mode approvals reach `/api/approve`. The non-gated
+"Done with a note…" is distinguished from "Request changes…" solely by the approval-framing
+sentence (`buildCompleteAnnotateFeedback`'s `approvalFraming`), and the only confirm left is the
+explicit `Done/Approve, discard n annotations…` menu item (plus the pre-existing
+close-with-content warning). Compact/touch rows are generated from the same spec, so a visible
+positive decision exists in every state; composer rows open `DecisionNoteDialog`. The header flip
+predicate is `hasFeedbackToSend`, so feedback already delivered through the agent terminal shows
+the positive primary rather than a stale Send Feedback.
+
 ### Tolerant argument resolution
 
 Slash-command hosts forward raw user words to `plannotator annotate` verbatim (on Claude Code through a bash-substitution prefix that runs before the model sees anything), so non-strict invocations resolve their arguments in three tiers. The shared logic lives in `packages/shared/annotate-target.ts` (vendored to Pi) and is wired into the CLI's annotate branch plus the OpenCode and Pi command parsers:
