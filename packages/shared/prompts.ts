@@ -116,6 +116,33 @@ export function getReviewApprovedPrompt(
   });
 }
 
+/**
+ * The exact placeholder every pre-PR5 review client sent on approve
+ * (`packages/review-editor/App.tsx` `handleApprove`, removed in the same
+ * change that taught consumers to print approve-time feedback). Compatibility
+ * guard: a NEW consumer reading a decision produced by an OLD built client
+ * (stale bundled HTML against a newer binary) must not append this filler to
+ * every approval — it was never reviewer-authored content.
+ */
+export const LEGACY_REVIEW_APPROVAL_PLACEHOLDER = "LGTM - no changes requested.";
+
+/**
+ * PR5 approve-with-notes delivery (decision-control spec §6.4): every review
+ * consumer emits the approved prompt AND THEN the reviewer's approve-time
+ * feedback when one rides the decision. One shared composer so the four
+ * consumers (Claude Code CLI, OpenCode native, OpenCode CLI bridge, Pi —
+ * §6.3) cannot drift in format: prompt alone for a bare approval, otherwise
+ * prompt + blank line + the note.
+ */
+export function composeReviewApprovedMessage(
+  prompt: string,
+  feedback?: string | null,
+): string {
+  const note = typeof feedback === "string" ? feedback.trim() : "";
+  if (!note || note === LEGACY_REVIEW_APPROVAL_PLACEHOLDER) return prompt;
+  return `${prompt}\n\n${note}`;
+}
+
 export function getReviewDeniedSuffix(
   runtime?: PromptRuntime | null,
   config?: PlannotatorConfig,

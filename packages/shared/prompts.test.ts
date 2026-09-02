@@ -11,6 +11,8 @@ import {
   DEFAULT_ANNOTATE_APPROVED_PROMPT,
   DEFAULT_ANNOTATE_APPROVED_WITH_NOTES_PROMPT,
   DEFAULT_REVIEW_DENIED_SUFFIX,
+  LEGACY_REVIEW_APPROVAL_PLACEHOLDER,
+  composeReviewApprovedMessage,
   getConfiguredPrompt,
   getReviewApprovedPrompt,
   getPlanDeniedPrompt,
@@ -550,6 +552,33 @@ describe("mergePromptConfig (expanded)", () => {
     );
     expect(merged?.plan?.runtimes?.pi?.denied).toBe("Pi deny");
     expect(merged?.plan?.runtimes?.opencode?.denied).toBe("OC deny");
+  });
+});
+
+// ─── Approve-with-notes composition (PR5, spec §6.4) ─────────────────────────
+
+describe("composeReviewApprovedMessage", () => {
+  // The one shared composer all four review consumers (§6.3) emit approvals
+  // through. Guards the outcome format: the approved prompt, then the
+  // reviewer's approve-time feedback when the decision carries any.
+  test("appends approve-time feedback after the prompt; bare approvals emit the prompt alone", () => {
+    const prompt = DEFAULT_REVIEW_APPROVED_PROMPT;
+    expect(composeReviewApprovedMessage(prompt, "Rename the flag before merging."))
+      .toBe(`${prompt}\n\nRename the flag before merging.`);
+    // Bare approval shapes: absent, empty, whitespace — byte-identical to the
+    // pre-PR5 output, which every consumer's approved branch depends on.
+    expect(composeReviewApprovedMessage(prompt, undefined)).toBe(prompt);
+    expect(composeReviewApprovedMessage(prompt, "")).toBe(prompt);
+    expect(composeReviewApprovedMessage(prompt, "  \n ")).toBe(prompt);
+  });
+
+  // Compatibility (new consumer / old built client): the pre-PR5 client sent
+  // this exact placeholder on every approval; appending it would add filler
+  // the reviewer never wrote to every approval delivered by a mixed build.
+  test("the legacy LGTM placeholder is filtered, never appended", () => {
+    expect(
+      composeReviewApprovedMessage(DEFAULT_REVIEW_APPROVED_PROMPT, LEGACY_REVIEW_APPROVAL_PLACEHOLDER),
+    ).toBe(DEFAULT_REVIEW_APPROVED_PROMPT);
   });
 });
 
