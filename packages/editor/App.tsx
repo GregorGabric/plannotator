@@ -1141,11 +1141,14 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blocks, hasTocEntries]);
 
-  // Clear diff view on Escape key
+  // Clear diff view on Escape key. defaultPrevented respects the
+  // one-Escape-one-rung contract: an Escape consumed by a popover
+  // (useDismissablePopover) or another owned surface must not also exit
+  // the diff view.
   useEffect(() => {
     if (!isPlanDiffActive) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && !e.defaultPrevented) {
         setIsPlanDiffActive(false);
       }
     };

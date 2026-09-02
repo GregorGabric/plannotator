@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useDismissablePopover } from '../hooks/useDismissablePopover';
 
 interface ActionMenuProps {
@@ -25,10 +25,11 @@ export const ActionMenu: React.FC<ActionMenuProps> = ({
   // Shared dismissal (outside pointerdown + Escape). The hook consumes the
   // dismissing Escape, so closing an open Options menu no longer also runs
   // the host app's own Escape ladder — one Escape, one rung.
+  const dismiss = useCallback(() => setIsOpen(false), []);
   useDismissablePopover({
     enabled: isOpen,
     ref: menuRef,
-    onDismiss: () => setIsOpen(false),
+    onDismiss: dismiss,
   });
 
   return (
@@ -40,6 +41,7 @@ export const ActionMenu: React.FC<ActionMenuProps> = ({
 
       {isOpen && (
         <div
+          data-pn-dismissable-popover="true"
           className={panelClassName ?? `absolute top-full right-0 mt-1 ${panelWidth === 'wide' ? 'w-64' : 'w-56'} rounded-lg border border-border bg-popover py-1 shadow-xl z-[70]`}
         >
           {children({ closeMenu: () => setIsOpen(false) })}

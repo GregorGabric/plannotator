@@ -373,7 +373,8 @@ Annotate server starts (reuses plan editor HTML with mode:"annotate")
         ↓
 User annotates content, provides feedback
         ↓
-Send Annotations → feedback sent to agent session
+Send Feedback → annotations sent to agent session
+Done / Approve (gate) → positive decision recorded (see the decision control below)
 ```
 
 ### Annotate header decision control

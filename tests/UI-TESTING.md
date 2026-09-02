@@ -408,7 +408,7 @@ which is the regression class this control exists to fix).
    and does NOT collapse the file tree or close the sidebar; a second `Escape` closes the menu;
    a third runs the app's own ladder. `Mod+Enter` over the open discard confirm must fire only
    the dialog, never a second submission.
-6. **Review, platform (PR) mode** (`plannotator review --pr <url>`). Same control shape, no
+6. **Review, platform (PR) mode** (`plannotator review <pr-url>`). Same control shape, no
    composer items: every menu action opens `ReviewSubmissionDialog`. On your own PR the
    approve rows are muted with the "You can't approve your own PR/MR" reason while
    `Request changes…` / `Post comments, then…` stay live.
