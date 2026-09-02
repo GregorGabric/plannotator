@@ -172,6 +172,22 @@ describe('buildDecisionSpec invariants', () => {
     // Nothing to discard at zero — no discard item with a lying "0 annotations".
     expect(itemIds(zero)).not.toContain('discard-and-finish');
 
+    // F2 ruling (maintainer default, pending final confirmation): the
+    // count-0 + hasFeedback cell (direct edits / attachments only) still
+    // offers approve-with-notes on capable approval flows, with zero-form
+    // copy — the subtitle must never claim an annotation count of 0.
+    const zeroGate = buildDecisionSpec({
+      app: 'annotate', gate: true, count: 0, hasFeedback: true, approvalNotesSupported: true,
+    });
+    expect(itemIds(zeroGate)).toEqual(['note-with-feedback', 'approve-with-notes']);
+    const approveWithNotes = zeroGate.items.find((item) => item.id === 'approve-with-notes')!;
+    expect(approveWithNotes.subtitle).not.toContain('0');
+    // Without the capability the cell keeps no approve-carrying item.
+    const zeroGateNoCap = buildDecisionSpec({
+      app: 'annotate', gate: true, count: 0, hasFeedback: true, approvalNotesSupported: false,
+    });
+    expect(itemIds(zeroGateNoCap)).toEqual(['note-with-feedback']);
+
     const three = buildDecisionSpec({
       app: 'review', gate: true, count: 3, hasFeedback: true, approvalNotesSupported: true,
     });

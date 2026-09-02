@@ -338,4 +338,65 @@ describe('DecisionControl', () => {
     await pressKey(popover()!, { key: 'Home' });
     expect(document.activeElement).toBe(items[0]);
   });
+
+  // F6: the spec is live. Without the fallback, deleting the annotations that
+  // back an open composer (feedback state -> empty state) leaves the popover
+  // rendering an empty shell until Escape.
+  test.skipIf(!hasDom)('live spec change that removes the active composer item morphs back to the menu', async () => {
+    const handlers = makeHandlers();
+    await mountControl(REVIEW_FEEDBACK, handlers);
+    await openMenu();
+    await clickItem('Send with a note');
+    expect(popover()?.dataset.decisionPopover).toBe('composer');
+    await typeNote('half-typed');
+
+    // The last annotation is deleted elsewhere: the state flips to empty and
+    // `note-with-feedback` leaves the spec while the composer is open.
+    await act(async () => {
+      root!.render(
+        <DecisionControl
+          spec={buildDecisionSpec({
+            app: 'review', gate: true, count: 0, hasFeedback: false, approvalNotesSupported: true,
+          })}
+          handlers={handlers}
+          busy={false}
+          isLoading={false}
+        />,
+      );
+    });
+
+    // Not an empty shell: the popover is back in menu state with the new items.
+    expect(popover()?.dataset.decisionPopover).toBe('menu');
+    expect(menuItems().length).toBeGreaterThan(0);
+    for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled();
+  });
+
+  test.skipIf(!hasDom)('live spec change that empties the menu closes the popover', async () => {
+    const handlers = makeHandlers();
+    await mountControl(REVIEW_FEEDBACK, handlers);
+    await openMenu();
+    expect(popover()).not.toBeNull();
+
+    await act(async () => {
+      root!.render(
+        <DecisionControl
+          // A spec with no items cannot come out of buildDecisionSpec today,
+          // but the control must not trust that: an empty menu popover is a
+          // dead surface with no rows to interact with.
+          spec={{
+            primary: {
+              id: 'primary', label: 'Approve', title: 'Approve',
+              tone: 'success', icon: 'check',
+            },
+            items: [],
+          }}
+          handlers={handlers}
+          busy={false}
+          isLoading={false}
+        />,
+      );
+    });
+
+    expect(popover()).toBeNull();
+  });
 });

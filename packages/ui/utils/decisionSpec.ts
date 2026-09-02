@@ -202,15 +202,20 @@ function buildFeedbackSpec(input: DecisionSpecInput, approvalFlow: boolean): Dec
   // it sits before whichever approve-flavoured item comes first.
   let dividerPending = true;
 
-  // Capability-gated AND count-gated: with zero annotations (feedback is
-  // direct edits/attachments) there are no notes to ride along, so the item
-  // would be a no-op with a lying label.
-  if (approvalFlow && input.approvalNotesSupported && count > 0) {
+  // Capability-gated only (F2 ruling, maintainer default pending final
+  // confirmation): at count 0 the feedback is direct edits / saved-file
+  // changes / attachments, and a capable approve transport delivers those too,
+  // so the item stays offered with zero-form copy — no "0 annotations"
+  // language. Subtitles are free prose, NOT frozen.
+  if (approvalFlow && input.approvalNotesSupported) {
     items.push({
       id: 'approve-with-notes',
       // Frozen copy (maintainer-approved): 'Approve with notes'.
       label: 'Approve with notes',
-      subtitle: `Approve; your ${count} ${noun} ride along as non-blocking guidance`,
+      subtitle:
+        count > 0
+          ? `Approve; your ${count} ${noun} ride along as non-blocking guidance`
+          : 'Approve; your edits and attachments ride along as non-blocking guidance',
       tone: 'success',
       icon: 'check',
       dividerBefore: dividerPending,

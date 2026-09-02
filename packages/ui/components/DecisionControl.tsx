@@ -303,6 +303,32 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
     }
   }, [busy]);
 
+  // F6: the spec is live — an annotation delete (or an external write) can
+  // remove the item the open composer belongs to, or flip the state so the
+  // menu has different items. Morph gracefully instead of rendering an empty
+  // shell: a composer whose item left the spec steps back to the menu (the
+  // draft is kept, keyed by item id, in case the item returns), and a menu
+  // with no items left closes outright. Lives in the control rather than the
+  // adopting apps so the annotate and review wirings cannot diverge on it.
+  useEffect(() => {
+    if (popover === null) return;
+    if (popover === 'composer') {
+      const stillPresent =
+        activeItemId !== null &&
+        spec.items.some((item) => item.id === activeItemId && item.composer);
+      if (stillPresent) return;
+      if (spec.items.length > 0) {
+        setPopover('menu');
+        setActiveItemId(null);
+      } else {
+        setPopover(null);
+        setActiveItemId(null);
+      }
+      return;
+    }
+    if (spec.items.length === 0) setPopover(null);
+  }, [activeItemId, popover, spec]);
+
   // Roving focus entry point: whenever the menu (re)appears — caret click,
   // back from the composer, confirm cancel — focus its first row.
   useEffect(() => {
