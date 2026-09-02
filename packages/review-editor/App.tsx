@@ -3726,7 +3726,10 @@ const ReviewApp: React.FC = () => {
       }
       case 'discard':
         // The DecisionControl / compact ConfirmDialog has already confirmed;
-        // the bare approve posts `feedback: '', annotations: []`.
+        // the bare approve posts `feedback: '', annotations: []`. Same
+        // in-flight guard as the sibling routes: a confirm left open across
+        // an in-flight decision POST must not produce a second decision.
+        if (submitted || busyWithDecision) return;
         void handleApprove();
         return;
       case 'approve-with-notes':
@@ -4602,8 +4605,9 @@ const ReviewApp: React.FC = () => {
                         control shape. No composer on this side, ever — every
                         action opens the existing ReviewSubmissionDialog, whose
                         general-comment field is the only note field here. The
-                        muted primary carries the self-approval reason in its
-                        native title tooltip. */}
+                        muted primary carries the self-approval reason via the
+                        shared Tooltip + aria-describedby (native title dropped
+                        when muted, pinned by test). */}
                     <ExitButton
                       appearance="ghost"
                       labelBreakpoint="lg"

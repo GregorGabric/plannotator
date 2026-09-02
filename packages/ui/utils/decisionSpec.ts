@@ -35,10 +35,11 @@ export interface DecisionPrimary {
   icon: 'check' | 'send';
   count?: number;           // rendered as the inline pill; omitted when 0
   /**
-   * Platform self-approval (PR6, §3.4): rendered dimmed but NOT disabled —
-   * the native `title` tooltip must still show the reason — and every
-   * invocation path (click, Mod+Enter, compact row) is a no-op. The caret
-   * stays live so the menu's non-approve paths remain reachable.
+   * Platform self-approval (PR6, §3.4): rendered dimmed but NOT disabled.
+   * The reason surfaces through the shared Tooltip + aria-describedby (the
+   * native title is deliberately dropped when muted, pinned by test), and
+   * every invocation path (click, Mod+Enter, compact row) is a no-op. The
+   * caret stays live so the menu's non-approve paths remain reachable.
    */
   muted?: boolean;
 }

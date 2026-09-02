@@ -5120,6 +5120,9 @@ const App: React.FC = () => {
       }
       case 'discard': {
         // The DecisionControl / compact ConfirmDialog has already confirmed.
+        // Same in-flight guard as the primary path: a confirm left open
+        // across an in-flight decision POST must not produce a second one.
+        if (submitted || isSubmitting || isExiting) return;
         if (action.route === 'approve') {
           const approve = () =>
             headerHandlersRef.current.handleAnnotateApprove({ discardAnnotations: true });
@@ -5135,7 +5138,7 @@ const App: React.FC = () => {
         send();
       }
     }
-  }, [gate, maybeConfirmUnsavedSourceFileEdits, queueNoteDecision, submitPrimaryDecision]);
+  }, [gate, isExiting, isSubmitting, maybeConfirmUnsavedSourceFileEdits, queueNoteDecision, submitPrimaryDecision, submitted]);
 
   const annotateDecisionSpec = useMemo(() => buildDecisionSpec({
     app: 'annotate',
