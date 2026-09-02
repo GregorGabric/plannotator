@@ -1,9 +1,11 @@
 import { useEffect } from 'react';
 
 /**
- * Outside-`pointerdown` + Escape dismissal for anchored popovers — the effect
- * ActionMenu and ApproveDropdown each hand-roll today (converting them onto
- * this hook is a separate cleanup, so their behavior does not change here).
+ * Outside-`pointerdown` + Escape dismissal for anchored popovers — the one
+ * shared effect behind DecisionControl, ActionMenu, and ApproveDropdown.
+ * (FloatingQuickLabelPicker deliberately keeps its own dismissal: it needs
+ * deferred capture-phase registration so the click that opens it cannot
+ * dismiss it, and its Escape shares a listener with the digit-select keys.)
  *
  * `dismissOnIframeFocus` is the explicit strategy for framed surfaces
  * (raw-HTML srcdoc, live-app proxy): a click inside the iframe never produces

@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
+import { useDismissablePopover } from '../hooks/useDismissablePopover';
 
 interface ActionMenuProps {
   className?: string;
@@ -21,28 +22,14 @@ export const ActionMenu: React.FC<ActionMenuProps> = ({
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setIsOpen(false);
-      }
-    };
-
-    document.addEventListener('pointerdown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isOpen]);
+  // Shared dismissal (outside pointerdown + Escape). The hook consumes the
+  // dismissing Escape, so closing an open Options menu no longer also runs
+  // the host app's own Escape ladder — one Escape, one rung.
+  useDismissablePopover({
+    enabled: isOpen,
+    ref: menuRef,
+    onDismiss: () => setIsOpen(false),
+  });
 
   return (
     <div ref={menuRef} className={className ? `relative ${className}` : 'relative'}>
