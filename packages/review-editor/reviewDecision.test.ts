@@ -18,6 +18,7 @@ import {
   compactRowIdForReviewDecisionItem,
   createGeneralReviewComment,
   readApprovalNotesAdvert,
+  resolvePlatformDecisionAction,
   resolveReviewDecisionAction,
 } from "./reviewDecision";
 import { annotationMatchesPrScope } from "./utils/annotationScope";
@@ -35,6 +36,23 @@ function reviewInputs(): DecisionSpecInput[] {
         count,
         hasFeedback: count > 0,
         approvalNotesSupported,
+      });
+  return inputs;
+}
+
+/** Every input combination platform (PR) mode can hand the spec builder —
+ *  self-authorship swept both ways (PR6, §3.4). */
+function platformInputs(): DecisionSpecInput[] {
+  const inputs: DecisionSpecInput[] = [];
+  for (const selfAuthored of [false, true])
+    for (const count of [0, 1, 3])
+      inputs.push({
+        app: "review",
+        gate: true,
+        count,
+        hasFeedback: count > 0,
+        approvalNotesSupported: false, // ignored by the platform arm
+        platform: { label: "GitHub", mrLabel: "PR", selfAuthored },
       });
   return inputs;
 }
@@ -177,7 +195,7 @@ describe("review decision handler exhaustiveness", () => {
   // hides a decision row on touch — the silent-data-loss class the #1436
   // review flagged (E16-review).
   test("compact row ids are unique per spec and never collide with the primary row", () => {
-    for (const input of reviewInputs()) {
+    for (const input of [...reviewInputs(), ...platformInputs()]) {
       const spec = buildDecisionSpec(input);
       const ids = [
         compactPrimaryIdForReviewDecision(spec.primary),
@@ -185,6 +203,23 @@ describe("review decision handler exhaustiveness", () => {
       ];
       for (const id of ids) expect(id).toBeDefined();
       expect(new Set(ids).size).toBe(ids.length);
+    }
+  });
+
+  // PR6 (§3.4) exhaustiveness, same failure class as the agent sweep: an id
+  // the platform arm starts emitting without a dialog-mode route resolves to
+  // null and its menu row silently does nothing. The mode itself must match
+  // the row's meaning — an approve-flavoured row landing in comment mode
+  // would post a review where the reviewer asked to approve.
+  test("every id the platform arm emits resolves to the matching dialog mode", () => {
+    for (const input of platformInputs()) {
+      const spec = buildDecisionSpec(input);
+      expect(resolvePlatformDecisionAction("primary", input.count > 0))
+        .toBe(input.count > 0 ? "comment" : "approve");
+      for (const item of spec.items) {
+        const mode = resolvePlatformDecisionAction(item.id, input.count > 0);
+        expect(mode).toBe(item.tone === "success" ? "approve" : "comment");
+      }
     }
   });
 });

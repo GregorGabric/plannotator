@@ -62,6 +62,39 @@ export function resolveReviewDecisionAction(id: DecisionActionId): ReviewDecisio
   }
 }
 
+/**
+ * PR6 (§3.4): platform-mode routing. Platform decisions never touch
+ * `/api/feedback` — every id opens the EXISTING ReviewSubmissionDialog
+ * (per-target state, retry, the "open PR" toggle, and the only
+ * general-comment field on this side) in one of its two modes:
+ *
+ *   primary            → comment with annotations, approve when empty
+ *   approve-with-notes → "Approve with comments…"  (approve mode)
+ *   note-with-approval → "Approve with a comment…" (approve mode)
+ *   note-with-feedback → "Post comments, then…"    (comment mode)
+ *   request-changes    → "Request changes…"        (comment mode)
+ *
+ * Returns null for `discard-and-finish`, which the platform spec arm never
+ * emits — the dialog owns what happens to unsent annotations.
+ */
+export function resolvePlatformDecisionAction(
+  id: DecisionActionId,
+  hasAnnotations: boolean,
+): 'approve' | 'comment' | null {
+  switch (id) {
+    case 'primary':
+      return hasAnnotations ? 'comment' : 'approve';
+    case 'note-with-approval':
+    case 'approve-with-notes':
+      return 'approve';
+    case 'request-changes':
+    case 'note-with-feedback':
+      return 'comment';
+    case 'discard-and-finish':
+      return null;
+  }
+}
+
 export interface ReviewApprovalBodyInput {
   draftGeneration: number;
   /** Composer note ("Approve with a note…"); whitespace-only means none. */

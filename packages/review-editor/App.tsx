@@ -12,7 +12,7 @@ import { ThemeProvider, useTheme } from '@plannotator/ui/components/ThemeProvide
 import { TooltipProvider } from '@plannotator/ui/components/Tooltip';
 import { ConfirmDialog } from '@plannotator/ui/components/ConfirmDialog';
 import { Settings } from '@plannotator/ui/components/Settings';
-import { FeedbackButton, ApproveButton, ExitButton } from '@plannotator/ui/components/ToolbarButtons';
+import { ExitButton } from '@plannotator/ui/components/ToolbarButtons';
 import { buildDecisionSpec, type DecisionActionId, type DecisionMenuItem } from '@plannotator/ui/utils/decisionSpec';
 import { DecisionControl, DecisionNoteDialog, type DecisionHandler } from '@plannotator/ui/components/DecisionControl';
 import {
@@ -21,6 +21,7 @@ import {
   compactRowIdForReviewDecisionItem,
   createGeneralReviewComment,
   readApprovalNotesAdvert,
+  resolvePlatformDecisionAction,
   resolveReviewDecisionAction,
 } from './reviewDecision';
 import { useUpdateCheck } from '@plannotator/ui/hooks/useUpdateCheck';
@@ -736,6 +737,9 @@ const ReviewApp: React.FC = () => {
 
   // Derived: Platform mode is active when destination is platform AND we have PR/MR metadata
   const platformMode = reviewDestination === 'platform' && !!prMetadata;
+  // The viewer authored this PR/MR — forges refuse self-approval, so every
+  // platform approve path mutes (never disappears) on this flag.
+  const isOwnPR = !!platformUser && prMetadata?.author === platformUser;
 
   // Platform-aware labels
   const platformLabel = prMetadata ? getPlatformLabel(prMetadata) : 'GitHub';
@@ -3911,6 +3915,44 @@ const ReviewApp: React.FC = () => {
     setPlatformCommentDialog({ action, plan });
   }, [allAnnotations, visibleEditorAnnotations, files, prMetadata, visibleDescriptionAnnotations, visibleCommentAnnotations, prContext?.body, platformReviewRecovery]);
 
+  // --- PR6 (§3.4): platform mode adopts the control's SHAPE ----------------
+  // The same DecisionSpec, with NO composer or confirm items: every id opens
+  // the existing ReviewSubmissionDialog (per-target state, retry, "leave PR
+  // open" toggle — untouched), whose general-comment textarea stays the only
+  // note field on this side. `approvalNotesSupported` is irrelevant here —
+  // the platform posts to the forge API natively — so approve items gate
+  // only on self-authorship, muted rather than removed (Request changes… /
+  // Post comments, then… stay live; no state is a dead end).
+  const busyWithPlatformDecision = busyWithDecision || isPlatformActioning;
+
+  const platformDecisionSpec = useMemo(() => buildDecisionSpec({
+    app: 'review',
+    gate: true,
+    count: totalAnnotationCount,
+    hasFeedback: totalAnnotationCount > 0,
+    approvalNotesSupported: false, // ignored by the platform arm
+    platform: { label: platformLabel, mrLabel, selfAuthored: isOwnPR },
+  }), [totalAnnotationCount, platformLabel, mrLabel, isOwnPR]);
+
+  const runPlatformDecisionAction = useCallback((id: DecisionActionId) => {
+    if (submitted || busyWithPlatformDecision) return;
+    // Muted primary (self-authored, empty state): click, Mod+Enter, and the
+    // compact row are all no-ops — the spec records the mute; the menu's
+    // Request changes… remains the live path.
+    if (id === 'primary' && platformDecisionSpec.primary.muted) return;
+    const mode = resolvePlatformDecisionAction(id, totalAnnotationCount > 0);
+    if (mode) openPlatformDialog(mode);
+  }, [busyWithPlatformDecision, openPlatformDialog, platformDecisionSpec, submitted, totalAnnotationCount]);
+
+  const platformDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
+    'primary': () => runPlatformDecisionAction('primary'),
+    'note-with-approval': () => runPlatformDecisionAction('note-with-approval'),
+    'request-changes': () => runPlatformDecisionAction('request-changes'),
+    'note-with-feedback': () => runPlatformDecisionAction('note-with-feedback'),
+    'approve-with-notes': () => runPlatformDecisionAction('approve-with-notes'),
+    'discard-and-finish': () => {}, // the platform arm never emits it
+  }), [runPlatformDecisionAction]);
+
   // Double-tap Option/Alt to toggle review destination (PR mode only)
   useEffect(() => {
     if (!prMetadata) return;
@@ -4028,13 +4070,10 @@ const ReviewApp: React.FC = () => {
       e.preventDefault();
 
       if (platformMode) {
-        // GitHub mode: No annotations → Approve on GitHub, otherwise → Post Review
-        const isOwnPR = !!platformUser && prMetadata?.author === platformUser;
-        if (totalAnnotationCount === 0 && !isOwnPR) {
-          openPlatformDialog('approve');
-        } else {
-          openPlatformDialog('comment');
-        }
+        // Platform mode (PR6): Mod+Enter is the header's visible primary,
+        // always — including the muted self-approval no-op. Same
+        // runPlatformDecisionAction the header and compact rows call.
+        runPlatformDecisionAction('primary');
       } else {
         // Agent mode: Mod+Enter is the header's visible primary, always —
         // the same submitPrimaryDecision the button and compact row call.
@@ -4048,7 +4087,7 @@ const ReviewApp: React.FC = () => {
     showExportModal, showNoAnnotationsDialog, showExitWarning,
     platformCommentDialog, platformGeneralComment,
     submitted, isSendingFeedback, isApproving, isExiting, isPlatformActioning,
-    origin, platformMode, platformLabel, platformUser, prMetadata, totalAnnotationCount, openPlatformDialog,
+    origin, platformMode, runPlatformDecisionAction,
     submitPrimaryDecision, handlePlatformAction
   ]);
 
@@ -4127,32 +4166,34 @@ const ReviewApp: React.FC = () => {
         }]
       : platformMode
         ? [
+            // Platform mode (PR6): spec-driven rows, same generation as agent
+            // mode below — never a composer or confirm (every row opens the
+            // submission dialog); muted approve rows disable with the
+            // self-approval reason as their subtitle.
             {
               id: 'exit',
               label: 'Exit review',
               onSelect: () => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit(),
               disabled: compactActionBusy,
             },
-            ...(totalAnnotationCount > 0
-              ? [{
-                  id: 'feedback' as const,
-                  label: 'Post comments',
-                  subtitle: `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`,
-                  onSelect: () => openPlatformDialog('comment'),
-                  disabled: compactActionBusy,
-                }]
-              : []),
             {
-              id: 'approve' as const,
-              label: 'Approve',
-              subtitle: platformUser && prMetadata?.author === platformUser
-                ? `You can't approve your own ${mrLabel}`
+              id: compactPrimaryIdForReviewDecision(platformDecisionSpec.primary),
+              label: platformDecisionSpec.primary.mobileLabel ?? platformDecisionSpec.primary.label,
+              subtitle: platformDecisionSpec.primary.muted
+                ? platformDecisionSpec.primary.title
                 : totalAnnotationCount > 0
-                  ? `${totalAnnotationCount} unsent annotation${totalAnnotationCount === 1 ? '' : 's'}`
+                  ? `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`
                   : undefined,
-              onSelect: () => openPlatformDialog('approve'),
-              disabled: compactActionBusy || !!(platformUser && prMetadata?.author === platformUser),
+              onSelect: () => runPlatformDecisionAction('primary'),
+              disabled: compactActionBusy || !!platformDecisionSpec.primary.muted,
             },
+            ...platformDecisionSpec.items.map((item) => ({
+              id: compactRowIdForReviewDecisionItem(item.id),
+              label: item.label,
+              subtitle: item.subtitle,
+              onSelect: () => runPlatformDecisionAction(item.id),
+              disabled: compactActionBusy || !!item.muted,
+            })),
           ]
         : [
             // Agent mode: spec-driven decision rows — a visible positive
@@ -4551,57 +4592,27 @@ const ReviewApp: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    {/* Platform mode: Close + Post Comments + Approve */}
+                    {/* Platform mode (PR6, §3.4): the same ghost-X + decision
+                        control shape. No composer on this side, ever — every
+                        action opens the existing ReviewSubmissionDialog, whose
+                        general-comment field is the only note field here. The
+                        muted primary carries the self-approval reason in its
+                        native title tooltip. */}
                     <ExitButton
+                      appearance="ghost"
+                      labelBreakpoint="lg"
                       onClick={() => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit()}
-                      disabled={isSendingFeedback || isApproving || isExiting || isPlatformActioning}
+                      disabled={busyWithPlatformDecision}
                       isLoading={isExiting}
+                      title="Close review without feedback"
+                    />
+                    <DecisionControl
+                      spec={platformDecisionSpec}
+                      handlers={platformDecisionHandlers}
+                      busy={busyWithPlatformDecision}
+                      isLoading={isPlatformActioning}
                       labelBreakpoint="lg"
                     />
-                    {/* Progressive disclosure: only show Post Comments once there
-                        are annotations to post — mirrors agent mode hiding Send
-                        Feedback when empty. With no annotations the keyboard
-                        shortcut routes to Approve, so this hides cleanly. */}
-                    {totalAnnotationCount > 0 && (
-                      <FeedbackButton
-                        onClick={() => openPlatformDialog('comment')}
-                        disabled={isSendingFeedback || isApproving || isPlatformActioning}
-                        isLoading={isSendingFeedback || isPlatformActioning}
-                        label="Post Comments"
-                        shortLabel="Post"
-                        loadingLabel="Posting..."
-                        shortLoadingLabel="Posting..."
-                        title="Post review to platform"
-                        labelBreakpoint="lg"
-                      />
-                    )}
-                    <div className="relative group/approve">
-                      <ApproveButton
-                        onClick={() => {
-                          if (platformUser && prMetadata?.author === platformUser) return;
-                          openPlatformDialog('approve');
-                        }}
-                        disabled={
-                          isSendingFeedback || isApproving || isPlatformActioning ||
-                          (!!platformUser && prMetadata?.author === platformUser)
-                        }
-                        isLoading={isApproving}
-                        muted={!!platformUser && prMetadata?.author === platformUser && !isSendingFeedback && !isApproving && !isPlatformActioning}
-                        title={
-                          platformUser && prMetadata?.author === platformUser
-                            ? `You can't approve your own ${mrLabel}`
-                            : "Approve - no changes needed"
-                        }
-                        labelBreakpoint="lg"
-                      />
-                      {platformUser && prMetadata?.author === platformUser && (
-                        <div className="absolute top-full right-0 mt-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-xl text-xs text-foreground w-48 text-center opacity-0 invisible group-hover/approve:opacity-100 group-hover/approve:visible transition-all pointer-events-none z-50">
-                          <div className="absolute bottom-full right-4 border-4 border-transparent border-b-border" />
-                          <div className="absolute bottom-full right-4 mt-px border-4 border-transparent border-b-popover" />
-                          You can't approve your own {mrLabel === 'MR' ? 'merge request' : 'pull request'} on {platformLabel}.
-                        </div>
-                      )}
-                    </div>
                   </>
                 )}
               </>

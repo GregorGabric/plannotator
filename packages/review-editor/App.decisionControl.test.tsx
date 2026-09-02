@@ -114,7 +114,7 @@ class StubEventSource {
 }
 
 interface SubmittedBody {
-  endpoint: "feedback" | "exit";
+  endpoint: "feedback" | "exit" | "pr-action";
   approved?: boolean;
   feedback?: string;
   annotations?: Array<{
@@ -136,6 +136,35 @@ let failFeedbackPosts = 0;
  *  server. Default false mimics an OLD server whose payload has no such
  *  field at all, pinning that absent reads as not-capable. */
 let advertiseApprovalNotes = false;
+/** Extra fields merged into the /api/diff payload — a PR session is entered by
+ *  shipping `prMetadata` (+ `platformUser`) exactly the way the server does. */
+let prDiffExtras: Record<string, unknown> | null = null;
+
+/** GithubPRMetadata shape the diff payload carries in PR mode. */
+const PR_METADATA = {
+  platform: "github",
+  host: "github.com",
+  owner: "acme",
+  repo: "widgets",
+  number: 7,
+  title: "Add widget parser",
+  author: "leoreisdias",
+  baseBranch: "main",
+  headBranch: "feature/parser",
+  baseSha: "aaa1111",
+  headSha: "bbb2222",
+  url: "https://github.com/acme/widgets/pull/7",
+};
+
+function seedPlatformSession(options?: { selfAuthored?: boolean }): void {
+  prDiffExtras = {
+    prMetadata: PR_METADATA,
+    platformUser: options?.selfAuthored ? PR_METADATA.author : "reviewer",
+  };
+  // The submission's success path opens the PR in a new tab by default;
+  // window.open is not a browser here, so keep the toggle off.
+  memory.set("plannotator-platform-open-pr", "false");
+}
 
 const PATCH = [
   "diff --git a/src/parse.ts b/src/parse.ts",
@@ -180,7 +209,12 @@ function makeFetch(): typeof fetch {
         // Absent (not false) in the old-server shape: the pre-advert payload
         // simply had no such field.
         ...(advertiseApprovalNotes ? { approvalNotesSupported: true } : {}),
+        ...(prDiffExtras ?? {}),
       });
+    }
+    if (url.pathname === "/api/pr-action") {
+      submissions.push({ endpoint: "pr-action" });
+      return Response.json({ ok: true, submission: { status: "complete" } });
     }
     if (url.pathname === "/api/diff/fresh") return Response.json({ fresh: true });
     if (url.pathname === "/api/ai/capabilities") return Response.json({ available: false, providers: [] });
@@ -294,6 +328,7 @@ afterEach(async () => {
   submissions = [];
   failFeedbackPosts = 0;
   advertiseApprovalNotes = false;
+  prDiffExtras = null;
   seededExternalAnnotations = [];
   memory.clear();
   resetStorageBackend();
@@ -619,5 +654,166 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(submissions[0]!.approved).toBe(true);
     expect(submissions[0]!.feedback).toBe("");
     expect(submissions[0]!.annotations).toEqual([]);
+  });
+});
+
+// PR6 (§3.4): platform mode adopts the control's SHAPE. Every action must
+// open the EXISTING ReviewSubmissionDialog (the only note field on this side)
+// and never post a decision by itself — the failures these guard are a menu
+// item bypassing the dialog straight into /api/pr-action or /api/feedback,
+// the self-approval mute regressing into a dead end or a live approve, and
+// Mod+Enter double-firing while the dialog is open.
+describe.if(hasDom)("review decision control (platform mode)", () => {
+  const submissionDialogOpen = (title: "Post Review Comments" | `Approve ${string}`) =>
+    Array.from(document.querySelectorAll("h2")).some((el) => el.textContent === title);
+
+  async function pressModEnter(): Promise<void> {
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    await settle();
+  }
+
+  test("with annotations the primary opens the dialog in comment mode and posts nothing", async () => {
+    seedPlatformSession();
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    // Frozen copy (maintainer-approved): 'Post Comments' is the platform primary.
+    expect(primaryButton()!.textContent).toContain("Post Comments");
+    await act(async () => primaryButton()!.click());
+    await settle();
+
+    expect(submissionDialogOpen("Post Review Comments")).toBe(true);
+    // The dialog owns submission: opening it must post NOTHING.
+    expect(submissions).toHaveLength(0);
+  });
+
+  test("Approve with comments… opens the dialog in approve mode, still posting nothing", async () => {
+    seedPlatformSession();
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    await openMenu();
+    const item = menuItem("Approve with comments");
+    if (!item) throw new Error("Approve with comments… did not render");
+    expect(item.disabled).toBe(false); // not self-authored
+    await act(async () => item.click());
+    await settle();
+
+    expect(submissionDialogOpen("Approve PR")).toBe(true);
+    expect(submissions).toHaveLength(0);
+  });
+
+  test("self-authored mutes the approve item while Post comments, then… stays live", async () => {
+    seedPlatformSession({ selfAuthored: true });
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    // The primary is Post Comments — never muted by self-authorship.
+    expect(primaryButton()!.getAttribute("aria-disabled")).toBeNull();
+
+    await openMenu();
+    const approveItem = menuItem("Approve with comments");
+    if (!approveItem) throw new Error("muted approve item must render, not disappear");
+    expect(approveItem.disabled).toBe(true);
+    expect(approveItem.textContent).toContain("You can't approve your own PR");
+
+    const thenItem = menuItem("Post comments, then");
+    if (!thenItem) throw new Error("Post comments, then… did not render");
+    expect(thenItem.disabled).toBe(false);
+    await act(async () => thenItem.click());
+    await settle();
+
+    expect(submissionDialogOpen("Post Review Comments")).toBe(true);
+    expect(submissions).toHaveLength(0);
+  });
+
+  test("empty-state primary opens approve mode; Mod+Enter over the open dialog submits it exactly once", async () => {
+    seedPlatformSession();
+    await mountReview();
+
+    expect(primaryButton()!.textContent).toContain("Approve");
+    await act(async () => primaryButton()!.click());
+    await settle();
+    expect(submissionDialogOpen("Approve PR")).toBe(true);
+    expect(submissions).toHaveLength(0);
+
+    // While the dialog is open, Mod+Enter belongs to the dialog: exactly one
+    // /api/pr-action submit, and the header handler must not also fire (a
+    // second dialog or a decision POST of its own).
+    await pressModEnter();
+
+    expect(submissions.filter((s) => s.endpoint === "pr-action")).toHaveLength(1);
+    // The post-success status message is an FYI to the agent session, not a
+    // decision: approved stays false.
+    const statuses = submissions.filter((s) => s.endpoint === "feedback");
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]!.approved).toBe(false);
+    expect(statuses[0]!.feedback).toContain("approved on GitHub");
+  });
+
+  test("self-authored empty state: muted primary is a no-op (click and Mod+Enter); Request changes… stays live", async () => {
+    seedPlatformSession({ selfAuthored: true });
+    await mountReview();
+
+    const primary = primaryButton()!;
+    expect(primary.getAttribute("aria-disabled")).toBe("true");
+    // Frozen copy (maintainer-approved): the self-approval reason rides the tooltip.
+    expect(primary.title).toBe("You can't approve your own pull request on GitHub.");
+
+    await act(async () => primary.click());
+    await settle();
+    await pressModEnter();
+    expect(submissionDialogOpen("Approve PR")).toBe(false);
+    expect(submissions).toHaveLength(0);
+
+    // No dead end: the menu's Request changes… still opens the comment dialog.
+    await openMenu();
+    const approveItem = menuItem("Approve with a comment");
+    if (!approveItem) throw new Error("muted approve item must render, not disappear");
+    expect(approveItem.disabled).toBe(true);
+    const requestItem = menuItem("Request changes");
+    if (!requestItem) throw new Error("Request changes… did not render");
+    expect(requestItem.disabled).toBe(false);
+    await act(async () => requestItem.click());
+    await settle();
+    expect(submissionDialogOpen("Post Review Comments")).toBe(true);
+    expect(submissions).toHaveLength(0);
+  });
+
+  test("double-tap Alt flips the spec between destinations and strands nothing", async () => {
+    seedPlatformSession();
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    expect(primaryButton()!.textContent).toContain("Post Comments");
+    expect(primaryButton()!.textContent).toContain("1");
+
+    const doubleTapAlt = async () => {
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
+        window.dispatchEvent(new KeyboardEvent("keyup", { key: "Alt", bubbles: true }));
+      });
+      await settle();
+    };
+
+    await doubleTapAlt();
+    // Agent spec, same annotation count — the flip swaps the spec, never the state.
+    expect(primaryButton()!.textContent).toContain("Send Feedback");
+    expect(primaryButton()!.textContent).toContain("1");
+
+    await doubleTapAlt();
+    expect(primaryButton()!.textContent).toContain("Post Comments");
+    expect(primaryButton()!.textContent).toContain("1");
+    expect(submissions).toHaveLength(0);
   });
 });
