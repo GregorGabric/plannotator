@@ -494,6 +494,59 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(menuItem("Request changes")).toBeDefined();
   });
 
+  // Spec §3.3 / test 17 — the state-driven proof, wired end to end: the
+  // sidebar's "+ General comment" goes through the App handler (durable,
+  // history-recorded, NOT PR-stamped) and the header control flips on the
+  // same state. Guards the wiring a component test cannot see: the prop being
+  // dropped from the sidebar mount, or the handler stamping PR context.
+  test("a sidebar general comment flips the header to Send Feedback and rides the posted body", async () => {
+    await mountReview();
+    expect(primaryButton()!.textContent).toContain("Approve");
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="Annotations"]')!.click();
+    });
+    await settle();
+
+    const addButton = document.querySelector<HTMLButtonElement>("[data-add-general-comment]");
+    expect(addButton).not.toBeNull(); // reachable at totalCount === 0
+    await act(async () => addButton!.click());
+    await settle();
+
+    const input = document.querySelector<HTMLTextAreaElement>(
+      "[data-review-general-composer] [data-decision-note-input]",
+    );
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(input!, "Split this into two PRs.");
+      input!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>("[data-general-comment-add]")!.click();
+    });
+    await settle();
+
+    // The control is state-driven: one durable comment flips the primary.
+    expect(primaryButton()!.textContent).toContain("Send Feedback");
+    expect(primaryButton()!.textContent).toContain("1");
+
+    await act(async () => primaryButton()!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.approved).toBe(false);
+    const general = submissions[0]!.annotations?.find((a) => a.scope === "general");
+    expect(general).toMatchObject({
+      scope: "general",
+      filePath: "",
+      lineStart: 0,
+      lineEnd: 0,
+      text: "Split this into two PRs.",
+    });
+    // Not withPRContext-stamped — what lets it survive an in-place PR switch.
+    expect((general as Record<string, unknown>).prUrl).toBeUndefined();
+  });
+
   // Guards the exact regression this project exists to fix on the surface
   // that has no Mod+Enter (E16-review): compact at zero must offer a visible
   // positive decision row, and it must post the legacy approve body.

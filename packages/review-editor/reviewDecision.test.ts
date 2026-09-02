@@ -15,9 +15,11 @@ import {
 import {
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
+  createGeneralReviewComment,
   resolveReviewDecisionAction,
   REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from "./reviewDecision";
+import { annotationMatchesPrScope } from "./utils/annotationScope";
 
 /** Every input combination the review app can hand the spec builder. The
  *  advert is swept both ways even though PR3 hardcodes it false, so the PR5
@@ -110,5 +112,44 @@ describe("review decision handler exhaustiveness", () => {
       for (const id of ids) expect(id).toBeDefined();
       expect(new Set(ids).size).toBe(ids.length);
     }
+  });
+});
+
+describe("createGeneralReviewComment — the one review-level comment shape", () => {
+  // Guards the transport shape both human producers (header note + sidebar
+  // "+ General comment") depend on: the ''/0/0 sentinels keep it out of every
+  // file group and the payload tests pin the same shape on the wire.
+  test("commits a trimmed scope:'general' comment with the sentinel anchor", () => {
+    const note = createGeneralReviewComment("  Split this into two PRs.  ", "ramos");
+    expect(note).toMatchObject({
+      type: "comment",
+      scope: "general",
+      filePath: "",
+      lineStart: 0,
+      lineEnd: 0,
+      side: "new",
+      text: "Split this into two PRs.",
+      author: "ramos",
+    });
+    // Two commits in one millisecond must not collide: the deferred-submit
+    // effect keys on the id (spec §9 — why randomUUID, not Date.now()).
+    expect(createGeneralReviewComment("a")!.id).not.toBe(createGeneralReviewComment("a")!.id);
+  });
+
+  test("a whitespace-only note never commits, and a missing identity omits author", () => {
+    expect(createGeneralReviewComment("   \n  ")).toBeNull();
+    expect(createGeneralReviewComment("")).toBeNull();
+    expect("author" in createGeneralReviewComment("x", "")!).toBe(false);
+  });
+
+  // Guards the PR-switch survival the spec's PR4 hunt names: the comment
+  // carries no prUrl/diffScope, so it passes every PR scope predicate and a
+  // switched-to PR still renders and exports it.
+  test("survives an in-place PR switch: no PR context, passes every PR scope", () => {
+    const note = createGeneralReviewComment("overall note")!;
+    expect(note.prUrl).toBeUndefined();
+    expect(note.diffScope).toBeUndefined();
+    expect(annotationMatchesPrScope(note, "https://github.com/o/r/pull/7", "layer")).toBe(true);
+    expect(annotationMatchesPrScope(note, undefined, undefined)).toBe(true);
   });
 });

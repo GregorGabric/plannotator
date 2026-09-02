@@ -163,6 +163,7 @@ jobs:
           packages/editor/App.htmlChrome.test.tsx
           packages/editor/App.decisionControl.test.tsx
           packages/review-editor/App.decisionControl.test.tsx
+          packages/review-editor/components/ReviewSidebar.generalComment.test.tsx
           packages/ui/components/HtmlSurfaceControls.test.tsx
           packages/ui/components/AnnotationPanel.unanchored.test.tsx
           packages/ui/hooks/useHtmlRefresh.test.tsx
