@@ -199,6 +199,12 @@ custom scroll element must wrap Viewer in `ScrollViewportProvider` from
 Without the provider, CSS page stickiness can still apply, but Viewer cannot
 observe the host scroller to add stuck chrome or calculate anchor clearance.
 
+The header reuses Viewer's `[data-sticky-actions]` cluster, so host CSS that
+restyled that selector for the legacy floating bar (negative margins are the
+common case) applies inside the header too and pulls the action cluster out of
+its row. Scope such rules away from the header, e.g.
+`[data-viewer-document-header] [data-sticky-actions] { margin-top: 0; margin-right: 0; }`.
+
 The config is intentionally typed rather than a React-node slot. Viewer reuses
 its existing `mode`, `inputMethod`, and `taterMode`; the config supplies only
 the state-change callbacks and optional `hideQuickLabel`. Compact toolstrips
