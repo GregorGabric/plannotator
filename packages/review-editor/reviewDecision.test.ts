@@ -16,6 +16,7 @@ import {
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
   resolveReviewDecisionAction,
+  REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from "./reviewDecision";
 
 /** Every input combination the review app can hand the spec builder. The
@@ -57,16 +58,43 @@ describe("review decision handler exhaustiveness", () => {
   });
 
   // Guards the single-transport matrix (spec §3.2/§6.1): request-changes and
-  // note-with-feedback differ only by state, never by route, and the
-  // approve-carrying ids stay on the capability-gated PR5 path — routing one
-  // to the plain-note flow would misdeliver an approval as a change request.
+  // note-with-feedback differ only by state, never by route; the confirm item
+  // is the discard flow; the approve-carrying ids stay on the
+  // capability-gated PR5 path — routing one to the plain-note flow would
+  // misdeliver an approval as a change request.
   test("the routes fork only on approved, never on which menu state emitted them", () => {
-    expect(resolveReviewDecisionAction("request-changes")).toEqual({ kind: "note" });
     expect(resolveReviewDecisionAction("note-with-feedback"))
       .toEqual(resolveReviewDecisionAction("request-changes"));
-    expect(resolveReviewDecisionAction("discard-and-finish")).toEqual({ kind: "discard" });
-    expect(resolveReviewDecisionAction("note-with-approval")).toEqual({ kind: "approve-with-notes" });
-    expect(resolveReviewDecisionAction("approve-with-notes")).toEqual({ kind: "approve-with-notes" });
+    expect(resolveReviewDecisionAction("request-changes").kind).toBe("note");
+    expect(resolveReviewDecisionAction("discard-and-finish").kind).toBe("discard");
+    expect(resolveReviewDecisionAction("note-with-approval"))
+      .toEqual(resolveReviewDecisionAction("approve-with-notes"));
+  });
+
+  // The PR5 contract (spec §6.4): the advert must never outrun delivery. The
+  // App's advert input is REVIEW_APPROVAL_NOTES_SUPPORTED; every id a spec
+  // built with it can emit must map to an IMPLEMENTED route. Today that holds
+  // because the advert is false. PR5 flips the advert (constant → server
+  // advert read) and this test then fails until the `approve-with-notes`
+  // route stops being a marked refusal (`implemented: false`) — i.e. until
+  // delivery is actually wired. Extend it to a delivery assertion in PR5;
+  // deleting the constant without updating this test breaks it at import,
+  // which is the point.
+  test("the advert never emits an id whose route is an unimplemented refusal", () => {
+    for (const count of [0, 2]) {
+      const spec = buildDecisionSpec({
+        app: "review",
+        gate: true,
+        count,
+        hasFeedback: count > 0,
+        approvalNotesSupported: REVIEW_APPROVAL_NOTES_SUPPORTED,
+      });
+      for (const item of spec.items) {
+        const route = resolveReviewDecisionAction(item.id);
+        const implemented = "implemented" in route ? route.implemented : true;
+        expect(implemented).toBe(true);
+      }
+    }
   });
 
   // Guards the compact surface: row ids double as React keys, so a collision

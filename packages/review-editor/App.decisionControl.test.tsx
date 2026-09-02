@@ -126,6 +126,9 @@ interface SubmittedBody {
 }
 
 let submissions: SubmittedBody[] = [];
+/** How many upcoming /api/feedback POSTs answer 500. Each failed attempt is
+ *  still recorded in `submissions` so its captured body can be asserted. */
+let failFeedbackPosts = 0;
 
 const PATCH = [
   "diff --git a/src/parse.ts b/src/parse.ts",
@@ -177,6 +180,10 @@ function makeFetch(): typeof fetch {
         endpoint: "feedback",
         ...(JSON.parse(String(init?.body ?? "{}")) as Omit<SubmittedBody, "endpoint">),
       });
+      if (failFeedbackPosts > 0) {
+        failFeedbackPosts -= 1;
+        return Response.json({ error: "boom" }, { status: 500 });
+      }
       return Response.json({ ok: true });
     }
     if (url.pathname === "/api/exit") {
@@ -280,6 +287,7 @@ afterEach(async () => {
   globalThis.EventSource = originalEventSource;
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   submissions = [];
+  failFeedbackPosts = 0;
   seededExternalAnnotations = [];
   memory.clear();
   resetStorageBackend();
@@ -372,6 +380,79 @@ describe.if(hasDom)("review decision control (agent mode)", () => {
     expect(body.approved).toBe(true);
     expect(body.feedback).toBe(LGTM_PLACEHOLDER);
     expect(body.annotations).toEqual([]);
+  });
+
+  // HIGH-1 repro (stage review): ConfirmDialog owns Mod+Enter through its own
+  // window-level handler, and stopPropagation cannot stop same-target
+  // listeners — without the sentinel guard in the app's Mod+Enter effect, one
+  // keystroke over the open discard confirm posted TWO contradictory
+  // decisions (this effect's approved:false send AND the confirm's
+  // approved:true LGTM), leaving the session outcome to a race.
+  test("Mod+Enter over the open discard confirm posts exactly one decision — the confirm's", async () => {
+    seededExternalAnnotations = [EXTERNAL_FINDING];
+    await mountReview();
+    await settle();
+    await settle();
+
+    await openMenu();
+    const discardItem = menuItem("discard 1 annotation");
+    if (!discardItem) throw new Error("discard menu item not found");
+    await act(async () => discardItem.click());
+    await settle();
+    if (!document.querySelector('[data-plannotator-confirm-dialog="true"]')) {
+      throw new Error("discard confirm did not open");
+    }
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    await settle();
+
+    expect(submissions).toHaveLength(1);
+    const body = submissions[0]!;
+    expect(body.approved).toBe(true);
+    expect(body.feedback).toBe(LGTM_PLACEHOLDER);
+    expect(body.annotations).toEqual([]);
+  });
+
+  // MEDIUM-1 (stage review): the armed-note failure path. A failed POST must
+  // keep the committed note in state (the primary flips to Send Feedback with
+  // the count), the next primary invocation must retry the SAME note-carrying
+  // body, and success must clear the armed decision so nothing re-dispatches.
+  test("a failed note submit stays armed; the primary retries the note-carrying body once", async () => {
+    failFeedbackPosts = 1;
+    await mountReview();
+
+    await openComposer("Request changes");
+    await typeNote("hold the line");
+    await pressNoteKey("Enter", { metaKey: true });
+
+    // First attempt: captured note body, but the POST failed — no completion.
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.approved).toBe(false);
+    expect((submissions[0]!.annotations ?? []).some((a) => a.scope === "general" && a.text === "hold the line")).toBe(true);
+    const primary = primaryButton();
+    expect(primary).not.toBeNull(); // still reviewable, not submitted
+    expect(primary!.title).toContain("Send"); // the note kept the feedback state
+
+    // Retry via the primary: the same note-carrying body posts and succeeds.
+    await act(async () => primary!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(2);
+    const retry = submissions[1]!;
+    expect(retry.approved).toBe(false);
+    const notes = (retry.annotations ?? []).filter((a) => a.scope === "general");
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toBe("hold the line");
+    expect(retry.feedback).toContain("hold the line");
+
+    // Cleared on success: nothing left to re-dispatch.
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true, cancelable: true }));
+    });
+    await settle();
+    expect(submissions).toHaveLength(2);
   });
 
   test("Mod+Enter fires the visible primary", async () => {

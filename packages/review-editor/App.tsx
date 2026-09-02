@@ -19,6 +19,7 @@ import {
   compactPrimaryIdForReviewDecision,
   compactRowIdForReviewDecisionItem,
   resolveReviewDecisionAction,
+  REVIEW_APPROVAL_NOTES_SUPPORTED,
 } from './reviewDecision';
 import { useUpdateCheck } from '@plannotator/ui/hooks/useUpdateCheck';
 import { storage } from '@plannotator/ui/utils/storage';
@@ -3693,25 +3694,24 @@ const ReviewApp: React.FC = () => {
         return;
       case 'approve-with-notes':
         // Unreachable until PR5 (spec §6.4): buildDecisionSpec emits these
-        // ids only when approvalNotesSupported, which no review server
-        // advertises yet — and routing them onto today's handleApprove would
-        // silently discard the reviewer's notes. Refuse rather than approve.
+        // ids only when approvalNotesSupported, and routing them onto today's
+        // handleApprove would silently discard the reviewer's notes. Refuse
+        // loudly rather than approve; reviewDecision.test.ts pins that the
+        // advert never emits an id whose route is still unimplemented.
+        console.error(
+          '[plannotator] approve-with-notes route reached while the approval-notes advert is off — PR5 must implement delivery before flipping the advert',
+        );
         return;
     }
   }, [busyWithDecision, commitReviewNote, handleApprove, submitPrimaryDecision, submitted]);
-
-  // Hardcoded false until PR5 ships the two-runtime delivery + the
-  // `/api/diff`-family advert (spec §6.4); flipping it here without that
-  // server work would render approve-carrying items whose notes four of the
-  // runtimes still discard. Do not invent the server field early.
-  const reviewApprovalNotesSupported = false;
 
   const reviewDecisionSpec = useMemo(() => buildDecisionSpec({
     app: 'review',
     gate: true, // review's primary positive decision IS approval
     count: totalAnnotationCount,
     hasFeedback: totalAnnotationCount > 0,
-    approvalNotesSupported: reviewApprovalNotesSupported,
+    // Hardcoded false until PR5 (see the constant's doc in reviewDecision.ts).
+    approvalNotesSupported: REVIEW_APPROVAL_NOTES_SUPPORTED,
   }), [totalAnnotationCount]);
 
   const reviewDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
@@ -3964,6 +3964,14 @@ const ReviewApp: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+
+      // Let an open confirmation dialog own Mod+Enter (PR2's idiom, the
+      // shared ConfirmDialog stamps this sentinel): its own window-level
+      // handler fires onConfirm from the SAME event, and stopPropagation
+      // cannot stop same-target listeners — without this guard one keystroke
+      // over the discard confirm would post TWO contradictory decisions
+      // (this effect's Send Feedback plus the confirm's LGTM approve).
+      if (document.querySelector('[data-plannotator-confirm-dialog="true"]')) return;
 
       // If the platform post dialog is open, Cmd+Enter submits it
       if (platformCommentDialog) {

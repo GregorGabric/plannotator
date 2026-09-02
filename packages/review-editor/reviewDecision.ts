@@ -14,6 +14,17 @@ import type { CompactReviewAction } from './components/ReviewHeaderMenu';
  * `bun test` lane: every id the spec can emit must resolve here, and an id
  * added to `decisionSpec.ts` without a route fails the exhaustive switch.
  */
+/**
+ * Whether the runtime delivers approve-carrying notes. Hardcoded false until
+ * PR5 ships the two-runtime delivery + the `/api/diff`-family advert
+ * (spec §6.4); flipping it without that server work would render
+ * approve-carrying items whose notes four of the runtimes still discard.
+ * PR5 replaces this constant with the server advert read AND must mark the
+ * `approve-with-notes` route implemented in the same change —
+ * `reviewDecision.test.ts` fails on an advert that outruns delivery.
+ */
+export const REVIEW_APPROVAL_NOTES_SUPPORTED = false;
+
 export type ReviewDecisionRoute =
   /** The adaptive primary: Approve at zero, Send Feedback otherwise. */
   | { kind: 'primary' }
@@ -24,8 +35,10 @@ export type ReviewDecisionRoute =
   | { kind: 'discard' }
   /** Approve with the live feedback riding along. Capability-gated: the spec
    *  emits its ids only when `approvalNotesSupported`, which no review server
-   *  advertises until PR5 (spec §6.4) — unreachable today. */
-  | { kind: 'approve-with-notes' };
+   *  advertises until PR5 (spec §6.4). `implemented: false` marks the App
+   *  wiring as a refusal — the contract test pins that the advert never
+   *  emits an id whose route is unimplemented. */
+  | { kind: 'approve-with-notes'; implemented: false };
 
 export function resolveReviewDecisionAction(id: DecisionActionId): ReviewDecisionRoute {
   switch (id) {
@@ -39,7 +52,7 @@ export function resolveReviewDecisionAction(id: DecisionActionId): ReviewDecisio
     case 'approve-with-notes':
       // Both approve-carrying items land on the same PR5 delivery path; until
       // the advert flips, neither id is ever emitted.
-      return { kind: 'approve-with-notes' };
+      return { kind: 'approve-with-notes', implemented: false };
     case 'discard-and-finish':
       return { kind: 'discard' };
   }

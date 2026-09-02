@@ -242,6 +242,19 @@ runtimes. Compact/touch rows are generated from the same spec, so a visible posi
 exists in every state; composer rows open `DecisionNoteDialog`. Platform (PR) mode keeps its own
 `Close / Post Comments / Approve` row and submission dialog for now.
 
+Interaction-model changes worth knowing (F8 and siblings): the agent-mode `Approve` primary
+follows the `FeedbackButton` responsive pattern and is **icon-only below the `lg` breakpoint**,
+where the old `ApproveButton` showed a compact `OK` label — the `title` carries the accessible
+name, and compact/touch rows keep full labels. Approving despite annotations is now two clicks
+(caret → `Approve, discard n annotations…` → `Discard & approve`) instead of the old dimmed
+one-click Approve with its warning dialog, and `Mod+Enter` never stacks with the removed
+approve-warning dialog — an open confirm dialog owns `Mod+Enter` outright (the
+`data-plannotator-confirm-dialog` sentinel guard in the app's keydown effect; without it one
+keystroke over the discard confirm would post two contradictory decisions). Accepted edge: the
+compact `DecisionNoteDialog` keeps its draft locally and discards it if the item behind it leaves
+the live spec (the dialog closes), while the desktop popover composer keeps drafts keyed by item
+id — an intentional asymmetry, not a bug.
+
 ### Since-main default review view
 
 The default code-review diff is **`since-base`** — a composite of `merge-base(base, HEAD)` vs the working tree plus untracked files ("everything a PR would show if you committed and pushed now"). It can render as a three-section **git status** panel (Committed / Changes / Untracked) via `SectionsPanel`, with a `Tree | Git status | Commits` toggle (`PanelViewToggle`). The Commits segment (git-local sessions only) is a linear `--first-parent` history rail (`CommitsPanel`): clicking a commit opens its own diff (`commit:<sha>`, vs its first parent) as the all-files view headed by the commit message rendered as markdown. The Commits view is a self-contained detour: entering it memoizes the previously active diff, exiting to Tree restores that diff verbatim (exiting to Git status resets to `since-base` as always), the memo clears whenever any non-commit diff is applied, and a reload that serves a commit-family diff with a non-Commits panel view snaps once to the session default so the commit diff cannot outlive the visit. The toggle never writes the persisted `reviewPanelView`/`defaultDiffType` pair (no server writes from a toggle click), but it does record a cookie-only last-used memo (`reviewPanelViewLastUsed`, `sections` | `tree` — never `commits`; the Commits view is session-only). A review OPENS on session choice ?? last-used memo ?? persisted `reviewPanelView` (cookie-only, written only by Settings and `ReviewSetupDialog` through `setReviewPanelView()`, which also syncs the memo so an explicit choice is never shadowed by a stale one — except the App self-heal, which passes `recordLastUsed: false` to repair the diff half of a conflicted pair without touching the memo). The first-run initializer marks review-setup-seen when it seeds the cookie-only Tree choice, not only on dismiss, so it is genuinely one-time per browser and cannot overwrite a returning reviewer's persisted or last-used view; it inherits the resolved `defaultDiffType` without a server config write. The persisted pair is coupled: the Sections view only renders `since-base`, so choosing a classic diff default snaps the persisted view to Tree and vice-versa (enforced in `ReviewSetupDialog`, the Settings Git tab, and the App first-run initializer).
