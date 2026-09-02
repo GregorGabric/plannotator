@@ -20,7 +20,7 @@ export const reviewEditorShortcuts = defineShortcutScope({
   title: 'Review Editor',
   shortcuts: {
     submit: {
-      description: 'Approve / Send feedback — whichever the header shows',
+      description: 'Approve / Send feedback, whichever the header shows',
       bindings: ['Mod+Enter'],
       section: 'Actions',
       hint: 'Fires the adaptive header primary: Approve with no annotations, Send Feedback otherwise.',

@@ -2808,7 +2808,7 @@ const App: React.FC = () => {
       /** Discard flow: every annotation source is dropped, so the builder
        *  emits the legacy zero payload (plus any direct-edit sections). */
       discardAnnotations?: boolean;
-      /** Positive-finish framing for the non-gated note (spec §3.1). */
+      /** Positive-finish framing for the non-gated discard (spec §3.1). */
       approvalFraming?: boolean;
     },
   ): string => {
@@ -3686,7 +3686,8 @@ const App: React.FC = () => {
     /** Discard-and-finish (post-confirm): annotations dropped, the payload is
      *  the legacy "reviewed, no feedback" record. */
     discardAnnotations?: boolean;
-    /** "Done with a note…" — approval framing on the one feedback string. */
+    /** Approval framing on the one feedback string — the non-gated discard
+     *  path only, since the empty-menu collapse removed the framed note. */
     approvalFraming?: boolean;
   }): Promise<boolean> => {
     setIsSubmitting(true);
@@ -5023,8 +5024,9 @@ const App: React.FC = () => {
     if (pendingDecisionSubmit) {
       // L3: a failed note submit stays armed with its captured route/framing;
       // the next primary invocation retries THAT decision, never the bare
-      // primary (which would silently reframe "Done with a note" as a change
-      // request once the note raised hasFeedbackToSend).
+      // primary (which would re-derive from live state — dropping a gate's
+      // captured approve route, or re-committing the note — once the note
+      // raised hasFeedbackToSend).
       dispatchPendingDecision(pendingDecisionSubmit);
       return;
     }

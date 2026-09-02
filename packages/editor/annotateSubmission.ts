@@ -77,12 +77,13 @@ export interface CompleteAnnotateFeedbackInput {
   savedFileChangesSection: string;
   messageEntries?: MessageAnnotationEntry[];
   /**
-   * Positive-finish framing ("Done with a note…"). Non-gated annotate has no
-   * approve channel — every outcome is one feedback string — so without this
-   * the approval-note and change-request menu items would post byte-identical
-   * bodies. This is the ONLY place a menu choice changes payload text rather
-   * than endpoint: it prefixes the zero-state sentence before the note's
-   * global-comment section (idempotent when the text already is the sentence).
+   * Positive-finish framing. Non-gated annotate has no approve channel —
+   * every outcome is one feedback string — so this prefixes the zero-state
+   * sentence before the annotation sections (idempotent when the text already
+   * is the sentence). Since the empty-menu collapse (the maintainer merged
+   * "Done with a note…" into the single unframed "Send a note…"), the only
+   * caller is the non-gated discard path, which frames its positive finish
+   * over any direct edits that still ride along.
    */
   approvalFraming?: boolean;
 }

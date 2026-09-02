@@ -16,8 +16,10 @@ import type { CompactPlanAction } from "@plannotator/ui/components/PlanHeaderMen
 export type AnnotateDecisionRoute =
   | { kind: "primary" }
   /** Commit the note as a GLOBAL_COMMENT, then submit on the next render
-   *  (#1436 mechanism). `route` picks the endpoint; `approvalFraming` marks
-   *  the non-gated positive finish ("Done with a note…"). */
+   *  (#1436 mechanism). `route` picks the endpoint. `approvalFraming` is kept
+   *  for the framing machinery (the App's discard path still frames its
+   *  positive finish), but since the empty-menu collapse no spec-emitted note
+   *  route sets it — every menu note posts plain, unframed feedback. */
   | { kind: "note"; route: "feedback" | "approve"; approvalFraming: boolean }
   /** Direct approve with the live feedback riding along (gate + capability). */
   | { kind: "approve-with-notes" }
@@ -32,13 +34,16 @@ export function resolveAnnotateDecisionAction(
     case "primary":
       return { kind: "primary" };
     case "note-with-approval":
-      // Gate: the note rides the approval body (/api/approve). Non-gate has
-      // no approve channel, so "Done with a note…" posts /api/feedback with
-      // the approval-framing sentence — the only place a menu choice changes
-      // payload text rather than endpoint (spec §3.1 "framing").
+      // Gate: the note rides the approval body (/api/approve). The non-gate
+      // arm is UNREACHABLE from the spec since the empty-menu collapse
+      // (maintainer ruling: the non-gate menu's one composer is
+      // 'request-changes' / "Send a note…"); it stays only because the id
+      // union is shared with the gate. If a stray dispatch ever lands here it
+      // must behave like the collapsed item — plain feedback, and never
+      // fabricated approval framing.
       return ctx.gate
         ? { kind: "note", route: "approve", approvalFraming: false }
-        : { kind: "note", route: "feedback", approvalFraming: true };
+        : { kind: "note", route: "feedback", approvalFraming: false };
     case "request-changes":
     case "note-with-feedback":
       // The two differ only by state (empty vs feedback), never by transport.

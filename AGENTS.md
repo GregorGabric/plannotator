@@ -389,9 +389,11 @@ keyboard and header can never disagree. Transport routing is pure in
 `packages/editor/annotateDecision.ts`: `Done` and every note post `/api/feedback` (a note becomes
 a `GLOBAL_COMMENT` at submit time with a one-render deferred submit — zero server change), so
 `formatAnnotateOutcome` shapes and strict-gate exit codes are byte-identical to the old
-keyboard-only zero submit; only gate-mode approvals reach `/api/approve`. The non-gated
-"Done with a note…" is distinguished from "Request changes…" solely by the approval-framing
-sentence (`buildCompleteAnnotateFeedback`'s `approvalFraming`), and the only confirm left is the
+keyboard-only zero submit; only gate-mode approvals reach `/api/approve`. The non-gated empty
+menu carries a single composer, "Send a note…" (maintainer ruling: the old "Done with a note…" /
+"Request changes…" pair differed only by framing on the same transport and was collapsed into
+one item); the approval-framing sentence (`buildCompleteAnnotateFeedback`'s `approvalFraming`)
+now serves only the non-gated discard path, and the only confirm left is the
 explicit `Done/Approve, discard n annotations…` menu item (plus the pre-existing
 close-with-content warning). Compact/touch rows are generated from the same spec, so a visible
 positive decision exists in every state; composer rows open `DecisionNoteDialog`. The header flip

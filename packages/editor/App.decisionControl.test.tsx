@@ -11,9 +11,8 @@
  *  - The note must reach the agent AS A GLOBAL COMMENT in both the exported
  *    feedback string AND the annotations array, one render after the commit —
  *    a same-tick submit sends the pre-note payload and silently drops it.
- *  - "Done with a note…" and "Request changes…" must NOT collapse into one
- *    payload: only the approval framing distinguishes them on the one
- *    feedback transport.
+ *  - "Send a note…" (the collapsed non-gate composer) must post plain,
+ *    unframed feedback: a note is a note, never a fabricated approval.
  *  - Gate mode's empty primary must approve through /api/approve (that is
  *    what makes a strict gate exit 0).
  *  - The discard confirm must drop the annotations from the posted body, not
@@ -280,12 +279,12 @@ describe.if(hasDom)("annotate decision control", () => {
     expect(submissions[0]!.feedback).toBe(ANNOTATE_NO_FEEDBACK_SENTENCE);
   });
 
-  test("Request changes… posts one GLOBAL_COMMENT change request without approval framing", async () => {
+  test("Send a note… posts one GLOBAL_COMMENT without approval framing", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
     await mountAnnotate();
 
-    await openComposer("Request changes");
+    await openComposer("Send a note");
     await typeNote("tighten the intro");
     await pressNoteKey("Enter", { metaKey: true });
 
@@ -299,23 +298,20 @@ describe.if(hasDom)("annotate decision control", () => {
     expect(body.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(false);
   });
 
-  test("Done with a note… posts the same note WITH the approval framing sentence", async () => {
+  // Maintainer ruling (empty-menu collapse): the non-gate empty menu is ONE
+  // composer. A resurrected "Done with a note…" row would silently split the
+  // decision back into two costumes.
+  test("the empty non-gate menu offers exactly one composer item", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
     await mountAnnotate();
 
-    await openComposer("Done with a note");
-    await typeNote("looks fine, watch the migration");
-    await pressNoteKey("Enter", { ctrlKey: true });
+    await act(async () => caretButton()!.click());
+    await settle();
 
-    expect(submissions).toHaveLength(1);
-    const body = submissions[0]!;
-    expect(body.endpoint).toBe("feedback");
-    const notes = globalComments(body);
-    expect(notes).toHaveLength(1);
-    expect(notes[0]!.text).toBe("looks fine, watch the migration");
-    expect(body.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(true);
-    expect(body.feedback).toContain("looks fine, watch the migration");
+    const items = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    expect(items).toHaveLength(1);
+    expect(menuItem("Done with a note")).toBeUndefined();
   });
 
   test("the note rides alongside annotations already in the session", async () => {
@@ -405,55 +401,55 @@ describe.if(hasDom)("annotate decision control", () => {
     seedAnnouncementsSeen();
     await mountAnnotate();
 
-    await openComposer("Request changes");
+    await openComposer("Send a note");
     await typeNote("not ready to send");
     await pressNoteKey("Escape");
 
     // Back at the menu, nothing submitted.
     expect(noteInput()).toBeNull();
-    expect(menuItem("Request changes")).toBeDefined();
+    expect(menuItem("Send a note")).toBeDefined();
     expect(submissions).toHaveLength(0);
 
-    const item = menuItem("Request changes")!;
+    const item = menuItem("Send a note")!;
     await act(async () => item.click());
     await settle();
     expect(noteInput()?.value).toBe("not ready to send");
   });
 
   // L3 pin: a failed POST must keep the captured decision armed — retrying
-  // through the primary re-posts the SAME route with the approval framing
-  // intact. Without it, the retry would re-derive from live state (the note
-  // raised hasFeedbackToSend) and silently reframe "Done with a note" as a
-  // bare change request.
-  test("a failed note submit keeps the decision armed; retry keeps the captured framing", async () => {
+  // through the primary replays THAT decision. Without it, the retry would
+  // either drop the armed note or commit it a second time (two
+  // GLOBAL_COMMENTs from one composer submit).
+  test("a failed note submit keeps the decision armed; retry replays it without a second note", async () => {
     setStorageBackend(memoryBackend);
     seedAnnouncementsSeen();
     failFeedbackPosts = 1;
     await mountAnnotate();
 
-    await openComposer("Done with a note");
+    await openComposer("Send a note");
     await typeNote("hold the line");
     await pressNoteKey("Enter", { metaKey: true });
 
-    // First attempt: captured framing, but the POST failed — no completion.
+    // First attempt: captured decision posted, but the POST failed — no
+    // completion overlay, the session stays reviewable.
     expect(submissions).toHaveLength(1);
     expect(submissions[0]!.endpoint).toBe("feedback");
-    expect(submissions[0]!.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(true);
+    expect(submissions[0]!.feedback).toContain("hold the line");
     const primary = primaryButton();
     expect(primary).not.toBeNull(); // still reviewable, not submitted
 
-    // Retry via the primary: the armed decision replays its captured route
-    // and framing rather than the bare (now Send Feedback) primary.
+    // Retry via the primary: the armed decision replays with the SAME single
+    // note — never a re-commit, never a dropped note.
     await act(async () => primary!.click());
     await settle();
 
     expect(submissions).toHaveLength(2);
     const retry = submissions[1]!;
     expect(retry.endpoint).toBe("feedback");
-    expect(retry.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(true);
     expect(retry.feedback).toContain("hold the line");
     const notes = globalComments(retry);
     expect(notes).toHaveLength(1);
+    expect(notes[0]!.text).toBe("hold the line");
   });
 
   // The HTML pinpoint Esc ladder must still receive Escape when the popover

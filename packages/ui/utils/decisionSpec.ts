@@ -10,14 +10,16 @@
  * app-shared chrome and is deliberately absent from the README supported-import
  * list and the strict-consumer tsconfig.
  *
- * Labels, subtitles and confirm strings are the approved prototype's, verbatim
- * (DESIGN_final-proposal.html `spec()`), which is authoritative over any older
- * branch or mock copy.
+ * Labels, subtitles and confirm strings are the approved prototype's
+ * (DESIGN_final-proposal.html `spec()`), authoritative over any older branch
+ * or mock copy — except where a later maintainer ruling supersedes it: the
+ * non-gate empty menu carries ONE composer ("Send a note…"), and no
+ * user-facing string uses an em dash.
  */
 
 export type DecisionActionId =
   | 'primary'              // the left segment
-  | 'note-with-approval'   // "Done with a note…" / "Approve with a note…"
+  | 'note-with-approval'   // "Approve with a note…" (approval flows only)
   | 'request-changes'      // "Request changes…"
   | 'note-with-feedback'   // "Send with a note…"
   | 'approve-with-notes'   // review + gate-annotate; capability-gated
@@ -139,66 +141,65 @@ function annotationNoun(count: number): string {
  * gets `Done`.
  */
 function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): DecisionSpec {
-  // "Done with a note…" posts /api/feedback like every other non-gated annotate
-  // outcome, so it is never capability-gated. "Approve with a note…" carries a
-  // note on the approve channel, which four runtimes still discard — it renders
-  // only where the advert says delivery works (never an item that silently
-  // drops content).
-  const positive: DecisionMenuItem | null = approvalFlow
-    ? input.approvalNotesSupported
-      ? {
-          id: 'note-with-approval',
-          label: 'Approve with a note…',
-          subtitle: 'Approve and send a short note with it',
+  // "Approve with a note…" carries a note on the approve channel, which four
+  // runtimes still discard — it renders only where the advert says delivery
+  // works (never an item that silently drops content). Non-gate annotate has
+  // no approve channel and no positive-note item at all: the maintainer ruled
+  // the old "Done with a note…" / "Request changes…" pair collapsed into the
+  // single "Send a note…" below, because their only difference was framing on
+  // the same /api/feedback transport.
+  const positive: DecisionMenuItem | null = approvalFlow && input.approvalNotesSupported
+    ? {
+        id: 'note-with-approval',
+        label: 'Approve with a note…',
+        subtitle: 'Approve and send a short note with it',
+        tone: 'success',
+        icon: 'check',
+        composer: {
+          title: 'Approve with a note',
+          actionLabel: 'Approve and send note',
           tone: 'success',
           icon: 'check',
-          composer: {
-            title: 'Approve with a note',
-            actionLabel: 'Approve — send note',
-            tone: 'success',
-            icon: 'check',
-            placeholder: DECISION_NOTE_PLACEHOLDER,
-          },
-        }
-      : null
-    : {
-        id: 'note-with-approval',
-        label: 'Done with a note…',
-        // Maintainer ruling (post-demo): without a gate there IS no approval —
-        // Done is a positive finish, not an approve — so this row must not
-        // wear the approval costume (success tone + check). Neutral tone,
-        // send icon, and copy that never says "approval". Free prose, NOT
-        // frozen. (M1: the delivered variant names the session record.)
-        subtitle: input.feedbackDelivered
-          ? 'Finish and send a short note with the session record'
-          : 'Finish and send a short note with it',
-        tone: 'neutral',
+          placeholder: DECISION_NOTE_PLACEHOLDER,
+        },
+      }
+    : null;
+
+  const requestChanges: DecisionMenuItem = approvalFlow
+    ? {
+        id: 'request-changes',
+        // Frozen copy (maintainer-approved): 'Request changes…'.
+        label: 'Request changes…',
+        subtitle: 'Write overall feedback, sent as a change request',
+        tone: 'primary',
         icon: 'send',
+        dividerBefore: positive !== null,
         composer: {
-          title: 'Done with a note',
-          actionLabel: 'Done — send note',
-          tone: 'neutral',
+          title: 'Request changes',
+          actionLabel: 'Send as feedback',
+          tone: 'primary',
+          icon: 'send',
+          placeholder: DECISION_NOTE_PLACEHOLDER,
+        },
+      }
+    : {
+        // Maintainer ruling (empty-menu collapse): the one non-gate composer.
+        // Same id and route as the old change request (plain /api/feedback,
+        // no approval framing) — only the copy is new. Free prose, NOT frozen.
+        id: 'request-changes',
+        label: 'Send a note…',
+        subtitle: 'Write a note and send it as feedback',
+        tone: 'primary',
+        icon: 'send',
+        dividerBefore: false,
+        composer: {
+          title: 'Send a note',
+          actionLabel: 'Send as feedback',
+          tone: 'primary',
           icon: 'send',
           placeholder: DECISION_NOTE_PLACEHOLDER,
         },
       };
-
-  const requestChanges: DecisionMenuItem = {
-    id: 'request-changes',
-    // Frozen copy (maintainer-approved): 'Request changes…'.
-    label: 'Request changes…',
-    subtitle: 'Write overall feedback — sent as a change request',
-    tone: 'primary',
-    icon: 'send',
-    dividerBefore: positive !== null,
-    composer: {
-      title: 'Request changes',
-      actionLabel: 'Send as feedback',
-      tone: 'primary',
-      icon: 'send',
-      placeholder: DECISION_NOTE_PLACEHOLDER,
-    },
-  };
 
   return {
     primary: approvalFlow
@@ -206,7 +207,7 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
           id: 'primary',
           // Frozen copy (maintainer-approved): 'Approve'.
           label: 'Approve',
-          title: 'Approve — no changes requested',
+          title: 'Approve: no changes requested',
           tone: 'success',
           icon: 'check',
         }
@@ -219,8 +220,8 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
           // on stdout may never have seen the terminal delivery), so the
           // tooltip must not claim "no feedback". Free prose, NOT frozen.
           title: input.feedbackDelivered
-            ? 'Finish — sends the session record (feedback already shared in the terminal)'
-            : 'Finish — records that you reviewed with no feedback',
+            ? 'Finish: sends the session record (feedback already shared in the terminal)'
+            : 'Finish: records that you reviewed with no feedback',
           // Maintainer ruling (post-demo): Done without a gate is a positive
           // finish, NOT an approval — no success tone, no check icon, so it
           // can never be mistaken for the gate/review Approve.
@@ -292,7 +293,7 @@ function buildFeedbackSpec(input: DecisionSpecInput, approvalFlow: boolean): Dec
       label: approvalFlow
         ? `Approve, discard ${count} ${noun}…`
         : `Done, discard ${count} ${noun}…`,
-      subtitle: 'Asks to confirm — the annotations are not sent',
+      subtitle: 'Asks to confirm: the annotations are not sent',
       tone: 'destructive',
       icon: 'check',
       dividerBefore: dividerPending,
@@ -354,7 +355,7 @@ function buildPlatformSpec(input: DecisionSpecInput, platform: DecisionPlatformI
         id: 'primary',
         // Frozen copy (maintainer-approved): 'Approve'.
         label: 'Approve',
-        title: selfAuthored ? selfReason : 'Approve - no changes needed',
+        title: selfAuthored ? selfReason : 'Approve: no changes needed',
         tone: 'success',
         icon: 'check',
         ...(selfAuthored ? { muted: true } : {}),
@@ -376,7 +377,7 @@ function buildPlatformSpec(input: DecisionSpecInput, platform: DecisionPlatformI
           id: 'request-changes',
           // Frozen copy (maintainer-approved): 'Request changes…'.
           label: 'Request changes…',
-          subtitle: 'Overall feedback, zero line comments — via the dialog',
+          subtitle: 'Overall feedback, zero line comments, via the dialog',
           tone: 'primary',
           icon: 'send',
           dividerBefore: true,
@@ -409,7 +410,7 @@ function buildPlatformSpec(input: DecisionSpecInput, platform: DecisionPlatformI
       {
         id: 'note-with-feedback',
         label: 'Post comments, then…',
-        subtitle: 'Request changes / stay neutral — chosen in the dialog',
+        subtitle: 'Request changes or stay neutral, chosen in the dialog',
         tone: 'primary',
         icon: 'send',
         dividerBefore: true,

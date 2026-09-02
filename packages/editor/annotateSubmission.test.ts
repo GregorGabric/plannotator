@@ -231,10 +231,10 @@ describe("annotate approval submission", () => {
     expect(feedback).toContain("(line 5) ");
   });
 
-  // Guards the two menu items collapsing into one payload (spec §3.1 framing):
-  // "Done with a note…" and "Request changes…" both post one GLOBAL_COMMENT to
-  // /api/feedback, so only the framing prefix distinguishes approval from a
-  // change request.
+  // Guards the framing machinery the discard path still rides: a framed
+  // payload prefixes the zero-state sentence, an unframed one never does, and
+  // at zero content the frame is idempotent (the discard body stays
+  // byte-identical to the legacy zero payload).
   test("approval framing prefixes the zero-state sentence before the note", () => {
     const note: Annotation = {
       id: "global-note-1",

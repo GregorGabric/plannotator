@@ -31,7 +31,7 @@ export const planEditorShortcuts = defineShortcutScope({
       displayOrder: 10,
     },
     submitAnnotations: {
-      description: 'Done / Send feedback — whichever the header shows',
+      description: 'Done / Send feedback, whichever the header shows',
       bindings: ['Mod+Enter'],
       section: 'Actions',
       hint: 'Fires the adaptive header primary: Done (or Approve in gate mode) with nothing to send, Send Feedback otherwise.',

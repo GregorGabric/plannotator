@@ -24,7 +24,7 @@ function itemIds(spec: DecisionSpec): string[] {
 describe('buildDecisionSpec state matrix', () => {
   // Guards the model itself: each row of the spec's state table produces the
   // expected primary and the expected ordered menu.
-  it('annotate, no feedback, no gate → Done + note/request-changes', () => {
+  it('annotate, no feedback, no gate → Done + the single Send a note composer', () => {
     const spec = buildDecisionSpec({
       app: 'annotate', gate: false, count: 0, hasFeedback: false, approvalNotesSupported: false,
     });
@@ -33,16 +33,13 @@ describe('buildDecisionSpec state matrix', () => {
     // it must never wear the success tone or check icon Approve wears.
     expect(spec.primary.tone).toBe('neutral');
     expect(spec.primary.icon).toBeUndefined();
-    expect(itemIds(spec)).toEqual(['note-with-approval', 'request-changes']);
-    // Frozen copy (maintainer-approved): 'Request changes…'.
-    expect(spec.items[1].label).toBe('Request changes…');
-    // "Done with a note…" posts /api/feedback — never capability-gated. The
-    // two composers must stay DISTINCT actions (positive finish vs change
-    // request) — the labels themselves are free prose.
-    expect(spec.items[0].composer?.tone).toBe('neutral');
-    expect(spec.items[1].dividerBefore).toBe(true);
-    expect(spec.items[1].composer?.tone).toBe('primary');
-    expect(spec.items[0].composer?.actionLabel).not.toBe(spec.items[1].composer?.actionLabel);
+    // Maintainer ruling (empty-menu collapse): ONE composer item — the old
+    // "Done with a note…" / "Request changes…" pair differed only by framing
+    // on the same transport and must not come back. Label is free prose.
+    expect(itemIds(spec)).toEqual(['request-changes']);
+    expect(spec.items[0].composer).toBeDefined();
+    expect(spec.items[0].composer?.tone).toBe('primary');
+    expect(spec.items[0].dividerBefore).toBe(false);
   });
 
   it('annotate, no feedback, gate → Approve; approve-note item only with the capability', () => {
@@ -105,8 +102,6 @@ describe('buildDecisionSpec state matrix', () => {
 
     expect(delivered.primary.label).toBe('Done'); // frozen copy, maintainer-approved
     expect(delivered.primary.title).not.toContain('no feedback');
-    const deliveredNote = delivered.items.find((item) => item.id === 'note-with-approval')!;
-    expect(deliveredNote.subtitle).not.toContain('no feedback');
     // The two states must actually differ — a regression that ignores the
     // flag would silently restore the lying tooltip.
     expect(delivered.primary.title).not.toBe(plain.primary.title);
@@ -167,10 +162,50 @@ describe('buildDecisionSpec invariants', () => {
   it('approvalNotesSupported: false ⇒ no approve-carrying item anywhere', () => {
     for (const input of allInputs()) {
       if (input.approvalNotesSupported) continue;
-      if (input.app === 'annotate' && !input.gate) continue; // no approve channel at all
       const ids = itemIds(buildDecisionSpec(input));
       expect(ids).not.toContain('approve-with-notes');
       expect(ids).not.toContain('note-with-approval');
+    }
+  });
+
+  // Maintainer ruling (empty-menu collapse): without a gate there is no
+  // approval channel, so no approve-carrying id may appear in any non-gate
+  // annotate state, capability advert or not — this is also what keeps the
+  // non-gate 'note-with-approval' arm in annotateDecision.ts dead code.
+  it('non-gate annotate never emits an approve-carrying item', () => {
+    for (const input of allInputs()) {
+      if (input.app !== 'annotate' || input.gate) continue;
+      const ids = itemIds(buildDecisionSpec(input));
+      expect(ids).not.toContain('note-with-approval');
+      expect(ids).not.toContain('approve-with-notes');
+    }
+  });
+
+  // Maintainer ruling: no user-facing decision-control string carries an em
+  // dash. Sweeps every field the control renders, across both arms.
+  it('no user-facing string contains an em dash', () => {
+    const inputs: DecisionSpecInput[] = [
+      ...allInputs(),
+      ...([0, 1, 3] as const).flatMap((count) =>
+        [false, true].map((selfAuthored): DecisionSpecInput => ({
+          app: 'review', gate: true, count, hasFeedback: count > 0,
+          approvalNotesSupported: false,
+          platform: { label: 'GitHub', mrLabel: 'PR', selfAuthored },
+        }))),
+      ...allInputs().map((input) => ({ ...input, feedbackDelivered: true })),
+    ];
+    for (const input of inputs) {
+      const spec = buildDecisionSpec(input);
+      const strings = [
+        spec.primary.label, spec.primary.shortLabel, spec.primary.mobileLabel,
+        spec.primary.title,
+        ...spec.items.flatMap((item) => [
+          item.label, item.subtitle,
+          item.composer?.title, item.composer?.actionLabel, item.composer?.placeholder,
+          item.confirm?.title, item.confirm?.message, item.confirm?.confirmText,
+        ]),
+      ];
+      for (const value of strings) expect(value ?? '').not.toContain('—');
     }
   });
 
