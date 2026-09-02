@@ -38,10 +38,15 @@ let root: Root | null = null;
 let host: HTMLElement | null = null;
 let added: string[] = [];
 
+/** First call mounts; later calls re-render the SAME root, so parent state
+ *  (the lifted composer draft) survives — exactly the SSE placement-flip
+ *  scenario the L2 test drives. */
 async function renderSidebar(annotations: CodeAnnotation[]): Promise<void> {
-  host = document.createElement("div");
-  document.body.appendChild(host);
-  root = createRoot(host);
+  if (!root) {
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+  }
   await act(async () => {
     root!.render(
       <ReviewSidebar
@@ -127,13 +132,32 @@ describe.if(hasDom)("review sidebar + General comment", () => {
     expect(added).toEqual(["overall: needs a migration plan"]);
   });
 
-  test("an empty note never commits and the composer stays open", async () => {
+  test("an empty note never commits; the composer stays open and refocuses the field", async () => {
     await renderSidebar([]);
     await openComposer();
     await typeNote("   ");
     await act(async () => commitButton()!.click());
     expect(added).toEqual([]);
     expect(noteInput()).not.toBeNull();
+    // The decision-composer contract: an empty commit is answered by focus,
+    // not a disabled button.
+    expect(document.activeElement).toBe(noteInput());
+  });
+
+  test("a placement flip mid-draft keeps the composer open with its text", async () => {
+    // The SSE scenario: an external annotation lands while the reviewer is
+    // typing in the empty-state composer — totalCount 0→1 unmounts that
+    // instance and mounts the section-header one. The lifted parent state
+    // must carry the draft across; losing it here throws away a half-typed
+    // review-level comment through no action of the reviewer's.
+    await renderSidebar([]);
+    await openComposer();
+    await typeNote("the empty-state draft");
+
+    await renderSidebar([LINE_COMMENT]);
+    expect(noteInput()).not.toBeNull(); // still open, now in the General header
+    expect(noteInput()!.value).toBe("the empty-state draft");
+    expect(added).toEqual([]);
   });
 
   test("Escape dismisses the popover but keeps the draft for the next open", async () => {

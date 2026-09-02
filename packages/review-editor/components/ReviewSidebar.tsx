@@ -124,21 +124,32 @@ const SuggestionPreview: React.FC<{ code: string; originalCode?: string; languag
  * both placements (General section header, all-empty state); the composer is
  * the shared `DecisionNoteField` in a small anchored popover — the third
  * consumer of the note field, which is why it is a separate export from
- * `DecisionControl`. The draft survives a dismissal (outside click / Escape);
- * only a commit clears it. An empty commit never fires the callback — it
- * refocuses the field, the same contract as the decision composers.
+ * `DecisionControl`.
+ *
+ * Fully controlled: `open`/`text` live in ReviewSidebar, shared by both
+ * placements, so the draft survives a dismissal (outside click / Escape), a
+ * placement flip (an external annotation arriving over SSE mid-sentence
+ * unmounts the empty-state instance and mounts the section-header one), and a
+ * tab switch. Only a commit clears it; collapsing the sidebar discards it
+ * (accepted). An empty commit never fires the callback — it refocuses the
+ * field, the same contract as the decision composers.
  */
 const GeneralCommentComposer: React.FC<{
   onAdd: (text: string) => void;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  text: string;
+  onTextChange: (text: string) => void;
   /** Popover alignment relative to the button: section header anchors right,
    *  the centered empty-state button anchors center. */
   align: 'right' | 'center';
+  /** The sidebar panel's width when it is a fixed-width panel; undefined in
+   *  the full-screen overlay presentation (the 100vw class guard covers it). */
+  panelWidth?: number;
   touchTarget?: boolean;
-}> = ({ onAdd, align, touchTarget }) => {
-  const [open, setOpen] = useState(false);
-  const [text, setText] = useState('');
+}> = ({ onAdd, open, onOpenChange, text, onTextChange, align, panelWidth, touchTarget }) => {
   const ref = useRef<HTMLDivElement>(null);
-  useDismissablePopover({ enabled: open, ref, onDismiss: () => setOpen(false) });
+  useDismissablePopover({ enabled: open, ref, onDismiss: () => onOpenChange(false) });
 
   const submit = () => {
     const trimmed = text.trim();
@@ -147,9 +158,20 @@ const GeneralCommentComposer: React.FC<{
       return;
     }
     onAdd(trimmed);
-    setText('');
-    setOpen(false);
+    onTextChange('');
+    onOpenChange(false);
   };
+
+  // Width clamp — the popover lives inside OverlayScrollArea (overflow-x
+  // hidden) in a panel the user can persist anywhere in 200-600px, so an
+  // unclamped w-64 (256px) clips unrecoverably below ~276px. Cap it to the
+  // panel width minus 32px. Geometry at the extremes: the section-header
+  // anchor's right edge sits 24px in from the panel's right (p-2 + p-2 + px-2
+  // nesting), so at 200px the clamped 168px popover's left edge lands at
+  // 200-24-168 = 8px; the empty-state anchor is panel-centered, 100±84 =
+  // 16..184px. At 288px the clamp equals w-64 (256px, left edge 8px); wider
+  // panels keep the 256px cap. Inline style so it tracks live resizes.
+  const clampStyle = panelWidth !== undefined ? { maxWidth: panelWidth - 32 } : undefined;
 
   return (
     <div ref={ref} className="relative" data-review-general-composer={open ? 'open' : 'closed'}>
@@ -157,7 +179,7 @@ const GeneralCommentComposer: React.FC<{
         type="button"
         data-pn-touch-target={touchTarget || undefined}
         data-add-general-comment
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => onOpenChange(!open)}
         aria-expanded={open}
         aria-haspopup="dialog"
         title="Add a review-level comment"
@@ -170,12 +192,13 @@ const GeneralCommentComposer: React.FC<{
           className={`absolute top-full z-30 mt-1 w-64 max-w-[calc(100vw-2rem)] rounded-lg border border-border bg-popover p-2 shadow-xl ${
             align === 'right' ? 'right-0' : 'left-1/2 -translate-x-1/2'
           }`}
+          style={clampStyle}
         >
           <DecisionNoteField
             text={text}
-            onTextChange={setText}
+            onTextChange={onTextChange}
             onSubmit={submit}
-            onCancel={() => setOpen(false)}
+            onCancel={() => onOpenChange(false)}
             placeholder="Add a general comment..."
           />
           <div className="mt-2 flex items-center justify-between gap-2">
@@ -263,6 +286,17 @@ export const ReviewSidebar: React.FC<ReviewSidebarProps> = /* React.memo */({
 }) => {
   const totalCount = annotations.length + (editorAnnotations?.length ?? 0) + (descriptionAnnotations?.length ?? 0) + (commentAnnotations?.length ?? 0);
   const [copied, setCopied] = useState(false);
+  // General-comment composer state lives HERE, not in GeneralCommentComposer:
+  // the two placements (empty state vs section header) are different branches,
+  // so a totalCount 0→1 flip mid-sentence (an external annotation arriving
+  // over SSE) or a tab switch unmounts the instance — parent state keeps the
+  // draft and open popover across both. Collapsing the sidebar unmounts this
+  // component and discards the draft (accepted).
+  const [generalComposerOpen, setGeneralComposerOpen] = useState(false);
+  const [generalDraft, setGeneralDraft] = useState('');
+  // Available panel width for the popover clamp; the overlay presentation is
+  // full-screen, where the 100vw class guard applies instead.
+  const generalComposerPanelWidth = presentation === 'overlay' ? undefined : (width ?? 288);
 
   const handleQuickCopy = async () => {
     if (!feedbackMarkdown) return;
@@ -550,7 +584,12 @@ export const ReviewSidebar: React.FC<ReviewSidebarProps> = /* React.memo */({
                     <div className="mt-3">
                       <GeneralCommentComposer
                         onAdd={onAddGeneralComment}
+                        open={generalComposerOpen}
+                        onOpenChange={setGeneralComposerOpen}
+                        text={generalDraft}
+                        onTextChange={setGeneralDraft}
                         align="center"
+                        panelWidth={generalComposerPanelWidth}
                         touchTarget={presentation === 'overlay'}
                       />
                     </div>
@@ -568,7 +607,12 @@ export const ReviewSidebar: React.FC<ReviewSidebarProps> = /* React.memo */({
                         {onAddGeneralComment && (
                           <GeneralCommentComposer
                             onAdd={onAddGeneralComment}
+                            open={generalComposerOpen}
+                            onOpenChange={setGeneralComposerOpen}
+                            text={generalDraft}
+                            onTextChange={setGeneralDraft}
                             align="right"
+                            panelWidth={generalComposerPanelWidth}
                             touchTarget={presentation === 'overlay'}
                           />
                         )}

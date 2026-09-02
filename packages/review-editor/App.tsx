@@ -3650,10 +3650,15 @@ const ReviewApp: React.FC = () => {
   // withPRContext-stamped, so it survives an in-place PR switch (see the
   // factory's doc in reviewDecision.ts).
   const handleAddGeneralComment = useCallback((text: string) => {
+    // Mirrors the 'note' route's guard: a commit during an in-flight decision
+    // POST would append an annotation the captured body never carries — the
+    // server then deletes the draft and the comment vanishes from wire and
+    // archive alike.
+    if (submitted || busyWithDecision) return;
     const note = createGeneralReviewComment(text, identity);
     if (!note) return;
     addCodeAnnotationsWithHistory([note]);
-  }, [identity, addCodeAnnotationsWithHistory]);
+  }, [identity, addCodeAnnotationsWithHistory, busyWithDecision, submitted]);
 
   // The commit above is a state write, so feedbackMarkdown/handleSendFeedback
   // (which close over `allAnnotations`) only see the note on the NEXT render.

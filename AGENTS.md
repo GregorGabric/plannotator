@@ -258,7 +258,14 @@ id — an intentional asymmetry, not a bug.
 The review sidebar carries the durable human producer for review-level comments:
 **"+ General comment"** renders in the Annotations tab's General section header (even with zero
 general comments) AND in the all-empty state, opening the shared `DecisionNoteField` in a small
-anchored popover. Unlike the header composer's submit note (one-submit lifetime), a sidebar
+anchored popover whose width clamps to the resizable panel (200-600px persisted) so it never
+clips inside the sidebar's `overflow-x: hidden` scroll area. Composer state (open + draft) lives
+in `ReviewSidebar`, shared by both placements: the draft survives a dismissal, a placement flip
+(an external annotation arriving mid-sentence moves the button from the empty state to the
+section header), and a tab switch; collapsing the sidebar discards it. The producer is
+deliberately present in platform (PR) mode too — a session-level comment there rides the posted
+review body through the pre-existing `scope:'general'` handling in `buildFileScopedBody` /
+`ReviewSubmissionDialog`. Unlike the header composer's submit note (one-submit lifetime), a sidebar
 general comment goes through `addCodeAnnotationsWithHistory` — undoable, draft-persisted,
 deletable — and both producers share one shape factory, `createGeneralReviewComment` in
 `reviewDecision.ts`: `scope:'general'`, sentinel `filePath ''`/0/0, `review-note-` UUID id, and
