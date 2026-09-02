@@ -111,6 +111,10 @@ interface ExitButtonProps {
   isLoading?: boolean;
   title?: string;
   labelBreakpoint?: ToolbarLabelBreakpoint;
+  /** `'ghost'` renders the icon-only ghost-X form that sits beside the
+   *  decision control. Default `'pill'` keeps every existing caller
+   *  byte-identical. */
+  appearance?: 'pill' | 'ghost';
 }
 
 export const ExitButton: React.FC<ExitButtonProps> = ({
@@ -119,7 +123,21 @@ export const ExitButton: React.FC<ExitButtonProps> = ({
   isLoading = false,
   title = 'Close session without sending feedback',
   labelBreakpoint = 'md',
-}) => (
+  appearance = 'pill',
+}) => appearance === 'ghost' ? (
+  <Button
+    variant="ghost"
+    size="xs"
+    onClick={onClick}
+    disabled={disabled || isLoading}
+    title={title}
+    // Icon-only at every breakpoint, so the accessible name must live here.
+    aria-label={title}
+    className="px-2 text-muted-foreground"
+  >
+    {isLoading ? '…' : <X className="size-3.5" aria-hidden="true" />}
+  </Button>
+) : (
   <Button
     variant="secondary"
     size="xs"

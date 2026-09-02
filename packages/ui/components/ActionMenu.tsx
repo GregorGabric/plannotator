@@ -69,6 +69,12 @@ interface ActionMenuItemProps {
   subtitle?: string;
   badge?: React.ReactNode;
   disabled?: boolean;
+  /** ARIA menu semantics for hosts that render a real `role="menu"` popover
+   *  (DecisionControl). Default undefined so existing consumers are unchanged. */
+  role?: 'menuitem';
+  /** Appended to the row's classes (e.g. a tone token). Default undefined so
+   *  existing consumers are byte-identical. */
+  className?: string;
 }
 
 export const ActionMenuItem: React.FC<ActionMenuItemProps> = ({
@@ -78,13 +84,16 @@ export const ActionMenuItem: React.FC<ActionMenuItemProps> = ({
   subtitle,
   badge,
   disabled = false,
+  role,
+  className,
 }) => (
   <button
     data-pn-touch-target
     type="button"
     onClick={onClick}
     disabled={disabled}
-    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+    role={role}
+    className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent${className ? ` ${className}` : ''}`}
   >
     <span className="text-muted-foreground">{icon}</span>
     {subtitle ? (
