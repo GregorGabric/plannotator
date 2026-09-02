@@ -4,6 +4,7 @@ import { reviewSettingsShortcutRegistry } from '../review-editor/shortcuts';
 import {
   annotationModeShortcuts,
   createShortcutRegistry,
+  decisionControlShortcuts,
   defineShortcutScope,
   dispatchShortcutEvent,
   formatShortcutBindingText,
@@ -390,6 +391,17 @@ describe('shortcuts', () => {
 
     expect(calls).toEqual(['comment', 'redline']);
     expect(preventDefaultCalls).toBe(2);
+  });
+
+  // The decision-control scope ships in PR1 unmounted; PR2/PR3 add it to the
+  // annotate and review settings registries. This guards that registration in
+  // advance: a duplicate scope id or non-normalized binding token would only
+  // surface as a throw at app startup otherwise.
+  it('decision-control scope composes cleanly into both adopting registries', () => {
+    expect(decisionControlShortcuts.id).toBe('decision-control');
+    for (const registry of [annotateSettingsShortcutRegistry, reviewSettingsShortcutRegistry]) {
+      expect(validateShortcutRegistry([...registry, decisionControlShortcuts])).toEqual([]);
+    }
   });
 
   it('leaves annotation mode alone when Alt is held', () => {
