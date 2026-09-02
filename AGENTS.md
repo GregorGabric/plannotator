@@ -224,6 +224,24 @@ Send Feedback → feedback sent to agent session
 Approve → "LGTM" sent to agent session
 ```
 
+### Review header decision control (agent mode)
+
+The agent-destination review header uses the same adaptive split control the annotate surfaces
+adopted: a ghost-X Close plus `DecisionControl` (`packages/ui/components/DecisionControl.tsx`)
+rendered from the pure `buildDecisionSpec` mapping — `Approve` with no annotations,
+`Send Feedback · n` otherwise, with `Request changes…` / `Send with a note…` and the explicit
+`Approve, discard n annotations…` confirm behind the caret. One `submitPrimaryDecision()`
+callback serves the header primary, the global `Mod+Enter` handler, and the compact primary row.
+Transport routing is pure in `packages/review-editor/reviewDecision.ts` and single-endpoint:
+every decision POSTs `/api/feedback` with `approved` as the only fork; a note becomes a
+`scope:'general'` `CodeAnnotation` (sentinel `filePath ''`/0/0, riding the export's `## General`
+section) with a one-render deferred submit — zero server change. Approve-carrying menu items
+(`Approve with notes`, `Approve with a note…`) are capability-gated on an approval-notes advert
+no review server sends yet, so they do not render until the delivery phase lands on both
+runtimes. Compact/touch rows are generated from the same spec, so a visible positive decision
+exists in every state; composer rows open `DecisionNoteDialog`. Platform (PR) mode keeps its own
+`Close / Post Comments / Approve` row and submission dialog for now.
+
 ### Since-main default review view
 
 The default code-review diff is **`since-base`** — a composite of `merge-base(base, HEAD)` vs the working tree plus untracked files ("everything a PR would show if you committed and pushed now"). It can render as a three-section **git status** panel (Committed / Changes / Untracked) via `SectionsPanel`, with a `Tree | Git status | Commits` toggle (`PanelViewToggle`). The Commits segment (git-local sessions only) is a linear `--first-parent` history rail (`CommitsPanel`): clicking a commit opens its own diff (`commit:<sha>`, vs its first parent) as the all-files view headed by the commit message rendered as markdown. The Commits view is a self-contained detour: entering it memoizes the previously active diff, exiting to Tree restores that diff verbatim (exiting to Git status resets to `since-base` as always), the memo clears whenever any non-commit diff is applied, and a reload that serves a commit-family diff with a non-Commits panel view snaps once to the session default so the commit diff cannot outlive the visit. The toggle never writes the persisted `reviewPanelView`/`defaultDiffType` pair (no server writes from a toggle click), but it does record a cookie-only last-used memo (`reviewPanelViewLastUsed`, `sections` | `tree` — never `commits`; the Commits view is session-only). A review OPENS on session choice ?? last-used memo ?? persisted `reviewPanelView` (cookie-only, written only by Settings and `ReviewSetupDialog` through `setReviewPanelView()`, which also syncs the memo so an explicit choice is never shadowed by a stale one — except the App self-heal, which passes `recordLastUsed: false` to repair the diff half of a conflicted pair without touching the memo). The first-run initializer marks review-setup-seen when it seeds the cookie-only Tree choice, not only on dismiss, so it is genuinely one-time per browser and cannot overwrite a returning reviewer's persisted or last-used view; it inherits the resolved `defaultDiffType` without a server config write. The persisted pair is coupled: the Sections view only renders `since-base`, so choosing a classic diff default snaps the persisted view to Tree and vice-versa (enforced in `ReviewSetupDialog`, the Settings Git tab, and the App first-run initializer).
