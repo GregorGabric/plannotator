@@ -126,7 +126,6 @@ import { rmSync, realpathSync, existsSync } from "fs";
 import { parseRemoteUrl } from "@plannotator/shared/repo";
 import {
   composeReviewApprovedMessage,
-  getReviewApprovedPrompt,
   getReviewDeniedSuffix,
   getPlanDeniedPrompt,
   getPlanToolName,
@@ -1093,10 +1092,10 @@ if (args[0] === "sessions") {
   if (result.exit) {
     console.log("Review session closed without feedback.");
   } else if (result.approved) {
-    // PR5 delivery (spec §6.4): the approved prompt, then the reviewer's
-    // approve-time notes when the decision carries any. A bare approval
-    // prints the prompt alone, byte-identical to before.
-    console.log(composeReviewApprovedMessage(getReviewApprovedPrompt(detectedOrigin), result.feedback));
+    // PR5 delivery (spec §6.4): a bare approval prints the approved prompt,
+    // byte-identical to before; an approval carrying reviewer notes prints
+    // the approved-with-notes framing (non-blocking guidance) instead.
+    console.log(composeReviewApprovedMessage(detectedOrigin, result.feedback));
   } else {
     console.log(result.feedback);
     // Append the verification-only suffix whenever the reviewer sent annotations to
@@ -1727,7 +1726,7 @@ if (args[0] === "sessions") {
   // in a host that cannot import Bun-only server modules directly.
 
   const inputJson = await Bun.stdin.text();
-  const input = parseOpenCodeBridgeInput<{ arguments?: unknown }>(
+  const input = parseOpenCodeBridgeInput<{ arguments?: unknown; supportsApprovalNotes?: unknown }>(
     "opencode-review",
     inputJson,
   );
@@ -1830,10 +1829,15 @@ if (args[0] === "sessions") {
     agentCwd,
     sharingEnabled: bridgeSharingEnabled,
     shareBaseUrl: bridgeShareBaseUrl,
-    // This branch's JSON record already carries feedback on approve; the
-    // discarding consumer was the bridge's prompt builder, updated in the
-    // same change (buildReviewPromptFromBridgeOutcome, spec §6.3 #3).
-    approvalNotesSupported: supportsReviewApprovalNotes("opencode"),
+    // Fail-closed approval-notes handshake: this branch's JSON record already
+    // carries feedback on approve, but DELIVERY to the agent lives in the
+    // independently-versioned plugin (buildReviewPromptFromBridgeOutcome,
+    // spec §6.3 #3), so the advert requires the plugin's own stdin
+    // declaration. An old plugin omits `supportsApprovalNotes`, the advert
+    // stays false, and no approve-carrying item renders — a new binary can
+    // never trick an old bridge into dropping a reviewer's note.
+    approvalNotesSupported:
+      supportsReviewApprovalNotes("opencode") && input.supportsApprovalNotes === true,
     htmlContent: reviewHtmlContent,
     opencodeClient: makeOpenCodeBridgeClient(input.agents),
     onReady: (url, isRemote, port) => {

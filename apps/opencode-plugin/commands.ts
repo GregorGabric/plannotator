@@ -20,7 +20,6 @@ import { loadConfig, resolveDefaultDiffType, resolveUseJina } from "@plannotator
 import {
   composeReviewApprovedMessage,
   getAnnotateApprovedWithNotesPrompt,
-  getReviewApprovedPrompt,
   getReviewDeniedSuffix,
   getAnnotateFileFeedbackPrompt,
 } from "@plannotator/shared/prompts";
@@ -202,7 +201,7 @@ export async function handleReviewCommand(
       // with no annotations — those go through verbatim, no suffix.
       // Approvals carry the reviewer's approve-time notes after the prompt.
       const message = result.approved
-        ? composeReviewApprovedMessage(getReviewApprovedPrompt("opencode"), result.feedback)
+        ? composeReviewApprovedMessage("opencode", result.feedback)
         : result.annotations.length > 0
           ? `${result.feedback}${getReviewDeniedSuffix("opencode")}`
           : result.feedback;

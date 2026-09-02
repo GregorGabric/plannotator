@@ -9,7 +9,6 @@ import {
   getAnnotateApprovedWithNotesPrompt,
   getAnnotateFileFeedbackPrompt,
   getAnnotateMessageFeedbackPrompt,
-  getReviewApprovedPrompt,
   getReviewDeniedSuffix,
 } from "@plannotator/shared/prompts";
 import { resolveTargetAgent, resolveValidatedTargetAgent } from "./agent-switch";
@@ -577,9 +576,10 @@ export function buildReviewPromptFromBridgeOutcome(outcome: CliReviewOutcome): {
 
   if (outcome.approved || outcome.decision === "approved") {
     // PR5 delivery (spec §6.4, consumer #3): the CLI's JSON record carries
-    // feedback on approve; append it after the prompt instead of discarding.
+    // feedback on approve; deliver it in the approved-with-notes framing
+    // instead of discarding it.
     return {
-      message: composeReviewApprovedMessage(getReviewApprovedPrompt("opencode"), outcome.feedback),
+      message: composeReviewApprovedMessage("opencode", outcome.feedback),
       ...(targetAgent && { agent: targetAgent }),
     };
   }
@@ -659,6 +659,17 @@ export async function handleCliCommand(input: {
         cwd,
         input: JSON.stringify({
           arguments: input.rawArgs,
+          // Fail-closed approval-notes handshake (same version-skew reasoning
+          // as formatUserFacingCliStderrLine above: the binary and this plugin
+          // version independently). The advert lives in the binary's review
+          // server while DELIVERY lives in this plugin's
+          // buildReviewPromptFromBridgeOutcome, so the binary must advertise
+          // approvalNotesSupported for opencode ONLY when the plugin declares
+          // it delivers approve-time feedback. An old plugin omits the field,
+          // the advert stays false, and the approve-carrying menu items never
+          // render — nothing a new binary does can make an old plugin drop a
+          // reviewer's note.
+          supportsApprovalNotes: true,
           ...buildBridgePayload(input.bridge),
         }),
         readyLabel: "code review",

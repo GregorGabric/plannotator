@@ -239,16 +239,25 @@ becomes a `scope:'general'` `CodeAnnotation` (sentinel `filePath ''`/0/0, riding
 menu items (`Approve with notes`, `Approve with a note…`) are capability-gated on the
 server-sent `approvalNotesSupported` advert, which rides every diff payload (`/api/diff`,
 `/api/diff/switch`, `/api/pr-diff-scope`, `/api/pr-switch`, both runtimes) and reads as false
-when absent, so an old server renders no approve-carrying items. A capable session's approvals
-post `buildReviewApprovalBody`: bare approve sends `feedback: ''` (the old
-`'LGTM - no changes requested.'` placeholder is gone — a bare approval now archives as `lgtm`
-with no sidecar), "Approve with a note…" sends the note as the feedback, and "Approve with
-notes" sends the live annotations plus their export. Every review decision consumer (Claude
-Code CLI, OpenCode native + CLI bridge, Pi, the standalone dev server) emits approvals through
+when absent, so an old server renders no approve-carrying items. For the OpenCode CLI bridge
+the advert additionally requires the plugin's own `supportsApprovalNotes: true` declaration on
+the `opencode-review` stdin JSON (the binary and plugin version independently; an old plugin
+omits it and the advert fails closed, so a new binary can never hand an old bridge a note it
+would discard). A capable session's approvals post `buildReviewApprovalBody`: bare approve
+sends `feedback: ''` (the old `'LGTM - no changes requested.'` placeholder is gone — a bare
+approval now archives as `lgtm` with no sidecar), "Approve with a note…" sends the note as the
+feedback, and "Approve with notes" sends the live annotations plus their export (a note, if
+both are ever present, is folded in ahead of the export — never dropped). The four agent-facing
+decision consumers (Claude Code CLI, OpenCode native + CLI bridge, Pi) emit approvals through
 the shared `composeReviewApprovedMessage` (`packages/shared/prompts.ts`, vendored to Pi):
-the approved prompt, then the approve-time feedback when the decision carries any — the legacy
-placeholder is filtered there so a stale built client cannot append filler to approvals.
-Compact/touch rows are generated from the same spec, so a visible positive decision
+a bare approval is the plain approved prompt; an approval carrying feedback uses the
+approved-with-notes framing (`prompts.review.approvedWithNotes`, default
+`DEFAULT_REVIEW_APPROVED_WITH_NOTES_PROMPT` — "non-blocking guidance, do not revise or
+reopen"), because the bare prompt plus a change-request-shaped export would read as a
+contradiction. The legacy placeholder is filtered there so a stale built client cannot get
+filler framed as guidance. The standalone dev server (`apps/review/server`) is the exception:
+it emits the raw decision JSON with the feedback unfiltered and does not route through the
+composer. Compact/touch rows are generated from the same spec, so a visible positive decision
 exists in every state; composer rows open `DecisionNoteDialog`. Platform (PR) mode keeps its own
 `Close / Post Comments / Approve` row and submission dialog for now.
 

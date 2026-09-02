@@ -2488,9 +2488,15 @@ const ReviewApp: React.FC = () => {
     semanticDiff?: SemanticDiffAdvert;
     callFlow?: CallFlowAdvert;
     agentCwd?: string | null;
+    approvalNotesSupported?: boolean;
   }) {
     const isPRSwitch = !!data.prMetadata;
     setSnapshotId(data.snapshotId);
+    // Keep the approval-notes advert in lockstep with whatever payload the
+    // client last applied — the servers echo it on the PR family too.
+    if (data.approvalNotesSupported !== undefined) {
+      setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
+    }
     const nextFiles = parseDiffToFiles(data.rawPatch);
     dockApi?.getPanel(REVIEW_DIFF_PANEL_ID)?.api.close();
     needsInitialDiffPanel.current = true;

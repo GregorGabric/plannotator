@@ -96,7 +96,11 @@ export function buildReviewApprovalBody(input: ReviewApprovalBodyInput): {
     return {
       draftGeneration: input.draftGeneration,
       approved: true,
-      feedback: input.feedbackMarkdown,
+      // A note must never be silently discarded because annotations also
+      // ride: a future combined item (note + annotations) folds the note in
+      // ahead of the export. Today's "Approve with notes" item has no
+      // composer, so note is normally empty here.
+      feedback: note ? `${note}\n\n${input.feedbackMarkdown}` : input.feedbackMarkdown,
       annotations: input.annotations,
     };
   }

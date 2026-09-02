@@ -158,6 +158,21 @@ describe("review decision handler exhaustiveness", () => {
     expect(bare).toEqual({ draftGeneration: 3, approved: true, feedback: "", annotations: [] });
   });
 
+  // Stage-review m2: a note must never be silently discarded because
+  // annotations also ride — a future combined item (composer note + live
+  // annotations) folds the note in ahead of the export.
+  test("a note riding beside annotations is folded ahead of the export, never dropped", () => {
+    const body = buildReviewApprovalBody({
+      draftGeneration: 1,
+      note: "  ship it  ",
+      withAnnotations: true,
+      feedbackMarkdown: "# Code Review Feedback\n",
+      annotations: [createGeneralReviewComment("x")!],
+    });
+    expect(body.feedback).toBe("ship it\n\n# Code Review Feedback\n");
+    expect(body.annotations).toHaveLength(1);
+  });
+
   // Guards the compact surface: row ids double as React keys, so a collision
   // hides a decision row on touch — the silent-data-loss class the #1436
   // review flagged (E16-review).
