@@ -165,6 +165,13 @@ for (const runtime of runtimes) {
         expect(records.length).toBe(1);
         expect(records[0].decision).toBe("feedback");
         expect(records[0].counts.annotations).toBe(2);
+        // Maintainer ruling (open question 2): the archived record must carry
+        // the note's `scope` so a review-level general comment is
+        // distinguishable from a line comment in index.jsonl. Additive field —
+        // the line comment stays scope-free (the pre-scope default).
+        const archived = records[0].annotations ?? [];
+        expect(archived.find((a) => a.id === NOTE.id)?.scope).toBe("general");
+        expect(archived.find((a) => a.id === LINE_COMMENT.id)?.scope).toBeUndefined();
         // The sidecar exists and carries the note's text, so a submission whose
         // only content is a review-level note is recoverable from disk.
         expect(records[0].recordFile).toBeTruthy();
