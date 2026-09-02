@@ -29,15 +29,17 @@ describe('buildDecisionSpec state matrix', () => {
       app: 'annotate', gate: false, count: 0, hasFeedback: false, approvalNotesSupported: false,
     });
     expect(spec.primary.label).toBe('Done'); // frozen copy, maintainer-approved
-    expect(spec.primary.tone).toBe('success');
-    expect(spec.primary.icon).toBe('check');
+    // Maintainer ruling (post-demo): Done without a gate is NOT an approval —
+    // it must never wear the success tone or check icon Approve wears.
+    expect(spec.primary.tone).toBe('neutral');
+    expect(spec.primary.icon).toBeUndefined();
     expect(itemIds(spec)).toEqual(['note-with-approval', 'request-changes']);
     // Frozen copy (maintainer-approved): 'Request changes…'.
     expect(spec.items[1].label).toBe('Request changes…');
     // "Done with a note…" posts /api/feedback — never capability-gated. The
     // two composers must stay DISTINCT actions (positive finish vs change
     // request) — the labels themselves are free prose.
-    expect(spec.items[0].composer?.tone).toBe('success');
+    expect(spec.items[0].composer?.tone).toBe('neutral');
     expect(spec.items[1].dividerBefore).toBe(true);
     expect(spec.items[1].composer?.tone).toBe('primary');
     expect(spec.items[0].composer?.actionLabel).not.toBe(spec.items[1].composer?.actionLabel);

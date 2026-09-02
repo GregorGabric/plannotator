@@ -128,11 +128,18 @@ export const ExitButton: React.FC<ExitButtonProps> = ({
     onClick={onClick}
     disabled={disabled || isLoading}
     title={title}
-    // Icon-only at every breakpoint, so the accessible name must live here.
     aria-label={title}
-    className="px-2 text-muted-foreground"
+    // Maintainer ruling (post-demo): a bare X carries "close without
+    // sending" semantics an unlabeled icon should not carry alone — the
+    // word renders at every breakpoint.
+    className="px-2 text-muted-foreground gap-1.5"
   >
-    {isLoading ? '…' : <X className="size-3.5" aria-hidden="true" />}
+    {isLoading ? '…' : (
+      <>
+        <X className="size-3.5" aria-hidden="true" />
+        <span>Close</span>
+      </>
+    )}
   </Button>
 ) : (
   <Button

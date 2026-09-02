@@ -237,7 +237,7 @@ export const DecisionNoteDialog: React.FC<{
             onClick={submit}
             disabled={disabled}
             title={composer.actionLabel}
-            iconLeft={ICONS[composer.icon]}
+            iconLeft={composer.icon ? ICONS[composer.icon] : undefined}
           >
             {composer.actionLabel}
           </Button>
@@ -451,7 +451,7 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
         iconLeft={
           isLoading
             ? <Loader2 className="size-3.5 animate-spin" />
-            : ICONS[spec.primary.icon]
+            : spec.primary.icon ? ICONS[spec.primary.icon] : undefined
         }
         className={cn(
           'rounded-r-none border-r-0',
@@ -548,7 +548,7 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
                   {item.dividerBefore ? <ActionMenuDivider /> : null}
                   <ActionMenuItem
                     role="menuitem"
-                    icon={ICONS[item.icon]}
+                    icon={item.icon ? ICONS[item.icon] : undefined}
                     label={item.label}
                     subtitle={item.subtitle}
                     // Muted (platform self-approval): the row disables with
@@ -591,7 +591,7 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
                   data-decision-composer-send="true"
                   onClick={submitComposer}
                   title={activeItem.composer.actionLabel}
-                  iconLeft={ICONS[activeItem.composer.icon]}
+                  iconLeft={activeItem.composer.icon ? ICONS[activeItem.composer.icon] : undefined}
                 >
                   {activeItem.composer.actionLabel}
                 </Button>

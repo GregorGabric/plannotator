@@ -23,7 +23,7 @@ export type DecisionActionId =
   | 'approve-with-notes'   // review + gate-annotate; capability-gated
   | 'discard-and-finish';  // "Done/Approve, discard n annotations…"
 
-export type DecisionTone = 'success' | 'primary' | 'destructive';
+export type DecisionTone = 'success' | 'primary' | 'neutral' | 'destructive';
 
 export interface DecisionPrimary {
   id: 'primary';
@@ -32,7 +32,7 @@ export interface DecisionPrimary {
   mobileLabel?: string;     // compact/touch row label
   title: string;            // tooltip / aria description
   tone: Exclude<DecisionTone, 'destructive'>;
-  icon: 'check' | 'send';
+  icon?: 'check' | 'send';
   count?: number;           // rendered as the inline pill; omitted when 0
   /**
    * Platform self-approval (PR6, §3.4): rendered dimmed but NOT disabled.
@@ -48,7 +48,7 @@ export interface DecisionComposer {
   title: string;            // popover back-button title, e.g. 'Send with a note'
   actionLabel: string;      // the composer's own button, e.g. 'Send feedback with note'
   tone: Exclude<DecisionTone, 'destructive'>;
-  icon: 'check' | 'send';
+  icon?: 'check' | 'send';
   placeholder: string;      // 'Add a note...'
 }
 
@@ -63,7 +63,7 @@ export interface DecisionMenuItem {
   label: string;
   subtitle: string;
   tone: DecisionTone;
-  icon: 'check' | 'send';
+  icon?: 'check' | 'send';
   dividerBefore?: boolean;
   composer?: DecisionComposer;   // present ⇒ the item morphs the popover
   confirm?: DecisionConfirm;     // present ⇒ the item raises one confirm
@@ -164,19 +164,21 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
     : {
         id: 'note-with-approval',
         label: 'Done with a note…',
-        // M1 ruling: with feedback already delivered via the agent terminal
-        // this is no longer "the approval" — the note rides the session
-        // record. Free prose, NOT frozen.
+        // Maintainer ruling (post-demo): without a gate there IS no approval —
+        // Done is a positive finish, not an approve — so this row must not
+        // wear the approval costume (success tone + check). Neutral tone,
+        // send icon, and copy that never says "approval". Free prose, NOT
+        // frozen. (M1: the delivered variant names the session record.)
         subtitle: input.feedbackDelivered
           ? 'Finish and send a short note with the session record'
-          : 'Finish and send a short note with the approval',
-        tone: 'success',
-        icon: 'check',
+          : 'Finish and send a short note with it',
+        tone: 'neutral',
+        icon: 'send',
         composer: {
           title: 'Done with a note',
           actionLabel: 'Done — send note',
-          tone: 'success',
-          icon: 'check',
+          tone: 'neutral',
+          icon: 'send',
           placeholder: DECISION_NOTE_PLACEHOLDER,
         },
       };
@@ -219,8 +221,10 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
           title: input.feedbackDelivered
             ? 'Finish — sends the session record (feedback already shared in the terminal)'
             : 'Finish — records that you reviewed with no feedback',
-          tone: 'success',
-          icon: 'check',
+          // Maintainer ruling (post-demo): Done without a gate is a positive
+          // finish, NOT an approval — no success tone, no check icon, so it
+          // can never be mistaken for the gate/review Approve.
+          tone: 'neutral',
         },
     items: positive ? [positive, requestChanges] : [requestChanges],
   };
