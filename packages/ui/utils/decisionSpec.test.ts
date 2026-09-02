@@ -90,6 +90,27 @@ describe('buildDecisionSpec state matrix', () => {
     expect(itemIds(gateNoCap)).toEqual(['note-with-feedback', 'discard-and-finish']);
   });
 
+  // M1 ruling fact-guard: in the agent-terminal delivered state the Done
+  // transport still posts the FULL payload, so the copy must never claim
+  // "no feedback" — while the primary label itself stays the frozen 'Done'.
+  it('feedbackDelivered keeps the Done primary but drops the "no feedback" claim', () => {
+    const base = {
+      app: 'annotate' as const, gate: false, count: 0,
+      hasFeedback: false, approvalNotesSupported: false,
+    };
+    const plain = buildDecisionSpec(base);
+    const delivered = buildDecisionSpec({ ...base, feedbackDelivered: true });
+
+    expect(delivered.primary.label).toBe('Done'); // frozen copy, maintainer-approved
+    expect(delivered.primary.title).not.toContain('no feedback');
+    const deliveredNote = delivered.items.find((item) => item.id === 'note-with-approval')!;
+    expect(deliveredNote.subtitle).not.toContain('no feedback');
+    // The two states must actually differ — a regression that ignores the
+    // flag would silently restore the lying tooltip.
+    expect(delivered.primary.title).not.toBe(plain.primary.title);
+    expect(delivered.items.map((item) => item.id)).toEqual(plain.items.map((item) => item.id));
+  });
+
   it('review, no feedback → Approve; phase-1 menu is Request changes only', () => {
     const phase1 = buildDecisionSpec({
       app: 'review', gate: true, count: 0, hasFeedback: false, approvalNotesSupported: false,

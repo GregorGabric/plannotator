@@ -17,7 +17,6 @@ const headerProps: React.ComponentProps<typeof AppHeader> = {
   goalSetupCanSubmit: false,
   goalSetupIsSubmitting: false,
   goalSetupSubmitLabel: 'Submit',
-  gate: false,
   isSharedSession: false,
   origin: 'claude-code',
   isSubmitting: false,

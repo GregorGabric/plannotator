@@ -106,6 +106,9 @@ interface SubmittedBody {
 }
 
 let submissions: SubmittedBody[] = [];
+/** How many upcoming /api/feedback POSTs answer 500. Each failed attempt is
+ *  still recorded in `submissions` so its captured body can be asserted. */
+let failFeedbackPosts = 0;
 
 const MARKDOWN = "# Notes\n\nSome body text.\n";
 
@@ -137,6 +140,10 @@ function makeFetch(plan: unknown): typeof fetch {
         endpoint: url.pathname === "/api/feedback" ? "feedback" : "approve",
         ...(JSON.parse(String(init?.body ?? "{}")) as Omit<SubmittedBody, "endpoint">),
       });
+      if (url.pathname === "/api/feedback" && failFeedbackPosts > 0) {
+        failFeedbackPosts -= 1;
+        return Response.json({ error: "boom" }, { status: 500 });
+      }
       return Response.json({ ok: true });
     }
     return Response.json({});
@@ -230,6 +237,7 @@ afterEach(async () => {
   globalThis.EventSource = originalEventSource;
   if (hasDom && originalMatchMedia) window.matchMedia = originalMatchMedia;
   submissions = [];
+  failFeedbackPosts = 0;
   seededExternalAnnotations = [];
   memory.clear();
   resetStorageBackend();
@@ -410,6 +418,42 @@ describe.if(hasDom)("annotate decision control", () => {
     await act(async () => item.click());
     await settle();
     expect(noteInput()?.value).toBe("not ready to send");
+  });
+
+  // L3 pin: a failed POST must keep the captured decision armed — retrying
+  // through the primary re-posts the SAME route with the approval framing
+  // intact. Without it, the retry would re-derive from live state (the note
+  // raised hasFeedbackToSend) and silently reframe "Done with a note" as a
+  // bare change request.
+  test("a failed note submit keeps the decision armed; retry keeps the captured framing", async () => {
+    setStorageBackend(memoryBackend);
+    seedAnnouncementsSeen();
+    failFeedbackPosts = 1;
+    await mountAnnotate();
+
+    await openComposer("Done with a note");
+    await typeNote("hold the line");
+    await pressNoteKey("Enter", { metaKey: true });
+
+    // First attempt: captured framing, but the POST failed — no completion.
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0]!.endpoint).toBe("feedback");
+    expect(submissions[0]!.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(true);
+    const primary = primaryButton();
+    expect(primary).not.toBeNull(); // still reviewable, not submitted
+
+    // Retry via the primary: the armed decision replays its captured route
+    // and framing rather than the bare (now Send Feedback) primary.
+    await act(async () => primary!.click());
+    await settle();
+
+    expect(submissions).toHaveLength(2);
+    const retry = submissions[1]!;
+    expect(retry.endpoint).toBe("feedback");
+    expect(retry.feedback!.startsWith(ANNOTATE_NO_FEEDBACK_SENTENCE)).toBe(true);
+    expect(retry.feedback).toContain("hold the line");
+    const notes = globalComments(retry);
+    expect(notes).toHaveLength(1);
   });
 
   // The HTML pinpoint Esc ladder must still receive Escape when the popover

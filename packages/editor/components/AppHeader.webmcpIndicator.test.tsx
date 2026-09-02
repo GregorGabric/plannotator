@@ -17,7 +17,7 @@ const noop = () => {};
 function baseProps(): React.ComponentProps<typeof headerModule extends null ? never : NonNullable<typeof headerModule>['AppHeader']> {
   return {
     isApiMode: true, annotateMode: false, archiveMode: false, goalSetupMode: false, goalSetupCanSubmit: false, goalSetupIsSubmitting: false,
-    goalSetupSubmitLabel: 'Submit', gate: false, isSharedSession: false, origin: null,
+    goalSetupSubmitLabel: 'Submit', isSharedSession: false, origin: null,
     isSubmitting: false, isExiting: false, isPanelOpen: false, aiAvailable: false, isAIChatOpen: false, aiHasMessages: false,
     annotationCount: 0, linkedDocIsActive: false, callbackShareUrlReady: false, canShareCurrentSession: false,
     agentName: 'Claude', availableAgents: [], showAnnotationsWarning: false,

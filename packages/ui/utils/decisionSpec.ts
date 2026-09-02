@@ -80,6 +80,16 @@ export interface DecisionSpecInput {
   hasFeedback: boolean;
   /** Does the runtime deliver feedback on approve? Gates every approve-carrying item. */
   approvalNotesSupported: boolean;
+  /**
+   * M1 ruling: the session's feedback was already delivered through the
+   * annotate agent terminal, which is why `hasFeedback` reads false. The
+   * empty-flip state keeps its `Done` primary AND its transport (the outer
+   * agent's stdout consumer may never have seen the terminal delivery, so
+   * the full payload still posts) — only the copy changes, because "reviewed
+   * with no feedback" would be a lie in that state. Copy is free prose,
+   * NOT frozen.
+   */
+  feedbackDelivered?: boolean;
 }
 
 export const DECISION_NOTE_PLACEHOLDER = 'Add a note...';
@@ -119,7 +129,12 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
     : {
         id: 'note-with-approval',
         label: 'Done with a note…',
-        subtitle: 'Finish and send a short note with the approval',
+        // M1 ruling: with feedback already delivered via the agent terminal
+        // this is no longer "the approval" — the note rides the session
+        // record. Free prose, NOT frozen.
+        subtitle: input.feedbackDelivered
+          ? 'Finish and send a short note with the session record'
+          : 'Finish and send a short note with the approval',
         tone: 'success',
         icon: 'check',
         composer: {
@@ -162,7 +177,13 @@ function buildEmptySpec(input: DecisionSpecInput, approvalFlow: boolean): Decisi
           id: 'primary',
           // Frozen copy (maintainer-approved): 'Done'.
           label: 'Done',
-          title: 'Finish — records that you reviewed with no feedback',
+          // M1 ruling: in the agent-terminal delivered state the transport is
+          // unchanged (the full payload still posts, because the outer agent
+          // on stdout may never have seen the terminal delivery), so the
+          // tooltip must not claim "no feedback". Free prose, NOT frozen.
+          title: input.feedbackDelivered
+            ? 'Finish — sends the session record (feedback already shared in the terminal)'
+            : 'Finish — records that you reviewed with no feedback',
           tone: 'success',
           icon: 'check',
         },
@@ -236,18 +257,21 @@ function buildFeedbackSpec(input: DecisionSpecInput, approvalFlow: boolean): Dec
       tone: 'destructive',
       icon: 'check',
       dividerBefore: dividerPending,
+      // L5: neutral wording — the count can include findings from other
+      // tools, and the non-gate record still carries any direct edits.
+      // Free prose, NOT frozen.
       confirm: approvalFlow
         ? {
             title: `Discard ${count} ${noun} and approve?`,
             message:
-              'Your annotations are change requests. Approving without them tells the agent no changes are needed.',
+              'These annotations are change requests, including any from other tools. Approving without them tells the agent no changes are needed.',
             // Frozen copy (maintainer-approved): 'Discard & approve'.
             confirmText: 'Discard & approve',
           }
         : {
             title: `Discard ${count} ${noun} and finish?`,
             message:
-              'Your annotations are change requests. Finishing without them sends a "reviewed, no feedback" record.',
+              'These annotations are change requests, including any from other tools. Finishing without them sends a positive review record; any direct edits still ride along.',
             // Frozen copy (maintainer-approved): 'Discard & finish'.
             confirmText: 'Discard & finish',
           },

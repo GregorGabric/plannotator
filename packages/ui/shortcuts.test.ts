@@ -403,7 +403,6 @@ describe('shortcuts', () => {
     expect(decisionControlShortcuts.id).toBe('decision-control');
     expect([...annotateSettingsShortcutRegistry].some((scope) => scope.id === 'decision-control')).toBe(true);
     expect(validateShortcutRegistry([...annotateSettingsShortcutRegistry])).toEqual([]);
-    expect([...reviewSettingsShortcutRegistry].some((scope) => scope.id === 'decision-control')).toBe(false);
     expect(validateShortcutRegistry([...reviewSettingsShortcutRegistry, decisionControlShortcuts])).toEqual([]);
   });
 

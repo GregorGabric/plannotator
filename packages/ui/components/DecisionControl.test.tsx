@@ -369,34 +369,39 @@ describe('DecisionControl', () => {
     expect(popover()?.dataset.decisionPopover).toBe('menu');
     expect(menuItems().length).toBeGreaterThan(0);
     for (const handler of Object.values(handlers)) expect(handler).not.toHaveBeenCalled();
-  });
 
-  test.skipIf(!hasDom)('live spec change that empties the menu closes the popover', async () => {
-    const handlers = makeHandlers();
-    await mountControl(REVIEW_FEEDBACK, handlers);
-    await openMenu();
-    expect(popover()).not.toBeNull();
-
+    // Same rule for an OPEN CONFIRM (L2): the dialog resolves from the live
+    // spec, so when its item leaves the spec it closes back to the menu
+    // instead of confirming a stale decision.
     await act(async () => {
       root!.render(
         <DecisionControl
-          // A spec with no items cannot come out of buildDecisionSpec today,
-          // but the control must not trust that: an empty menu popover is a
-          // dead surface with no rows to interact with.
-          spec={{
-            primary: {
-              id: 'primary', label: 'Approve', title: 'Approve',
-              tone: 'success', icon: 'check',
-            },
-            items: [],
-          }}
+          spec={buildDecisionSpec(REVIEW_FEEDBACK)}
           handlers={handlers}
           busy={false}
           isLoading={false}
         />,
       );
     });
-
-    expect(popover()).toBeNull();
+    await clickItem('discard 3');
+    const confirmButton = () => Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find((el) => el.textContent === 'Discard & approve');
+    expect(confirmButton()).toBeDefined();
+    await act(async () => {
+      root!.render(
+        <DecisionControl
+          spec={buildDecisionSpec({
+            app: 'review', gate: true, count: 0, hasFeedback: false, approvalNotesSupported: true,
+          })}
+          handlers={handlers}
+          busy={false}
+          isLoading={false}
+        />,
+      );
+    });
+    expect(confirmButton()).toBeUndefined();
+    expect(popover()?.dataset.decisionPopover).toBe('menu');
+    expect(handlers['discard-and-finish']).not.toHaveBeenCalled();
   });
+
 });

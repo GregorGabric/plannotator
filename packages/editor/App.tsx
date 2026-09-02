@@ -440,16 +440,23 @@ const App: React.FC = () => {
   // because the payload builders close over `allAnnotations`. The route is
   // captured at menu-choice time — re-deriving it after the commit would see
   // the note itself and misroute a gate "Approve with a note" to feedback.
+  // L3: cleared only on submission SUCCESS — a failed POST keeps the captured
+  // route/framing armed so a retry cannot silently reframe the decision.
+  // `dispatched` marks the one automatic submit after the commit lands;
+  // after a failure, retries go through the primary.
   const [pendingDecisionSubmit, setPendingDecisionSubmit] = useState<{
     noteId: string;
     route: 'feedback' | 'approve';
     approvalFraming: boolean;
+    dispatched: boolean;
   } | null>(null);
   // Compact/touch decision surfaces: composer items open DecisionNoteDialog,
   // confirm items open one ConfirmDialog (the desktop popover lives inside
-  // DecisionControl; compact has no popover to morph).
-  const [compactDecisionComposer, setCompactDecisionComposer] = useState<DecisionMenuItem | null>(null);
-  const [compactDecisionConfirm, setCompactDecisionConfirm] = useState<DecisionMenuItem | null>(null);
+  // DecisionControl; compact has no popover to morph). L2: only the item ID
+  // is state — the dialog contents resolve from the LIVE spec at render, so
+  // a spec update while a dialog is up can never show or confirm stale copy.
+  const [compactDecisionComposer, setCompactDecisionComposer] = useState<DecisionMenuItem['id'] | null>(null);
+  const [compactDecisionConfirm, setCompactDecisionConfirm] = useState<DecisionMenuItem['id'] | null>(null);
   // The keydown effects mount above the decision callbacks; call through a
   // render-assigned ref (same pattern as headerHandlersRef) so keyboard and
   // header share literally one submitPrimaryDecision.
@@ -3654,6 +3661,8 @@ const App: React.FC = () => {
 
   // Annotate mode handler — sends feedback to the running terminal agent when
   // available, otherwise through the original server feedback channel.
+  // Returns whether the submission settled (delivered or posted): the pending
+  // note-decision machinery (L3) keeps its captured route armed on failure.
   // Which message(s) a submission is about. Send Feedback and Approve with
   // Notes must resolve this identically — otherwise notes delivered on the
   // approve path anchor to the last message instead of the picked one.
@@ -3676,14 +3685,14 @@ const App: React.FC = () => {
     discardAnnotations?: boolean;
     /** "Done with a note…" — approval framing on the one feedback string. */
     approvalFraming?: boolean;
-  }) => {
+  }): Promise<boolean> => {
     setIsSubmitting(true);
     try {
       snapshotActiveEditableDocument();
       const checkedSavedFileChanges = await validateSavedFileChangesBeforeSubmit();
       if (checkedSavedFileChanges === null) {
         setIsSubmitting(false);
-        return;
+        return false;
       }
       const discard = options?.discardAnnotations === true;
       const feedback = getCurrentFeedbackPayload(checkedSavedFileChanges, options);
@@ -3698,7 +3707,7 @@ const App: React.FC = () => {
         if (!shouldSendAgentTerminalFeedback(agentTerminalDeliveryRef.current, agentFeedbackDelivery)) {
           dismissDraft();
           setIsSubmitting(false);
-          return;
+          return true;
         }
         const agentFeedback = buildAnnotateAgentFeedback(feedback);
         if (agentFeedbackDelivery && sendToAgentTerminal(agentFeedback)) {
@@ -3706,7 +3715,7 @@ const App: React.FC = () => {
           dismissDraft();
           annotationHistory.clear();
           setIsSubmitting(false);
-          return;
+          return true;
         }
         handleAgentTerminalReadyChange(false);
         toast.error('Agent terminal is not ready. Sending through the original session.');
@@ -3726,9 +3735,11 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error('Failed to send feedback');
       dismissDraft();
       setSubmitted('denied'); // reuse 'denied' state for "feedback sent" overlay
+      return true;
     } catch {
       setIsSubmitting(false);
       scheduleDraftSaveAfterSubmitFailure();
+      return false;
     }
   };
 
@@ -3738,14 +3749,14 @@ const App: React.FC = () => {
      *  payload is dropped — text AND annotation arrays — so a capable
      *  transport cannot deliver what the reviewer chose to discard. */
     discardAnnotations?: boolean;
-  }) => {
+  }): Promise<boolean> => {
     setIsSubmitting(true);
     try {
       snapshotActiveEditableDocument();
       const checkedSavedFileChanges = await validateSavedFileChangesBeforeSubmit();
       if (checkedSavedFileChanges === null) {
         setIsSubmitting(false);
-        return;
+        return false;
       }
       const discard = options?.discardAnnotations === true;
       // hasFeedbackToSend (not hasFeedbackContent) so notes already delivered
@@ -3768,9 +3779,11 @@ const App: React.FC = () => {
       if (!res.ok) throw new Error('Failed to approve');
       dismissDraft();
       setSubmitted('approved');
+      return true;
     } catch {
       setIsSubmitting(false);
       scheduleDraftSaveAfterSubmitFailure();
+      return false;
     }
   };
 
@@ -4975,7 +4988,43 @@ const App: React.FC = () => {
   // row all call this. The zero-state Done submit is the SAME /api/feedback
   // POST the keyboard-only silent submit made (byte-identical payload —
   // spec §5.3); gate mode's empty primary is Approve on /api/approve.
+  // Runs one captured note decision on its captured route/framing. Cleared
+  // only on success (L3); the in-flight ref guards a double dispatch while a
+  // POST is outstanding.
+  const pendingDispatchInFlightRef = useRef(false);
+  const dispatchPendingDecision = useCallback((pending: {
+    route: 'feedback' | 'approve';
+    approvalFraming: boolean;
+  }) => {
+    if (pendingDispatchInFlightRef.current) return;
+    const { route, approvalFraming } = pending;
+    const run = async () => {
+      pendingDispatchInFlightRef.current = true;
+      try {
+        const ok = route === 'approve'
+          ? await headerHandlersRef.current.handleAnnotateApprove()
+          : await headerHandlersRef.current.handleAnnotateFeedback(
+              approvalFraming ? { approvalFraming: true } : undefined,
+            );
+        if (ok) setPendingDecisionSubmit(null);
+      } finally {
+        pendingDispatchInFlightRef.current = false;
+      }
+    };
+    if (maybeConfirmUnsavedSourceFileEdits(route === 'approve' ? 'approve' : 'send-feedback', run)) return;
+    void run();
+  }, [maybeConfirmUnsavedSourceFileEdits]);
+
   const submitPrimaryDecision = useCallback(() => {
+    if (isSubmitting || isExiting) return; // double-submit guard while in flight
+    if (pendingDecisionSubmit) {
+      // L3: a failed note submit stays armed with its captured route/framing;
+      // the next primary invocation retries THAT decision, never the bare
+      // primary (which would silently reframe "Done with a note" as a change
+      // request once the note raised hasFeedbackToSend).
+      dispatchPendingDecision(pendingDecisionSubmit);
+      return;
+    }
     if (gate && !hasFeedbackToSend) {
       const approve = () => headerHandlersRef.current.handleAnnotateApprove();
       if (maybeConfirmUnsavedSourceFileEdits('approve', approve)) return;
@@ -4985,7 +5034,15 @@ const App: React.FC = () => {
     const sendFeedback = () => headerHandlersRef.current.handleAnnotateFeedback();
     if (maybeConfirmUnsavedSourceFileEdits('send-feedback', sendFeedback)) return;
     sendFeedback();
-  }, [gate, hasFeedbackToSend, maybeConfirmUnsavedSourceFileEdits]);
+  }, [
+    dispatchPendingDecision,
+    gate,
+    hasFeedbackToSend,
+    isExiting,
+    isSubmitting,
+    maybeConfirmUnsavedSourceFileEdits,
+    pendingDecisionSubmit,
+  ]);
   submitPrimaryDecisionRef.current = submitPrimaryDecision;
 
   // Note → GLOBAL_COMMENT at submit time (#1436): it rides exportAnnotations
@@ -5020,29 +5077,28 @@ const App: React.FC = () => {
     if (isSubmitting || isExiting) return;
     const noteId = commitSubmitNote(text ?? '');
     if (!noteId) return; // the control never submits an empty note
-    setPendingDecisionSubmit({ noteId, route, approvalFraming });
+    setPendingDecisionSubmit({ noteId, route, approvalFraming, dispatched: false });
   }, [commitSubmitNote, isExiting, isSubmitting]);
 
   // The commit above is a state write, so the payload builders (which close
   // over `allAnnotations`) only see the note on the NEXT render. Submit from
-  // an effect once the note is actually in state rather than guessing.
+  // an effect once the note is actually in state rather than guessing. One
+  // automatic dispatch per arming; after a failure the armed decision waits
+  // for the next primary invocation (L3).
   useEffect(() => {
-    if (!pendingDecisionSubmit) return;
-    if (!annotations.some((a) => a.id === pendingDecisionSubmit.noteId)) return;
-    const { route, approvalFraming } = pendingDecisionSubmit;
-    setPendingDecisionSubmit(null);
-    if (route === 'approve') {
-      const approve = () => headerHandlersRef.current.handleAnnotateApprove();
-      if (maybeConfirmUnsavedSourceFileEdits('approve', approve)) return;
-      approve();
+    const pending = pendingDecisionSubmit;
+    if (!pending) return;
+    if (!annotations.some((a) => a.id === pending.noteId)) {
+      // The note left state (panel delete, draft restore, document switch):
+      // the captured decision lost its note — disarm rather than replaying
+      // its framing over someone else's payload.
+      setPendingDecisionSubmit(null);
       return;
     }
-    const send = () => headerHandlersRef.current.handleAnnotateFeedback(
-      approvalFraming ? { approvalFraming: true } : undefined,
-    );
-    if (maybeConfirmUnsavedSourceFileEdits('send-feedback', send)) return;
-    send();
-  }, [annotations, maybeConfirmUnsavedSourceFileEdits, pendingDecisionSubmit]);
+    if (pending.dispatched) return;
+    setPendingDecisionSubmit({ ...pending, dispatched: true });
+    dispatchPendingDecision(pending);
+  }, [annotations, dispatchPendingDecision, pendingDecisionSubmit]);
 
   const runAnnotateDecisionAction = useCallback((id: DecisionActionId, note?: string) => {
     const action = resolveAnnotateDecisionAction(id, { gate });
@@ -5084,7 +5140,16 @@ const App: React.FC = () => {
     count: feedbackAnnotationCount,
     hasFeedback: hasFeedbackToSend,
     approvalNotesSupported,
-  }), [approvalNotesSupported, feedbackAnnotationCount, gate, hasFeedbackToSend]);
+    // M1 ruling: agent-terminal delivered feedback flips the state to empty,
+    // but Done still posts the full payload — the spec adjusts its copy.
+    feedbackDelivered: isCurrentFeedbackDeliveredToAgent,
+  }), [
+    approvalNotesSupported,
+    feedbackAnnotationCount,
+    gate,
+    hasFeedbackToSend,
+    isCurrentFeedbackDeliveredToAgent,
+  ]);
 
   const annotateDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
     'primary': () => runAnnotateDecisionAction('primary'),
@@ -5110,6 +5175,24 @@ const App: React.FC = () => {
   }), [annotateCloseTitle, annotateDecisionHandlers, annotateDecisionSpec, isHtmlSurface]);
 
   const annotateCompactPrimaryId = compactPrimaryIdForDecision(annotateDecisionSpec.primary);
+
+  // L2: the compact dialogs render from the LIVE spec; if the item behind an
+  // open dialog left the spec (annotation deleted, state flipped), the dialog
+  // closes instead of acting on a stale capture.
+  const compactComposerItem = compactDecisionComposer !== null
+    ? annotateDecisionSpec.items.find(
+        (item) => item.id === compactDecisionComposer && item.composer,
+      ) ?? null
+    : null;
+  const compactConfirmItem = compactDecisionConfirm !== null
+    ? annotateDecisionSpec.items.find(
+        (item) => item.id === compactDecisionConfirm && item.confirm,
+      ) ?? null
+    : null;
+  useEffect(() => {
+    if (compactDecisionComposer !== null && !compactComposerItem) setCompactDecisionComposer(null);
+    if (compactDecisionConfirm !== null && !compactConfirmItem) setCompactDecisionConfirm(null);
+  }, [compactComposerItem, compactConfirmItem, compactDecisionComposer, compactDecisionConfirm]);
   const handleHeaderDownloadAnnotations = useCallback(() => headerHandlersRef.current.handleDownloadAnnotations(), []);
   const handleHeaderCopyAgentInstructions = useCallback(() => headerHandlersRef.current.handleCopyAgentInstructions(), []);
   const handleHeaderCopyShareLink = useCallback(() => headerHandlersRef.current.handleCopyShareLink(), []);
@@ -5182,11 +5265,11 @@ const App: React.FC = () => {
                     subtitle: item.subtitle,
                     onSelect: () => {
                       if (item.composer) {
-                        setCompactDecisionComposer(item);
+                        setCompactDecisionComposer(item.id);
                         return;
                       }
                       if (item.confirm) {
-                        setCompactDecisionConfirm(item);
+                        setCompactDecisionConfirm(item.id);
                         return;
                       }
                       runAnnotateDecisionAction(item.id);
@@ -5649,7 +5732,6 @@ const App: React.FC = () => {
           goalSetupCanSubmit={goalSetupAction.canSubmit}
           goalSetupIsSubmitting={goalSetupAction.isSubmitting}
           goalSetupSubmitLabel={goalSetupAction.submitLabel}
-          gate={gate}
           isSharedSession={isSharedSession}
           origin={origin}
           isSubmitting={isSubmitting}
@@ -6434,32 +6516,32 @@ const App: React.FC = () => {
             (never a textarea inside the scrolling header menu popup), the
             discard confirm is the same ConfirmDialog the desktop control
             raises. Desktop popover state lives inside DecisionControl. */}
-        {compactDecisionComposer?.composer && (
+        {compactComposerItem?.composer && (
           <DecisionNoteDialog
             isOpen
             onClose={() => setCompactDecisionComposer(null)}
-            composer={compactDecisionComposer.composer}
-            subtitle={compactDecisionComposer.subtitle}
+            composer={compactComposerItem.composer}
+            subtitle={compactComposerItem.subtitle}
             disabled={isSubmitting || isExiting}
             onSubmit={(note) => {
-              const item = compactDecisionComposer;
+              const item = compactComposerItem;
               setCompactDecisionComposer(null);
               runAnnotateDecisionAction(item.id, note);
             }}
           />
         )}
-        {compactDecisionConfirm?.confirm && (
+        {compactConfirmItem?.confirm && (
           <ConfirmDialog
             isOpen
             onClose={() => setCompactDecisionConfirm(null)}
             onConfirm={() => {
-              const item = compactDecisionConfirm;
+              const item = compactConfirmItem;
               setCompactDecisionConfirm(null);
               runAnnotateDecisionAction(item.id);
             }}
-            title={compactDecisionConfirm.confirm.title}
-            message={compactDecisionConfirm.confirm.message}
-            confirmText={compactDecisionConfirm.confirm.confirmText}
+            title={compactConfirmItem.confirm.title}
+            message={compactConfirmItem.confirm.message}
+            confirmText={compactConfirmItem.confirm.confirmText}
             cancelText="Cancel"
             variant="warning"
             showCancel

@@ -265,7 +265,14 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
   // Drafts are keyed per item so stepping back from a composer (Esc, back
   // button, even closing the popover) keeps the half-typed note.
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [confirmItem, setConfirmItem] = useState<DecisionMenuItem | null>(null);
+  // L2: only the ID is state — the confirm's title/message/handler resolve
+  // from the LIVE spec at render, so a spec update while the dialog is up
+  // can never confirm stale copy (e.g. an outdated count).
+  const [confirmItemId, setConfirmItemId] = useState<DecisionMenuItem['id'] | null>(null);
+  const confirmItem =
+    confirmItemId !== null
+      ? spec.items.find((item) => item.id === confirmItemId && item.confirm) ?? null
+      : null;
 
   const activeItem =
     popover === 'composer' && activeItemId
@@ -299,35 +306,34 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
     if (busy) {
       setPopover(null);
       setActiveItemId(null);
-      setConfirmItem(null);
+      setConfirmItemId(null);
     }
   }, [busy]);
 
   // F6: the spec is live — an annotation delete (or an external write) can
-  // remove the item the open composer belongs to, or flip the state so the
-  // menu has different items. Morph gracefully instead of rendering an empty
-  // shell: a composer whose item left the spec steps back to the menu (the
-  // draft is kept, keyed by item id, in case the item returns), and a menu
-  // with no items left closes outright. Lives in the control rather than the
-  // adopting apps so the annotate and review wirings cannot diverge on it.
+  // remove the item the open composer or confirm belongs to. Morph gracefully
+  // instead of rendering a dead surface: both step back to the menu (the
+  // composer draft is kept, keyed by item id, in case the item returns).
+  // buildDecisionSpec guarantees at least one item, so the menu is always a
+  // valid fallback (L4 ruling: no empty-menu branch for a spec shape that
+  // cannot occur). Lives in the control rather than the adopting apps so the
+  // annotate and review wirings cannot diverge on it.
   useEffect(() => {
-    if (popover === null) return;
-    if (popover === 'composer') {
-      const stillPresent =
-        activeItemId !== null &&
-        spec.items.some((item) => item.id === activeItemId && item.composer);
-      if (stillPresent) return;
-      if (spec.items.length > 0) {
-        setPopover('menu');
-        setActiveItemId(null);
-      } else {
-        setPopover(null);
-        setActiveItemId(null);
-      }
-      return;
-    }
-    if (spec.items.length === 0) setPopover(null);
+    if (popover !== 'composer') return;
+    const stillPresent =
+      activeItemId !== null &&
+      spec.items.some((item) => item.id === activeItemId && item.composer);
+    if (stillPresent) return;
+    setPopover('menu');
+    setActiveItemId(null);
   }, [activeItemId, popover, spec]);
+
+  useEffect(() => {
+    if (confirmItemId === null) return;
+    if (spec.items.some((item) => item.id === confirmItemId && item.confirm)) return;
+    setConfirmItemId(null);
+    setPopover('menu');
+  }, [confirmItemId, spec]);
 
   // Roving focus entry point: whenever the menu (re)appears — caret click,
   // back from the composer, confirm cancel — focus its first row.
@@ -345,7 +351,7 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
     if (item.confirm) {
       // The confirm replaces the popover; cancel reopens the menu so one
       // decision stays one click away.
-      setConfirmItem(item);
+      setConfirmItemId(item.id);
       setPopover(null);
       return;
     }
@@ -553,12 +559,12 @@ export const DecisionControl: React.FC<DecisionControlProps> = ({
         <Confirm
           isOpen
           onClose={() => {
-            setConfirmItem(null);
+            setConfirmItemId(null);
             setPopover('menu');
           }}
           onConfirm={() => {
             const id = confirmItem.id;
-            setConfirmItem(null);
+            setConfirmItemId(null);
             handlers[id]?.();
           }}
           title={confirmItem.confirm.title}

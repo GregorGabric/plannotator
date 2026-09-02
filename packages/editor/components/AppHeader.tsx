@@ -56,7 +56,6 @@ interface AppHeaderProps {
   goalSetupCanSubmit: boolean;
   goalSetupIsSubmitting: boolean;
   goalSetupSubmitLabel: string;
-  gate: boolean;
   isSharedSession: boolean;
   origin: Origin | null;
 
@@ -163,7 +162,6 @@ export const AppHeader = React.memo<AppHeaderProps>(({
   goalSetupCanSubmit,
   goalSetupIsSubmitting,
   goalSetupSubmitLabel,
-  gate,
   isSharedSession,
   origin,
   isSubmitting,
