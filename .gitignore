@@ -103,3 +103,4 @@ packages/ui/components/html-viewer/bridge-script.lite.ts
 /adr/research/SPIKE-bundle-build-and-serve-architecture-20260619-154926.md
 /adr/research/SPIKE-bundle-optimization-theories-20260619-154926.md
 /adr/research/SPIKE-local-app-annotation-20260810.md
+/scripts/convert-themes.ts
