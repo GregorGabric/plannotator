@@ -230,7 +230,7 @@ describe('buildDecisionSpec invariants', () => {
     // Nothing to discard at zero — no discard item with a lying "0 annotations".
     expect(itemIds(zero)).not.toContain('discard-and-finish');
 
-    // F2 ruling (maintainer default, pending final confirmation): the
+    // F2 ruling (maintainer-confirmed): the
     // count-0 + hasFeedback cell (direct edits / attachments only) still
     // offers approve-with-notes on capable approval flows, with zero-form
     // copy — the subtitle must never claim an annotation count of 0.

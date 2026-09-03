@@ -263,8 +263,7 @@ function buildFeedbackSpec(input: DecisionSpecInput, approvalFlow: boolean): Dec
   // it sits before whichever approve-flavoured item comes first.
   let dividerPending = true;
 
-  // Capability-gated only (F2 ruling, maintainer default pending final
-  // confirmation): at count 0 the feedback is direct edits / saved-file
+  // Capability-gated only (F2 ruling, maintainer-confirmed): at count 0 the feedback is direct edits / saved-file
   // changes / attachments, and a capable approve transport delivers those too,
   // so the item stays offered with zero-form copy — no "0 annotations"
   // language. Subtitles are free prose, NOT frozen.
