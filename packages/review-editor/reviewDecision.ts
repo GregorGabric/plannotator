@@ -1,3 +1,4 @@
+import { generateId } from '@plannotator/ui/utils/generateId';
 import type { DecisionActionId, DecisionMenuItem, DecisionPrimary } from '@plannotator/ui/utils/decisionSpec';
 import type { CodeAnnotation } from '@plannotator/ui/types';
 import type { CompactReviewAction } from './components/ReviewHeaderMenu';
@@ -185,7 +186,8 @@ export function compactPrimaryIdForReviewDecision(
  * Deliberately carries no PR context (`prUrl`/`diffScope`): an unstamped
  * annotation passes every PR scope (`utils/annotationScope.ts`), which is
  * what lets a review-level comment survive an in-place PR switch (spec §3.3).
- * `crypto.randomUUID()` rather than `Date.now()` because two commits in the
+ * `generateId()` (crypto.randomUUID with an insecure-context fallback; remote-mode
+ * http sessions have no crypto.randomUUID) rather than `Date.now()` because two commits in the
  * same millisecond would collide and the deferred-submit effect keys on the
  * id (spec §9).
  *
@@ -196,7 +198,7 @@ export function createGeneralReviewComment(text: string, author?: string): CodeA
   const trimmed = text.trim();
   if (!trimmed) return null;
   return {
-    id: `review-note-${crypto.randomUUID()}`,
+    id: generateId('review-note'),
     type: 'comment',
     scope: 'general',
     filePath: '',

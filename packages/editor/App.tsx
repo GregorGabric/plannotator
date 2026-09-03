@@ -5059,7 +5059,7 @@ const App: React.FC = () => {
     const trimmed = text.trim();
     if (!trimmed) return null;
     const note: Annotation = {
-      id: `global-note-${crypto.randomUUID()}`,
+      id: generateId('global-note'),
       blockId: '',
       startOffset: 0,
       endOffset: 0,

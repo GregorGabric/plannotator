@@ -1,3 +1,4 @@
+import { generateId } from '../utils/generateId';
 import React, { useRef, useState, useEffect, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { AnnotationType, type Block, type Annotation, type EditorMode, type InputMethod, type ImageAttachment, type ActionsLabelMode } from '../types';
@@ -911,7 +912,7 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
         // randomUUID, not Date.now(): two comments minted in the same
         // millisecond (paste + submit, or a concurrent external write)
         // would collide on a timestamp id.
-        id: `global-${crypto.randomUUID()}`,
+        id: generateId('global'),
         blockId: '',
         startOffset: 0,
         endOffset: 0,
