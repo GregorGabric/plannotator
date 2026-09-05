@@ -12,8 +12,18 @@ import { ThemeProvider, useTheme } from '@plannotator/ui/components/ThemeProvide
 import { TooltipProvider } from '@plannotator/ui/components/Tooltip';
 import { ConfirmDialog } from '@plannotator/ui/components/ConfirmDialog';
 import { Settings } from '@plannotator/ui/components/Settings';
-import { FeedbackButton, ApproveButton, ExitButton } from '@plannotator/ui/components/ToolbarButtons';
-import { AgentReviewActions } from './components/AgentReviewActions';
+import { ExitButton } from '@plannotator/ui/components/ToolbarButtons';
+import { buildDecisionSpec, type DecisionActionId, type DecisionMenuItem } from '@plannotator/ui/utils/decisionSpec';
+import { DecisionControl, DecisionNoteDialog, type DecisionHandler } from '@plannotator/ui/components/DecisionControl';
+import {
+  buildReviewApprovalBody,
+  compactPrimaryIdForReviewDecision,
+  compactRowIdForReviewDecisionItem,
+  createGeneralReviewComment,
+  readApprovalNotesAdvert,
+  resolvePlatformDecisionAction,
+  resolveReviewDecisionAction,
+} from './reviewDecision';
 import { useUpdateCheck } from '@plannotator/ui/hooks/useUpdateCheck';
 import { storage } from '@plannotator/ui/utils/storage';
 import { CompletionOverlay } from '@plannotator/ui/components/CompletionOverlay';
@@ -42,6 +52,11 @@ import type { EditSelectionComment } from './edit/useEditSession';
 import { useAIChat } from './hooks/useAIChat';
 import { toast, Toaster } from 'sonner';
 import { useCodeNav, type CodeNavRequest } from './hooks/useCodeNav';
+import { useTokenHover } from './hooks/useTokenHover';
+import { TokenHoverCard } from './components/TokenHoverCard';
+import { buildTokenHoverRequest } from './utils/buildCodeNavRequest';
+import { detectLanguage } from './utils/detectLanguage';
+import type { DiffTokenEventBaseProps } from '@pierre/diffs';
 import { useCallFlowAnalysis } from './hooks/useCallFlowAnalysis';
 import { useCallFlowInstall } from './hooks/useCallFlowInstall';
 import { useCallFlowAutoInstall } from './hooks/useCallFlowAutoInstall';
@@ -147,6 +162,13 @@ import {
   markEditModeAnnouncementSeen,
   needsEditModeAnnouncement,
 } from './utils/editModeAnnouncement';
+import { TokenHoverAnnouncementDialog } from './components/TokenHoverAnnouncementDialog';
+import {
+  markTokenHoverAnnouncementSeen,
+  resolveTokenHoverAnnouncementPending,
+  shouldConsumeTokenHoverAnnouncement,
+  tokenHoverAnnouncementCanShow,
+} from './utils/tokenHoverAnnouncement';
 import { ExternalLineAnnotationComposer } from './components/ExternalLineAnnotationComposer';
 import { DestinationSpotlight } from './components/DestinationSpotlight';
 import { needsDestinationSpotlight, markDestinationSpotlightSeen } from './utils/destinationSpotlight';
@@ -424,6 +446,8 @@ const ReviewApp: React.FC = () => {
   const diffTabSize = useConfigValue('diffTabSize');
   const reviewShowViewedControls = useConfigValue('reviewShowViewedControls');
   const reviewShowStageControls = useConfigValue('reviewShowStageControls');
+  const tokenHoverTrigger = useConfigValue('tokenHoverTrigger');
+  const tokenHoverDelay = useConfigValue('tokenHoverDelay');
   // EXPERIMENTAL: edit code in place to author suggestions (default OFF).
   const editSuggestionsEnabled = useConfigValue('editSuggestions');
   const semanticDiffEnabled = useConfigValue('semanticDiffEnabled');
@@ -594,9 +618,29 @@ const ReviewApp: React.FC = () => {
   const [isApproving, setIsApproving] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [submitted, setSubmitted] = useState<'approved' | 'feedback' | 'exited' | false>(false);
-  const [showApproveWarning, setShowApproveWarning] = useState(false);
   const [showExitWarning, setShowExitWarning] = useState(false);
+  // A committed review-level note waiting for its one-render deferred submit
+  // (the payload builders close over `allAnnotations`, so the send has to wait
+  // for the render that carries the note). L3: cleared only on submission
+  // SUCCESS — a failed POST keeps it armed and the next primary invocation
+  // retries; `dispatched` marks the one automatic submit after the commit.
+  const [pendingNoteSubmit, setPendingNoteSubmit] = useState<{
+    noteId: string;
+    dispatched: boolean;
+  } | null>(null);
+  // Compact/touch decision surfaces: composer items open DecisionNoteDialog,
+  // confirm items open one ConfirmDialog (the desktop popover lives inside
+  // DecisionControl; compact has no popover to morph). L2: only the item ID
+  // is state — the dialog contents resolve from the LIVE spec at render, so
+  // a spec update while a dialog is up can never show or confirm stale copy.
+  const [compactDecisionComposer, setCompactDecisionComposer] = useState<DecisionMenuItem['id'] | null>(null);
+  const [compactDecisionConfirm, setCompactDecisionConfirm] = useState<DecisionMenuItem['id'] | null>(null);
   const [sharingEnabled, setSharingEnabled] = useState(true);
+  // Server capability advert (spec §6.4): does this session's decision
+  // consumer deliver approve-time feedback? Defaults false so an old server
+  // that never sends the field renders no approve-carrying items (PR3
+  // behavior); read off every diff payload that carries it.
+  const [approvalNotesSupported, setApprovalNotesSupported] = useState(false);
   const [repoInfo, setRepoInfo] = useState<{ display: string; branch?: string } | null>(null);
 
   useEffect(() => {
@@ -707,6 +751,9 @@ const ReviewApp: React.FC = () => {
 
   // Derived: Platform mode is active when destination is platform AND we have PR/MR metadata
   const platformMode = reviewDestination === 'platform' && !!prMetadata;
+  // The viewer authored this PR/MR — forges refuse self-approval, so every
+  // platform approve path mutes (never disappears) on this flag.
+  const isOwnPR = !!platformUser && prMetadata?.author === platformUser;
 
   // Platform-aware labels
   const platformLabel = prMetadata ? getPlatformLabel(prMetadata) : 'GitHub';
@@ -1021,6 +1068,23 @@ const ReviewApp: React.FC = () => {
     enableEditSuggestionsFromAnnouncement();
     setEditModeIntroPending(false);
   }, []);
+  // One-time token hover card announcement. LAST in the dialog chain (guide
+  // intro → look-and-feel → review setup → edit mode → token hover) — the
+  // chain dialogs never stack. Latched at mount so choosing a trigger inside
+  // the dialog does not unmount it mid-click; a user who already has a
+  // non-default trigger never sees it (resolveTokenHoverAnnouncementPending).
+  const [tokenHoverIntroPending, setTokenHoverIntroPending] = useState(
+    resolveTokenHoverAnnouncementPending,
+  );
+  const dismissTokenHoverIntro = useCallback(() => {
+    markTokenHoverAnnouncementSeen();
+    setTokenHoverIntroPending(false);
+  }, []);
+  // Retiring the announcement for a reviewer who already chose a trigger is a
+  // WRITE, so it belongs here rather than in the state initializer above.
+  useEffect(() => {
+    if (shouldConsumeTokenHoverAnnouncement()) markTokenHoverAnnouncementSeen();
+  }, []);
   const aiChat = useAIChat({
     patch: diffData?.rawPatch ?? '',
     diffType,
@@ -1047,8 +1111,51 @@ const ReviewApp: React.FC = () => {
   } = aiChat;
 
   const codeNav = useCodeNav();
+  // The other half of the held-modifier gesture. The diff views paint
+  // `pn-token-nav` from the pointer ENTER event, which covers "hold the key,
+  // then move onto a symbol" but neither half of the gesture modifier mode
+  // exists for: a key going down over a parked pointer, and the release after
+  // it, fire no pointer event at all. The hook reports those two transitions
+  // and this paints them, so the affordance and the card arrive and leave
+  // together — which is the composite gesture the mode is modelled on.
+  //
+  // It lives here rather than in the views because both are compiled into the
+  // portable guides.show viewer and their prop signatures must not move.
+  const navAffordanceRef = useRef<HTMLElement | null>(null);
+  const handleModifierGate = useCallback((armed: boolean, tokenElement: HTMLElement | null) => {
+    const previous = navAffordanceRef.current;
+    // The pointer can drift to a neighbour while the key is held: that token
+    // was painted by its own enter event, and this one was left painted by an
+    // arm. Both come off.
+    if (previous && previous !== tokenElement) previous.classList.remove('pn-token-nav');
+    navAffordanceRef.current = null;
+    if (!tokenElement) return;
+    if (!armed) {
+      tokenElement.classList.remove('pn-token-nav');
+      return;
+    }
+    tokenElement.classList.add('pn-token-nav');
+    navAffordanceRef.current = tokenElement;
+  }, []);
+  // `off` never reaches the hook: it is enforced below by withholding the
+  // handler props entirely, so the diff views wire no listeners at all.
+  const tokenHover = useTokenHover(snapshotId, {
+    mode: tokenHoverTrigger === 'modifier' ? 'modifier' : 'hover',
+    delayMs: tokenHoverDelay,
+    onModifierGate: handleModifierGate,
+  });
+
+  const closeTokenHover = tokenHover.close;
 
   const handleCodeNavRequest = useCallback((request: CodeNavRequest) => {
+    // Opening References is a deliberate action; a hover is an idle gesture,
+    // and the two must never be on screen together. This covers EVERY route
+    // in: Cmd+click, Ctrl+click, the Alt+click alias, and the card's own
+    // location links. It also settles the overlap #1461 shipped with, where a
+    // Cmd+click landed on a token whose hover card was open or mid-dwell and
+    // both surfaces appeared. close() cancels the pending dwell too, so a
+    // click during the dwell never resolves into a card behind the panel.
+    closeTokenHover();
     if (!gitContext && !agentCwd) {
       toast('Code navigation requires a local checkout', {
         description: 'Re-run with --local for PR reviews',
@@ -1074,11 +1181,14 @@ const ReviewApp: React.FC = () => {
         id: REVIEW_CODE_NAV_PANEL_ID,
         component: REVIEW_PANEL_TYPES.CODE_NAV,
         title: `References: ${request.symbol}`,
-        position: { direction: 'below', referencePanel: refPanel },
-        initialHeight: 250,
+        // Open beside the code, not under it: a below-split steals vertical
+        // room from the diff being read, and the references list is a narrow
+        // column that reads naturally at the right edge.
+        position: { direction: 'right', referencePanel: refPanel },
+        initialWidth: 420,
       });
     }
-  }, [codeNav.resolve, dockApi, isAllFilesActive, isCallFlowActive, isSemanticDiffActive, gitContext, agentCwd]);
+  }, [closeTokenHover, codeNav.resolve, dockApi, isAllFilesActive, isCallFlowActive, isSemanticDiffActive, gitContext, agentCwd]);
 
   // Check AI capabilities only after /api/diff confirms AI is enabled.
   useEffect(() => {
@@ -1337,7 +1447,7 @@ const ReviewApp: React.FC = () => {
       const lastColon = rest.lastIndexOf(':');
       if (lastColon !== -1) {
         const sub = rest.slice(lastColon + 1);
-        if (['since-base', 'uncommitted', 'staged', 'unstaged', 'last-commit', 'branch', 'merge-base', 'all'].includes(sub)) {
+        if (['since-base', 'local-vs-remote', 'uncommitted', 'staged', 'unstaged', 'last-commit', 'branch', 'merge-base', 'all'].includes(sub)) {
           return { activeWorktreePath: rest.slice(0, lastColon), activeDiffBase: sub };
         }
       }
@@ -1372,11 +1482,84 @@ const ReviewApp: React.FC = () => {
     () => canUseLiveWorkspaceActions ? editorAnnotations : [],
     [canUseLiveWorkspaceActions, editorAnnotations],
   );
+  // Token hover cards ride the same gate as Cmd+click code navigation, plus
+  // their own setting. Off means no handler props reach the diff views, so
+  // there are no listeners, no requests and no card in the tree.
+  const tokenHoverEnabled = canUseLiveWorkspaceActions && tokenHoverTrigger !== 'off';
+  // Announcing a feature this session cannot run is noise, so a stack/branch
+  // view skips it — and skips it WITHOUT consuming the cookie, so the next
+  // ordinary review still shows it (same rule the guide intro uses for an
+  // empty diff). `off` is not part of the availability test: a user who
+  // reaches the dialog has, by construction, never chosen a trigger.
+  //
+  // Eligibility is LATCHED once the initial load clears:
+  // canUseLiveWorkspaceActions changes on mid-session diff switches, and a
+  // stack→ordinary switch must not pop the announcement over work in
+  // progress, nor an ordinary→stack switch yank an open one away mid-read.
+  //
+  // In an effect rather than in the render body: a latch written during render
+  // is a side effect React may discard (a concurrent render that never
+  // commits would still have stamped the ref). The commit ordering is safe
+  // because the gate below independently requires !isLoading, so the render
+  // that first clears the flag shows no dialog and the effect has latched
+  // before the next one.
+  const [tokenHoverAvailable, setTokenHoverAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (isLoading) return;
+    setTokenHoverAvailable((current) => (current === null ? canUseLiveWorkspaceActions : current));
+  }, [isLoading, canUseLiveWorkspaceActions]);
+  const tokenHoverIntroVisible = tokenHoverAnnouncementCanShow({
+    announcementPending: tokenHoverIntroPending,
+    isLoading,
+    featureAvailable: tokenHoverAvailable === true,
+    guideIntroVisible,
+    lookAndFeelVisible: showLookAndFeel,
+    reviewSetupVisible: showReviewSetup,
+    editModeVisible: editModeIntroVisible,
+  });
+  const hoveredTokenSymbol = tokenHover.hover?.request.symbol;
+  const startTokenHover = tokenHover.onTokenHoverEnter;
+  // Stitching lives here, not in the diff views: rebuilding a fragmented
+  // identifier is app-only work, and both views are compiled into the portable
+  // guide viewer, which must not carry it.
+  const handleTokenHoverEnter = useCallback(
+    (props: DiffTokenEventBaseProps, filePath: string) => {
+      const request = buildTokenHoverRequest(props, filePath);
+      if (request) startTokenHover(request, props.tokenElement);
+    },
+    [startTokenHover],
+  );
   useEffect(() => {
     if (canUseLiveWorkspaceActions) return;
     codeNav.clear();
     dockApi?.getPanel(REVIEW_CODE_NAV_PANEL_ID)?.api.close();
   }, [canUseLiveWorkspaceActions, codeNav.clear, dockApi]);
+  // Turning cards off (or losing the workspace gate) with one already open
+  // would otherwise leave it standing over the diff with nothing left to
+  // close it: the handler props are gone, so no leave event can arrive.
+  useEffect(() => {
+    if (tokenHoverEnabled) return;
+    closeTokenHover();
+  }, [tokenHoverEnabled, closeTokenHover]);
+  const handleTokenHoverSelectLocation = useCallback(
+    (location: { filePath: string; line: number; column: number }) => {
+      closeTokenHover();
+      if (!hoveredTokenSymbol) return;
+      // Same References flow Cmd+click opens, but described from the CLICKED
+      // location: carrying the hover's own charStart and language would tell
+      // the server a column in another file and, for a cross-language jump, a
+      // language the target file is not written in.
+      handleCodeNavRequest({
+        symbol: hoveredTokenSymbol,
+        filePath: location.filePath,
+        line: location.line,
+        charStart: location.column,
+        side: 'new',
+        language: detectLanguage(location.filePath),
+      });
+    },
+    [handleCodeNavRequest, hoveredTokenSymbol, closeTokenHover],
+  );
   const { withPRContext } = useAnnotationFactory(
     prMetadata,
     prStackInfo ? prDiffScope : undefined,
@@ -1802,6 +1985,7 @@ const ReviewApp: React.FC = () => {
         diffOptions?: DiffOption[];
         agentCwd?: string | null;
         sharingEnabled?: boolean;
+        approvalNotesSupported?: boolean;
         repoInfo?: { display: string; branch?: string };
         prMetadata?: PRMetadata;
         prStackInfo?: PRStackInfo | null;
@@ -1860,6 +2044,7 @@ const ReviewApp: React.FC = () => {
         }
         if (data.agentCwd !== undefined) setAgentCwd(data.agentCwd);
         if (data.sharingEnabled !== undefined) setSharingEnabled(data.sharingEnabled);
+        setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
         if (data.repoInfo) setRepoInfo(data.repoInfo);
         updatePRSession({
           ...(data.prMetadata && { prMetadata: data.prMetadata }),
@@ -2300,7 +2485,7 @@ const ReviewApp: React.FC = () => {
     // (not lost) behind the guide takeover or a first-run dialog — the file
     // still marks and the next auto-view retries the toast.
     if (!needsAutoViewedNotice()) return;
-    if (guideOpen || guideIntroVisible || showLookAndFeel || showReviewSetup || editModeIntroVisible) return;
+    if (guideOpen || guideIntroVisible || showLookAndFeel || showReviewSetup || editModeIntroVisible || tokenHoverIntroVisible) return;
     markAutoViewedNoticeSeen();
     toast('Files are marked viewed as you scroll', {
       description: "Scroll past a file or move on to the next and it's checked off. Turn this off in Settings → Git, or from the gear above the file list.",
@@ -2320,7 +2505,7 @@ const ReviewApp: React.FC = () => {
         },
       },
     });
-  }, [guideOpen, guideIntroVisible, showLookAndFeel, showReviewSetup, editModeIntroVisible]);
+  }, [guideOpen, guideIntroVisible, showLookAndFeel, showReviewSetup, editModeIntroVisible, tokenHoverIntroVisible]);
   const { handleReadingFileChange: handleAutoViewReadingFile, handleFileScrolledPast } = useAutoViewed({
     enabled: autoViewedEnabled,
     // Rule 4 — only the review target. The guide takeover CSS-hides the dock
@@ -2457,9 +2642,15 @@ const ReviewApp: React.FC = () => {
     semanticDiff?: SemanticDiffAdvert;
     callFlow?: CallFlowAdvert;
     agentCwd?: string | null;
+    approvalNotesSupported?: boolean;
   }) {
     const isPRSwitch = !!data.prMetadata;
     setSnapshotId(data.snapshotId);
+    // Keep the approval-notes advert in lockstep with whatever payload the
+    // client last applied — the servers echo it on the PR family too.
+    if (data.approvalNotesSupported !== undefined) {
+      setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
+    }
     const nextFiles = parseDiffToFiles(data.rawPatch);
     dockApi?.getPanel(REVIEW_DIFF_PANEL_ID)?.api.close();
     needsInitialDiffPanel.current = true;
@@ -2565,6 +2756,7 @@ const ReviewApp: React.FC = () => {
         commitInfo?: CommitDiffInfo;
         generatedFiles?: string[];
         baseBehindRemote?: boolean;
+        approvalNotesSupported?: boolean;
         superseded?: boolean;
       };
 
@@ -2580,6 +2772,12 @@ const ReviewApp: React.FC = () => {
       // switches never get here either, keeping the memo for a later retry.
       if (!isCommitDiffType(data.diffType)) preCommitDiffRef.current = null;
       setSnapshotId(data.snapshotId);
+      // Session-constant in practice, but re-read from any payload that
+      // carries it so the client stays in lockstep with whatever it last
+      // applied (the server echoes the advert on the whole diff family).
+      if (data.approvalNotesSupported !== undefined) {
+        setApprovalNotesSupported(readApprovalNotesAdvert(data.approvalNotesSupported));
+      }
 
       const nextFiles = orderFilesBySections(parseDiffToFiles(data.rawPatch), data.sections);
       // Rule 5 of auto-mark-viewed: a checkmark on content that has since
@@ -3382,6 +3580,8 @@ const ReviewApp: React.FC = () => {
     openTourPanel: handleOpenTour,
     openGuide: handleOpenGuide,
     onCodeNavRequest: canUseLiveWorkspaceActions ? handleCodeNavRequest : undefined,
+    onTokenHoverEnter: tokenHoverEnabled ? handleTokenHoverEnter : undefined,
+    onTokenHoverLeave: tokenHoverEnabled ? tokenHover.onTokenHoverLeave : undefined,
     codeNavResult: codeNav.result,
     codeNavIsLoading: codeNav.isLoading,
     codeNavActiveSymbol: codeNav.activeSymbol,
@@ -3412,6 +3612,7 @@ const ReviewApp: React.FC = () => {
     callFlowAvailable, callFlowAdvert, callFlowAnalysis, retryCallFlowAnalysis, isCallFlowNodeInPatch, isCallFlowActive, openCallFlowPanel, callFlowInstall,
     editSuggestionsEnabled, handleAddSuggestionsForFile, handleAddEditorCommentForFile,
     handleCodeNavRequest, codeNav.result, codeNav.isLoading, codeNav.activeSymbol,
+    tokenHoverEnabled, handleTokenHoverEnter, tokenHover.onTokenHoverLeave,
   ]);
 
   // Separate context for high-frequency job logs — prevents re-rendering all panels on every SSE event
@@ -3485,12 +3686,13 @@ const ReviewApp: React.FC = () => {
     }
   }, [totalAnnotationCount, feedbackMarkdown]);
 
-  // Send feedback to OpenCode via API
-  const handleSendFeedback = useCallback(async () => {
-    if (totalAnnotationCount === 0) {
-      setShowNoAnnotationsDialog(true);
-      return;
-    }
+  // Send feedback to the agent session. Returns whether the POST landed so
+  // the deferred note submit can keep its captured decision armed on failure
+  // (L3). The old zero-count guard is gone: no send action is offered at zero
+  // (the empty-state primary is Approve), and leaving it would silently
+  // swallow a request-changes submission whose note has not yet landed in
+  // state (spec §3.2).
+  const handleSendFeedback = useCallback(async (): Promise<boolean> => {
     setIsSendingFeedback(true);
     try {
       const agentSwitchSettings = getAgentSwitchSettings('review');
@@ -3509,16 +3711,17 @@ const ReviewApp: React.FC = () => {
       });
       if (res.ok) {
         setSubmitted('feedback');
-      } else {
-        throw new Error('Failed to send');
+        return true;
       }
+      throw new Error('Failed to send');
     } catch (err) {
       console.error('Failed to send feedback:', err);
       setCopyFeedback('Failed to send');
       setTimeout(() => setCopyFeedback(null), 2000);
       setIsSendingFeedback(false);
+      return false;
     }
-  }, [totalAnnotationCount, feedbackMarkdown, allAnnotations, getDraftGeneration]);
+  }, [feedbackMarkdown, allAnnotations, getDraftGeneration]);
 
   // Exit review session without sending any feedback
   const handleExit = useCallback(async () => {
@@ -3536,19 +3739,26 @@ const ReviewApp: React.FC = () => {
     }
   }, [getDraftGeneration]);
 
-  // Approve without feedback (LGTM)
-  const handleApprove = useCallback(async () => {
+  // Approve — bare (LGTM), with a composer note, or with the live annotations
+  // riding along (PR5 delivery, spec §6.4). The old LGTM placeholder is gone:
+  // consumers now print approve-time feedback, so a bare approval must send
+  // `feedback: ''` (which also makes the archive's `lgtm` decision reachable
+  // and stops bare approvals writing a sidecar). Payload shape is the pure
+  // buildReviewApprovalBody, so the delivery contract is testable without
+  // mounting the App.
+  const handleApprove = useCallback(async (options?: { note?: string; withAnnotations?: boolean }) => {
     setIsApproving(true);
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(buildReviewApprovalBody({
           draftGeneration: getDraftGeneration(),
-          approved: true,
-          feedback: 'LGTM - no changes requested.', // unused — integrations branch on `approved` flag
-          annotations: [],
-        }),
+          note: options?.note,
+          withAnnotations: options?.withAnnotations === true,
+          feedbackMarkdown,
+          annotations: allAnnotations,
+        })),
       });
       if (res.ok) {
         setSubmitted('approved');
@@ -3561,7 +3771,168 @@ const ReviewApp: React.FC = () => {
       setTimeout(() => setCopyFeedback(null), 2000);
       setIsApproving(false);
     }
-  }, [getDraftGeneration]);
+  }, [getDraftGeneration, feedbackMarkdown, allAnnotations]);
+
+  // --- The unified review decision control, agent mode (spec §3.2/§4) ------
+  // One primary, one callback: the header's left segment, the global
+  // Mod+Enter handler, and the compact primary row all call this. Platform
+  // (PR) mode keeps its own row until PR6.
+  const busyWithDecision = isSendingFeedback || isApproving || isExiting;
+
+  const noteDispatchInFlightRef = useRef(false);
+  const dispatchPendingNote = useCallback(() => {
+    if (noteDispatchInFlightRef.current) return;
+    noteDispatchInFlightRef.current = true;
+    void (async () => {
+      try {
+        const ok = await handleSendFeedback();
+        if (ok) setPendingNoteSubmit(null); // L3: cleared only on success
+      } finally {
+        noteDispatchInFlightRef.current = false;
+      }
+    })();
+  }, [handleSendFeedback]);
+
+  const submitPrimaryDecision = useCallback(() => {
+    if (submitted || busyWithDecision || isPlatformActioning) return;
+    if (pendingNoteSubmit) {
+      // A failed note submit stays armed; the next primary invocation retries
+      // that send (the note is already in `allAnnotations`, so the body is
+      // the captured decision, not a re-derivation).
+      dispatchPendingNote();
+      return;
+    }
+    if (totalAnnotationCount === 0) void handleApprove();
+    else void handleSendFeedback();
+  }, [
+    busyWithDecision,
+    dispatchPendingNote,
+    handleApprove,
+    handleSendFeedback,
+    isPlatformActioning,
+    pendingNoteSubmit,
+    submitted,
+    totalAnnotationCount,
+  ]);
+
+  // Note → scope:'general' CodeAnnotation at submit time: it rides the
+  // existing export (## General) and the /api/feedback annotations array with
+  // no server change on either runtime (#1449 transport). Shape (sentinels,
+  // no PR context) lives in createGeneralReviewComment; deliberately NOT
+  // recorded in review history — it lives for one submit.
+  const commitReviewNote = useCallback((text: string): string | null => {
+    const note = createGeneralReviewComment(text, identity);
+    if (!note) return null;
+    annotationsRef.current = [...annotationsRef.current, note];
+    setAnnotations(annotationsRef.current);
+    return note.id;
+  }, [identity]);
+
+  // Sidebar "+ General comment" — the durable human producer for a
+  // scope:'general' review-level comment (spec §3.3). Unlike the submit note
+  // above, it goes through history (undoable, draft-persisted, deletable via
+  // the sidebar's existing delete); like it, it is deliberately NOT
+  // withPRContext-stamped, so it survives an in-place PR switch (see the
+  // factory's doc in reviewDecision.ts).
+  const handleAddGeneralComment = useCallback((text: string) => {
+    // Mirrors the 'note' route's guard: a commit during an in-flight decision
+    // POST would append an annotation the captured body never carries — the
+    // server then deletes the draft and the comment vanishes from wire and
+    // archive alike.
+    if (submitted || busyWithDecision) return;
+    const note = createGeneralReviewComment(text, identity);
+    if (!note) return;
+    addCodeAnnotationsWithHistory([note]);
+  }, [identity, addCodeAnnotationsWithHistory, busyWithDecision, submitted]);
+
+  // The commit above is a state write, so feedbackMarkdown/handleSendFeedback
+  // (which close over `allAnnotations`) only see the note on the NEXT render.
+  // Submit from an effect once the note is actually in state. One automatic
+  // dispatch per arming; after a failure the armed decision waits for the
+  // next primary invocation (L3).
+  useEffect(() => {
+    const pending = pendingNoteSubmit;
+    if (!pending) return;
+    if (!allAnnotations.some((a) => a.id === pending.noteId)) {
+      // The note left state (sidebar delete, draft restore): the captured
+      // decision lost its note — disarm rather than posting without it.
+      setPendingNoteSubmit(null);
+      return;
+    }
+    if (pending.dispatched) return;
+    setPendingNoteSubmit({ ...pending, dispatched: true });
+    dispatchPendingNote();
+  }, [allAnnotations, dispatchPendingNote, pendingNoteSubmit]);
+
+  const runReviewDecisionAction = useCallback((id: DecisionActionId, note?: string) => {
+    const action = resolveReviewDecisionAction(id);
+    switch (action.kind) {
+      case 'primary':
+        submitPrimaryDecision();
+        return;
+      case 'note': {
+        if (submitted || busyWithDecision) return;
+        const noteId = commitReviewNote(note ?? '');
+        if (!noteId) return; // the control never submits an empty note
+        setPendingNoteSubmit({ noteId, dispatched: false });
+        return;
+      }
+      case 'discard':
+        // The DecisionControl / compact ConfirmDialog has already confirmed;
+        // the bare approve posts `feedback: '', annotations: []`. Same
+        // in-flight guard as the sibling routes: a confirm left open across
+        // an in-flight decision POST must not produce a second decision.
+        if (submitted || busyWithDecision) return;
+        void handleApprove();
+        return;
+      case 'approve-with-notes':
+        // PR5 delivery (spec §6.4): reachable only when the server advertised
+        // approvalNotesSupported — the session's consumer prints/sends the
+        // approve-time feedback these carry. "Approve with notes" ships the
+        // live annotations + their export; "Approve with a note…" ships the
+        // composer note alone.
+        if (submitted || busyWithDecision) return;
+        void handleApprove({ note, withAnnotations: action.withAnnotations });
+        return;
+    }
+  }, [busyWithDecision, commitReviewNote, handleApprove, submitPrimaryDecision, submitted]);
+
+  const reviewDecisionSpec = useMemo(() => buildDecisionSpec({
+    app: 'review',
+    gate: true, // review's primary positive decision IS approval
+    count: totalAnnotationCount,
+    hasFeedback: totalAnnotationCount > 0,
+    // The server advert (spec §6.4) — false until a capable server says so,
+    // so approve-carrying items never render where notes would be discarded.
+    approvalNotesSupported,
+  }), [totalAnnotationCount, approvalNotesSupported]);
+
+  const reviewDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
+    'primary': () => runReviewDecisionAction('primary'),
+    'note-with-approval': (note) => runReviewDecisionAction('note-with-approval', note),
+    'request-changes': (note) => runReviewDecisionAction('request-changes', note),
+    'note-with-feedback': (note) => runReviewDecisionAction('note-with-feedback', note),
+    'approve-with-notes': () => runReviewDecisionAction('approve-with-notes'),
+    'discard-and-finish': () => runReviewDecisionAction('discard-and-finish'),
+  }), [runReviewDecisionAction]);
+
+  // L2: the compact dialogs render from the LIVE spec; if the item behind an
+  // open dialog left the spec (annotation deleted, state flipped), the dialog
+  // closes instead of acting on a stale capture.
+  const compactComposerItem = compactDecisionComposer !== null
+    ? reviewDecisionSpec.items.find(
+        (item) => item.id === compactDecisionComposer && item.composer,
+      ) ?? null
+    : null;
+  const compactConfirmItem = compactDecisionConfirm !== null
+    ? reviewDecisionSpec.items.find(
+        (item) => item.id === compactDecisionConfirm && item.confirm,
+      ) ?? null
+    : null;
+  useEffect(() => {
+    if (compactDecisionComposer !== null && !compactComposerItem) setCompactDecisionComposer(null);
+    if (compactDecisionConfirm !== null && !compactConfirmItem) setCompactDecisionConfirm(null);
+  }, [compactComposerItem, compactConfirmItem, compactDecisionComposer, compactDecisionConfirm]);
 
   // Submit reviews to one or more PRs via /api/pr-action
   const handlePlatformAction = useCallback(async (action: 'approve' | 'comment', plan: ReviewSubmission, generalComment?: string) => {
@@ -3700,6 +4071,49 @@ const ReviewApp: React.FC = () => {
     setPlatformCommentDialog({ action, plan });
   }, [allAnnotations, visibleEditorAnnotations, files, prMetadata, visibleDescriptionAnnotations, visibleCommentAnnotations, prContext?.body, platformReviewRecovery]);
 
+  // --- PR6 (§3.4): platform mode adopts the control's SHAPE ----------------
+  // The same DecisionSpec, with NO composer or confirm items: every id opens
+  // the existing ReviewSubmissionDialog (per-target state, retry, "leave PR
+  // open" toggle — untouched), whose general-comment textarea stays the only
+  // note field on this side. `approvalNotesSupported` is irrelevant here —
+  // the platform posts to the forge API natively — so approve items gate
+  // only on self-authorship, muted rather than removed (Request changes… /
+  // Post comments, then… stay live; no state is a dead end).
+  const busyWithPlatformDecision = busyWithDecision || isPlatformActioning;
+
+  const platformDecisionSpec = useMemo(() => buildDecisionSpec({
+    app: 'review',
+    gate: true,
+    count: totalAnnotationCount,
+    hasFeedback: totalAnnotationCount > 0,
+    approvalNotesSupported: false, // ignored by the platform arm
+    platform: { label: platformLabel, mrLabel, selfAuthored: isOwnPR },
+  }), [totalAnnotationCount, platformLabel, mrLabel, isOwnPR]);
+
+  const runPlatformDecisionAction = useCallback((id: DecisionActionId) => {
+    if (submitted || busyWithPlatformDecision) return;
+    // Muted primary (self-authored, empty state): click, Mod+Enter, and the
+    // compact row are all no-ops — the spec records the mute; the menu's
+    // Request changes… remains the live path.
+    if (id === 'primary' && platformDecisionSpec.primary.muted) return;
+    // Structural defense for the muted approve items: the DOM disables them,
+    // but a handler invocation must be inert on its own too (compact rows and
+    // any future caller included) — resolve the mute from the live spec, not
+    // from whichever surface fired.
+    if (platformDecisionSpec.items.some((item) => item.id === id && item.muted)) return;
+    const mode = resolvePlatformDecisionAction(id, totalAnnotationCount > 0);
+    if (mode) openPlatformDialog(mode);
+  }, [busyWithPlatformDecision, openPlatformDialog, platformDecisionSpec, submitted, totalAnnotationCount]);
+
+  const platformDecisionHandlers = useMemo<Record<DecisionActionId, DecisionHandler>>(() => ({
+    'primary': () => runPlatformDecisionAction('primary'),
+    'note-with-approval': () => runPlatformDecisionAction('note-with-approval'),
+    'request-changes': () => runPlatformDecisionAction('request-changes'),
+    'note-with-feedback': () => runPlatformDecisionAction('note-with-feedback'),
+    'approve-with-notes': () => runPlatformDecisionAction('approve-with-notes'),
+    'discard-and-finish': () => {}, // the platform arm never emits it
+  }), [runPlatformDecisionAction]);
+
   // Double-tap Option/Alt to toggle review destination (PR mode only)
   useEffect(() => {
     if (!prMetadata) return;
@@ -3744,8 +4158,8 @@ const ReviewApp: React.FC = () => {
   const canHandleReviewHistoryShortcut = useCallback((event: KeyboardEvent): boolean => {
     if (event.defaultPrevented || isNativeHistoryOwner(event)) return false;
     if (submitted || isSendingFeedback || isApproving || isExiting || isPlatformActioning || isLoadingDiff) return false;
-    if (guideOpen || openSettingsMenu || showDestinationMenu || platformCommentDialog || showExportModal || showWorktreeDialog || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return false;
-    if (showLookAndFeel || showGuideIntro || showReviewSetup || editModeIntroVisible || tourDialogJobId) return false;
+    if (guideOpen || openSettingsMenu || showDestinationMenu || platformCommentDialog || showExportModal || showWorktreeDialog || showNoAnnotationsDialog || showExitWarning) return false;
+    if (showLookAndFeel || showGuideIntro || showReviewSetup || editModeIntroVisible || tokenHoverIntroVisible || tourDialogJobId) return false;
     return !hasActiveHistoryOverlay(document);
   }, [
     guideOpen,
@@ -3755,9 +4169,9 @@ const ReviewApp: React.FC = () => {
     isPlatformActioning,
     isSendingFeedback,
     editModeIntroVisible,
+    tokenHoverIntroVisible,
     openSettingsMenu,
     platformCommentDialog,
-    showApproveWarning,
     showDestinationMenu,
     showExitWarning,
     showExportModal,
@@ -3788,6 +4202,14 @@ const ReviewApp: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
 
+      // Let an open confirmation dialog own Mod+Enter (PR2's idiom, the
+      // shared ConfirmDialog stamps this sentinel): its own window-level
+      // handler fires onConfirm from the SAME event, and stopPropagation
+      // cannot stop same-target listeners — without this guard one keystroke
+      // over the discard confirm would post TWO contradictory decisions
+      // (this effect's Send Feedback plus the confirm's LGTM approve).
+      if (document.querySelector('[data-plannotator-confirm-dialog="true"]')) return;
+
       // If the platform post dialog is open, Cmd+Enter submits it
       if (platformCommentDialog) {
         if (submitted || isPlatformActioning) return;
@@ -3803,38 +4225,32 @@ const ReviewApp: React.FC = () => {
 
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (showExportModal || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return;
+      if (showExportModal || showNoAnnotationsDialog || showExitWarning) return;
       if (submitted || isSendingFeedback || isApproving || isExiting || isPlatformActioning) return;
       if (!origin) return; // Demo mode
 
       e.preventDefault();
 
       if (platformMode) {
-        // GitHub mode: No annotations → Approve on GitHub, otherwise → Post Review
-        const isOwnPR = !!platformUser && prMetadata?.author === platformUser;
-        if (totalAnnotationCount === 0 && !isOwnPR) {
-          openPlatformDialog('approve');
-        } else {
-          openPlatformDialog('comment');
-        }
+        // Platform mode (PR6): Mod+Enter is the header's visible primary,
+        // always — including the muted self-approval no-op. Same
+        // runPlatformDecisionAction the header and compact rows call.
+        runPlatformDecisionAction('primary');
       } else {
-        // Agent mode: No annotations → Approve, otherwise → Send Feedback
-        if (totalAnnotationCount === 0) {
-          handleApprove();
-        } else {
-          handleSendFeedback();
-        }
+        // Agent mode: Mod+Enter is the header's visible primary, always —
+        // the same submitPrimaryDecision the button and compact row call.
+        submitPrimaryDecision();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    showExportModal, showNoAnnotationsDialog, showApproveWarning, showExitWarning,
+    showExportModal, showNoAnnotationsDialog, showExitWarning,
     platformCommentDialog, platformGeneralComment,
     submitted, isSendingFeedback, isApproving, isExiting, isPlatformActioning,
-    origin, platformMode, platformLabel, platformUser, prMetadata, totalAnnotationCount, openPlatformDialog,
-    handleApprove, handleSendFeedback, handlePlatformAction
+    origin, platformMode, runPlatformDecisionAction,
+    submitPrimaryDecision, handlePlatformAction
   ]);
 
   // Cmd/Ctrl+Shift+Y keyboard shortcut to copy feedback, mirroring the
@@ -3843,7 +4259,7 @@ const ReviewApp: React.FC = () => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.altKey || e.key.toLowerCase() !== 'y' || isTypingTarget(e.target)) return;
 
-      if (platformCommentDialog || showExportModal || showNoAnnotationsDialog || showApproveWarning || showExitWarning) return;
+      if (platformCommentDialog || showExportModal || showNoAnnotationsDialog || showExitWarning) return;
 
       e.preventDefault();
       handleCopyFeedback();
@@ -3852,7 +4268,7 @@ const ReviewApp: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
-    platformCommentDialog, showExportModal, showNoAnnotationsDialog, showApproveWarning, showExitWarning,
+    platformCommentDialog, showExportModal, showNoAnnotationsDialog, showExitWarning,
     handleCopyFeedback
   ]);
 
@@ -3902,6 +4318,7 @@ const ReviewApp: React.FC = () => {
       : undefined;
 
   const compactActionBusy = isSendingFeedback || isApproving || isExiting || isPlatformActioning;
+  const showsLocalVsRemoteEmptyState = activeDiffBase === 'local-vs-remote';
   const compactReviewActions: CompactReviewAction[] = !isCompactTouchLayout
     ? []
     : !origin
@@ -3910,38 +4327,74 @@ const ReviewApp: React.FC = () => {
           label: copyFeedback === 'Feedback copied!' ? 'Feedback copied' : 'Copy feedback',
           onSelect: handleCopyFeedback,
         }]
-      : [
-          {
-            id: 'exit',
-            label: 'Exit review',
-            onSelect: () => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit(),
-            disabled: compactActionBusy,
-          },
-          ...(totalAnnotationCount > 0
-            ? [{
-                id: 'feedback' as const,
-                label: platformMode ? 'Post comments' : 'Send feedback',
-                subtitle: `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`,
-                onSelect: () => platformMode ? openPlatformDialog('comment') : handleSendFeedback(),
-                disabled: compactActionBusy,
-              }]
-            : []),
-          {
-            id: 'approve',
-            label: 'Approve',
-            subtitle: platformMode && platformUser && prMetadata?.author === platformUser
-              ? `You can't approve your own ${mrLabel}`
-              : totalAnnotationCount > 0
-                ? `${totalAnnotationCount} unsent annotation${totalAnnotationCount === 1 ? '' : 's'}`
-                : undefined,
-            onSelect: () => {
-              if (platformMode) openPlatformDialog('approve');
-              else if (totalAnnotationCount > 0) setShowApproveWarning(true);
-              else handleApprove();
+      : platformMode
+        ? [
+            // Platform mode (PR6): spec-driven rows, same generation as agent
+            // mode below — never a composer or confirm (every row opens the
+            // submission dialog); muted approve rows disable with the
+            // self-approval reason as their subtitle.
+            {
+              id: 'exit',
+              label: 'Exit review',
+              onSelect: () => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit(),
+              disabled: compactActionBusy,
             },
-            disabled: compactActionBusy || !!(platformMode && platformUser && prMetadata?.author === platformUser),
-          },
-        ];
+            {
+              id: compactPrimaryIdForReviewDecision(platformDecisionSpec.primary),
+              label: platformDecisionSpec.primary.mobileLabel ?? platformDecisionSpec.primary.label,
+              subtitle: platformDecisionSpec.primary.muted
+                ? platformDecisionSpec.primary.title
+                : totalAnnotationCount > 0
+                  ? `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`
+                  : undefined,
+              onSelect: () => runPlatformDecisionAction('primary'),
+              disabled: compactActionBusy || !!platformDecisionSpec.primary.muted,
+            },
+            ...platformDecisionSpec.items.map((item) => ({
+              id: compactRowIdForReviewDecisionItem(item.id),
+              label: item.label,
+              subtitle: item.subtitle,
+              onSelect: () => runPlatformDecisionAction(item.id),
+              disabled: compactActionBusy || !!item.muted,
+            })),
+          ]
+        : [
+            // Agent mode: spec-driven decision rows — a visible positive
+            // decision exists in EVERY compact state (touch has no Mod+Enter;
+            // spec §3.2 / E16-review).
+            {
+              id: 'exit',
+              label: 'Exit review',
+              onSelect: () => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit(),
+              disabled: compactActionBusy,
+            },
+            {
+              id: compactPrimaryIdForReviewDecision(reviewDecisionSpec.primary),
+              label: reviewDecisionSpec.primary.mobileLabel ?? reviewDecisionSpec.primary.label,
+              subtitle: totalAnnotationCount > 0
+                ? `${totalAnnotationCount} annotation${totalAnnotationCount === 1 ? '' : 's'}`
+                : undefined,
+              onSelect: submitPrimaryDecision,
+              disabled: compactActionBusy,
+            },
+            ...reviewDecisionSpec.items.map((item) => ({
+              id: compactRowIdForReviewDecisionItem(item.id),
+              label: item.label,
+              subtitle: item.subtitle,
+              onSelect: () => {
+                if (item.composer) {
+                  setCompactDecisionComposer(item.id);
+                  return;
+                }
+                if (item.confirm) {
+                  setCompactDecisionConfirm(item.id);
+                  return;
+                }
+                runReviewDecisionAction(item.id);
+              },
+              disabled: compactActionBusy,
+            })),
+          ];
 
   if (isLoading) {
     return (
@@ -4279,70 +4732,51 @@ const ReviewApp: React.FC = () => {
                   </div>
                 )}
 
-                {/* Agent mode: Close/SendFeedback flip + Approve */}
+                {/* Agent mode: ghost-X Close + the adaptive decision control
+                    (Approve at zero, Send Feedback · n otherwise; the caret
+                    carries the alternates and the note composer). */}
                 {!platformMode ? (
-                  <AgentReviewActions
-                    totalAnnotationCount={totalAnnotationCount}
-                    isSendingFeedback={isSendingFeedback}
-                    isApproving={isApproving}
-                    isExiting={isExiting}
-                    onSendFeedback={handleSendFeedback}
-                    onApprove={() => totalAnnotationCount > 0 ? setShowApproveWarning(true) : handleApprove()}
-                    onExit={() => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit()}
-                  />
-                ) : (
                   <>
-                    {/* Platform mode: Close + Post Comments + Approve */}
                     <ExitButton
+                      appearance="ghost"
+                      labelBreakpoint="lg"
                       onClick={() => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit()}
-                      disabled={isSendingFeedback || isApproving || isExiting || isPlatformActioning}
+                      disabled={busyWithDecision}
                       isLoading={isExiting}
+                      title="Close review without feedback"
+                    />
+                    <DecisionControl
+                      spec={reviewDecisionSpec}
+                      handlers={reviewDecisionHandlers}
+                      busy={busyWithDecision}
+                      isLoading={isSendingFeedback || isApproving}
                       labelBreakpoint="lg"
                     />
-                    {/* Progressive disclosure: only show Post Comments once there
-                        are annotations to post — mirrors agent mode hiding Send
-                        Feedback when empty. With no annotations the keyboard
-                        shortcut routes to Approve, so this hides cleanly. */}
-                    {totalAnnotationCount > 0 && (
-                      <FeedbackButton
-                        onClick={() => openPlatformDialog('comment')}
-                        disabled={isSendingFeedback || isApproving || isPlatformActioning}
-                        isLoading={isSendingFeedback || isPlatformActioning}
-                        label="Post Comments"
-                        shortLabel="Post"
-                        loadingLabel="Posting..."
-                        shortLoadingLabel="Posting..."
-                        title="Post review to platform"
-                        labelBreakpoint="lg"
-                      />
-                    )}
-                    <div className="relative group/approve">
-                      <ApproveButton
-                        onClick={() => {
-                          if (platformUser && prMetadata?.author === platformUser) return;
-                          openPlatformDialog('approve');
-                        }}
-                        disabled={
-                          isSendingFeedback || isApproving || isPlatformActioning ||
-                          (!!platformUser && prMetadata?.author === platformUser)
-                        }
-                        isLoading={isApproving}
-                        muted={!!platformUser && prMetadata?.author === platformUser && !isSendingFeedback && !isApproving && !isPlatformActioning}
-                        title={
-                          platformUser && prMetadata?.author === platformUser
-                            ? `You can't approve your own ${mrLabel}`
-                            : "Approve - no changes needed"
-                        }
-                        labelBreakpoint="lg"
-                      />
-                      {platformUser && prMetadata?.author === platformUser && (
-                        <div className="absolute top-full right-0 mt-2 px-3 py-2 bg-popover border border-border rounded-lg shadow-xl text-xs text-foreground w-48 text-center opacity-0 invisible group-hover/approve:opacity-100 group-hover/approve:visible transition-all pointer-events-none z-50">
-                          <div className="absolute bottom-full right-4 border-4 border-transparent border-b-border" />
-                          <div className="absolute bottom-full right-4 mt-px border-4 border-transparent border-b-popover" />
-                          You can't approve your own {mrLabel === 'MR' ? 'merge request' : 'pull request'} on {platformLabel}.
-                        </div>
-                      )}
-                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Platform mode (PR6, §3.4): the same ghost-X + decision
+                        control shape. No composer on this side, ever — every
+                        action opens the existing ReviewSubmissionDialog, whose
+                        general-comment field is the only note field here. The
+                        muted primary carries the self-approval reason via the
+                        shared Tooltip + aria-describedby (native title dropped
+                        when muted, pinned by test). */}
+                    <ExitButton
+                      appearance="ghost"
+                      labelBreakpoint="lg"
+                      onClick={() => totalAnnotationCount > 0 ? setShowExitWarning(true) : handleExit()}
+                      disabled={busyWithPlatformDecision}
+                      isLoading={isExiting}
+                      title="Close review without feedback"
+                    />
+                    <DecisionControl
+                      spec={platformDecisionSpec}
+                      handlers={platformDecisionHandlers}
+                      busy={busyWithPlatformDecision}
+                      isLoading={isPlatformActioning}
+                      labelBreakpoint="lg"
+                    />
                   </>
                 )}
               </>
@@ -4783,6 +5217,7 @@ const ReviewApp: React.FC = () => {
                         <h3 className="text-sm font-medium text-foreground">No changes</h3>
                         <p className="text-xs text-muted-foreground mt-1">
                           {activeDiffBase === 'since-base' && `No changes since ${selectedBase || gitContext?.defaultBranch || 'main'}${activeWorktreePath ? ' in this worktree' : ''} — committed, uncommitted, or untracked.`}
+                          {showsLocalVsRemoteEmptyState && `Your local branch matches its remote-tracking branch${activeWorktreePath ? ' in this worktree' : ''}.`}
                           {activeDiffBase.startsWith('commit:') && 'This commit has no changes.'}
                           {activeDiffBase === 'uncommitted' && `No uncommitted changes${activeWorktreePath ? ' in this worktree' : ' to review'}.`}
                           {activeDiffBase === 'staged' && "No staged changes. Stage some files with git add."}
@@ -4834,6 +5269,7 @@ const ReviewApp: React.FC = () => {
                 onSelectAnnotation={handleSelectAnnotation}
                 onNavigateToAnnotation={handleNavigateToAnnotation}
                 onDeleteAnnotation={handleDeleteAnnotation}
+                onAddGeneralComment={handleAddGeneralComment}
                 feedbackMarkdown={feedbackMarkdown}
                 width={isCompactTouchLayout ? undefined : panelResize.width}
                 editorAnnotations={visibleEditorAnnotations}
@@ -4976,22 +5412,41 @@ const ReviewApp: React.FC = () => {
           variant="info"
         />
 
-        {/* Approve with annotations warning */}
-        <ConfirmDialog
-          isOpen={showApproveWarning}
-          onClose={() => setShowApproveWarning(false)}
-          onConfirm={() => {
-            setShowApproveWarning(false);
-            handleApprove();
-          }}
-          title="Annotations Won't Be Sent"
-          message={<>You have {totalAnnotationCount} annotation{totalAnnotationCount !== 1 ? 's' : ''} that will be lost if you approve.</>}
-          subMessage="To send your feedback, use Send Feedback instead."
-          confirmText="Approve Anyway"
-          cancelText="Cancel"
-          variant="warning"
-          showCancel
-        />
+        {/* Compact/touch decision surfaces: the note composer is a dialog
+            (never a textarea inside the scrolling header menu popup), the
+            discard confirm is the same ConfirmDialog the desktop control
+            raises. Desktop popover state lives inside DecisionControl. */}
+        {compactComposerItem?.composer && (
+          <DecisionNoteDialog
+            isOpen
+            onClose={() => setCompactDecisionComposer(null)}
+            composer={compactComposerItem.composer}
+            subtitle={compactComposerItem.subtitle}
+            disabled={busyWithDecision || !!submitted}
+            onSubmit={(note) => {
+              const item = compactComposerItem;
+              setCompactDecisionComposer(null);
+              runReviewDecisionAction(item.id, note);
+            }}
+          />
+        )}
+        {compactConfirmItem?.confirm && (
+          <ConfirmDialog
+            isOpen
+            onClose={() => setCompactDecisionConfirm(null)}
+            onConfirm={() => {
+              const item = compactConfirmItem;
+              setCompactDecisionConfirm(null);
+              runReviewDecisionAction(item.id);
+            }}
+            title={compactConfirmItem.confirm.title}
+            message={compactConfirmItem.confirm.message}
+            confirmText={compactConfirmItem.confirm.confirmText}
+            cancelText="Cancel"
+            variant="warning"
+            showCancel
+          />
+        )}
 
         <ConfirmDialog
           isOpen={showExitWarning}
@@ -5068,12 +5523,20 @@ const ReviewApp: React.FC = () => {
           />
         )}
 
+        {/* One-time token hover card announcement. LAST in the dialog chain
+            (guide intro → look-and-feel → review setup → edit mode → token
+            hover) — tokenHoverAnnouncementCanShow gates on every earlier
+            dialog, so the chain dialogs never stack. */}
+        {tokenHoverIntroVisible && (
+          <TokenHoverAnnouncementDialog isOpen onDismiss={dismissTokenHoverIntro} />
+        )}
+
         {/* One-time PR feedback-destination spotlight. Strictly AFTER the
             first-run dialog chain (guide intro → look-and-feel → review
-            setup → edit mode): it only mounts once none of the four is
+            setup → edit mode → token hover): it only mounts once none of the five is
             showing, so it never stacks with them. PR mode only — the switcher
             it points at doesn't render otherwise. */}
-        {showDestSpotlight && !isCompactTouchLayout && !!prMetadata && !isLoading && !showLookAndFeel && !guideIntroVisible && !showReviewSetup && !editModeIntroVisible && (
+        {showDestSpotlight && !isCompactTouchLayout && !!prMetadata && !isLoading && !showLookAndFeel && !guideIntroVisible && !showReviewSetup && !editModeIntroVisible && !tokenHoverIntroVisible && (
           <DestinationSpotlight
             targetRef={destToggleRef}
             platformLabel={platformLabel}
@@ -5163,6 +5626,17 @@ const ReviewApp: React.FC = () => {
           {tourDialogJobId === DEMO_TOUR_ID ? 'Close tour' : 'Demo tour'}
         </button>
       )}
+
+    {/* One instance for the whole app, portaled to <body> so it escapes the
+        Dockview panels' overflow and stacking context. */}
+    {tokenHoverEnabled && tokenHover.hover && (
+      <TokenHoverCard
+        hover={tokenHover.hover}
+        onPointerEnter={tokenHover.onCardEnter}
+        onPointerLeave={tokenHover.onCardLeave}
+        onSelectLocation={handleTokenHoverSelectLocation}
+      />
+    )}
 
     <Toaster
       position="bottom-center"

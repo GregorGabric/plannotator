@@ -141,10 +141,11 @@ import {
  *    per-file dragger.
  *  - Token code navigation: Cmd/Ctrl-click a token routes through
  *    `onCodeNavRequest` (parity with the single-file DiffViewer and the legacy
- *    all-files view), with the `pn-token-nav` affordance (the hover-only
- *    `pn-token-hover` class is a single-file DiffViewer extra, here as in the
- *    legacy all-files view). File identity comes from the CodeView callback
- *    context's owning item, never an active-file side channel.
+ *    all-files view), with the `pn-token-nav` affordance. The hover-only
+ *    `pn-token-hover` class is painted here too, but only when a hover handler
+ *    is wired: a read-only or portable host passes none and gets neither
+ *    class. File identity comes from the CodeView callback context's owning
+ *    item, never an active-file side channel.
  *  - Safari scroll guardian: NOT carried forward. The old DiffViewer guardian
  *    targeted the OverlayScrollbars viewport wrapping many separate FileDiff
  *    shadow nodes and restored scrollTop on a ">200 -> 0" jump heuristic.
@@ -252,6 +253,15 @@ export interface AllFilesCodeViewProps {
   activeSearchMatch?: ReviewSearchMatch | null;
   // Token code navigation (P7). Cmd/Ctrl-click a token resolves symbol defs/refs.
   onCodeNavRequest?: (request: import('@plannotator/shared/code-nav').CodeNavRequest) => void;
+  /**
+   * Token hover cards. Absent (the default) means the feature is not wired at
+   * all. Deliberately raw: the view reports the token event and its file, and
+   * the caller decides what a hoverable symbol is. Stitching a fragmented
+   * identifier is app-only work, and this component is also compiled into the
+   * read-only portable guide viewer, which passes neither handler.
+   */
+  onTokenHoverEnter?: (props: DiffTokenEventBaseProps, filePath: string) => void;
+  onTokenHoverLeave?: () => void;
   // File-tree active-file highlight follows scroll. The second argument
   // reports whether the newly active item is COLLAPSED, which auto-mark-viewed
   // needs (a folded card shows no content, so time parked on it is not
@@ -578,6 +588,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   activeSearchMatchId = null,
   activeSearchMatch = null,
   onCodeNavRequest,
+  onTokenHoverEnter,
+  onTokenHoverLeave,
   onVisibleFileChange,
   onFileScrolledPast,
   fileScrollTarget,
@@ -1969,7 +1981,9 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   const handleTokenClick = useStableCallback(
     (props: DiffTokenEventBaseProps, event: MouseEvent, item: CodeViewItem<DiffAnnotationMetadata>) => {
       if (!onCodeNavRequest || item.type !== 'diff') return;
-      if (!(event.metaKey || event.ctrlKey)) return;
+      // Alt is an unadvertised alias for the same References-panel path; the
+      // meta/ctrl branch itself is unchanged.
+      if (!(event.metaKey || event.ctrlKey || event.altKey)) return;
       const filePath = itemIdToFilePath.get(item.id);
       if (filePath == null) return;
       onCodeNavRequest(buildCodeNavRequest(props, filePath));
@@ -1977,15 +1991,30 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
   );
 
   const handleTokenEnter = useStableCallback(
-    (props: DiffTokenEventBaseProps, event: PointerEvent) => {
+    (props: DiffTokenEventBaseProps, event: PointerEvent, item: CodeViewItem<DiffAnnotationMetadata>) => {
       if (onCodeNavRequest && (event.metaKey || event.ctrlKey)) {
         props.tokenElement.classList.add('pn-token-nav');
       }
+      if (!onTokenHoverEnter || item.type !== 'diff') return;
+      // The hovered-token treatment (underline + pointer cursor), the same one
+      // DiffViewer paints and the one the announcement dialog's try-it shows.
+      // This view is the DEFAULT review surface, so leaving it out meant the
+      // affordance the demo advertises was absent from the surface most
+      // reviewers actually use. Gated on the hover handler, so a read-only or
+      // portable host (which passes none) still paints nothing.
+      props.tokenElement.classList.add('pn-token-hover');
+      // File identity comes from the owning item, exactly as handleTokenClick
+      // resolves it — never from an active-file side channel.
+      const filePath = itemIdToFilePath.get(item.id);
+      if (filePath == null) return;
+      onTokenHoverEnter(props, filePath);
     },
   );
 
   const handleTokenLeave = useStableCallback((props: DiffTokenEventBaseProps) => {
     props.tokenElement.classList.remove('pn-token-nav');
+    props.tokenElement.classList.remove('pn-token-hover');
+    onTokenHoverLeave?.();
   });
 
   // --- Active-file tracking via CodeView rendered items (no header geometry) ---
@@ -2520,7 +2549,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       // the final arg to every shared callback (same as the selection/gutter
       // callbacks), so file identity comes from context.item — no geometry or
       // active-file inference. Only wired when onCodeNavRequest is provided.
-      ...(onCodeNavRequest && {
+      ...((onCodeNavRequest || onTokenHoverEnter) && {
         // Pierre's renderer-options builder drops onToken* before it evaluates
         // shouldUseTokenTransformer, so the handlers alone never wrap tokens
         // (no data-char) and token events never fire. Enable it explicitly.
@@ -2528,8 +2557,8 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
         onTokenClick(props, event, context) {
           handleTokenClick(props, event, context.item);
         },
-        onTokenEnter(props, event, _context) {
-          handleTokenEnter(props, event);
+        onTokenEnter(props, event, context) {
+          handleTokenEnter(props, event, context.item);
         },
         onTokenLeave(props, _event, _context) {
           handleTokenLeave(props);
@@ -2560,6 +2589,7 @@ export const AllFilesCodeView: React.FC<AllFilesCodeViewProps> = ({
       handleLineSelectionEnd,
       handleGutterUtilityClick,
       onCodeNavRequest,
+      onTokenHoverEnter,
       handleTokenClick,
       handleTokenEnter,
       handleTokenLeave,
